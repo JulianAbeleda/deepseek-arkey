@@ -259,8 +259,7 @@ impl DockedComposer {
     }
 
     pub fn print_above(&mut self, text: &str) -> Result<(), String> {
-        self.stream_active = false;
-        self.stream_col = 0;
+        self.reset_stream_state();
         let mut stdout = io::stdout();
         execute!(stdout, MoveToColumn(0), Clear(ClearType::CurrentLine))
             .map_err(|err| err.to_string())?;
@@ -287,13 +286,11 @@ impl DockedComposer {
         for ch in text.chars() {
             if ch == '\n' {
                 write!(stdout, "\r\n").map_err(|err| err.to_string())?;
-                self.stream_col = 0;
             } else {
                 write!(stdout, "{ch}").map_err(|err| err.to_string())?;
-                self.stream_col += 1;
             }
         }
-        self.stream_active = true;
+        self.note_stream_text(text);
         write!(stdout, "\r\n").map_err(|err| err.to_string())?;
         stdout.flush().map_err(|err| err.to_string())?;
         self.render()
@@ -314,9 +311,18 @@ impl DockedComposer {
         .map_err(|err| err.to_string())?;
         write!(stdout, "\r\n").map_err(|err| err.to_string())?;
         stdout.flush().map_err(|err| err.to_string())?;
+        self.reset_stream_state();
+        self.render()
+    }
+
+    fn note_stream_text(&mut self, text: &str) {
+        self.stream_col = stream_column_after(self.stream_col, text);
+        self.stream_active = true;
+    }
+
+    fn reset_stream_state(&mut self) {
         self.stream_active = false;
         self.stream_col = 0;
-        self.render()
     }
 
     fn previous_history(&mut self) -> Option<String> {
@@ -453,9 +459,57 @@ fn visible_len(text: &str) -> usize {
     len
 }
 
+fn stream_column_after(start_col: usize, text: &str) -> usize {
+    let mut col = start_col;
+    let mut chars = text.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '\x1b' && chars.peek() == Some(&'[') {
+            let _ = chars.next();
+            for code in chars.by_ref() {
+                if ('@'..='~').contains(&code) {
+                    break;
+                }
+            }
+        } else if ch == '\n' || ch == '\r' {
+            col = 0;
+        } else {
+            col += char_display_width(ch);
+        }
+    }
+    col
+}
+
+fn char_display_width(ch: char) -> usize {
+    if ch.is_control() {
+        0
+    } else if is_wide_char(ch) {
+        2
+    } else {
+        1
+    }
+}
+
+fn is_wide_char(ch: char) -> bool {
+    matches!(
+        ch as u32,
+        0x1100..=0x115f
+            | 0x2329..=0x232a
+            | 0x2e80..=0xa4cf
+            | 0xac00..=0xd7a3
+            | 0xf900..=0xfaff
+            | 0xfe10..=0xfe19
+            | 0xfe30..=0xfe6f
+            | 0xff00..=0xff60
+            | 0xffe0..=0xffe6
+            | 0x1f300..=0x1faff
+    )
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{insert_at, remove_at, remove_before, visible_len};
+    use super::{
+        insert_at, remove_at, remove_before, stream_column_after, visible_len, DockedComposer,
+    };
 
     #[test]
     fn edits_at_cursor() {
@@ -474,5 +528,26 @@ mod tests {
     #[test]
     fn visible_len_ignores_ansi() {
         assert_eq!(visible_len("\x1b[36mdeepseek\x1b[0m › "), 11);
+    }
+
+    #[test]
+    fn stream_column_tracks_newlines_ansi_and_wide_chars() {
+        assert_eq!(stream_column_after(0, "ab"), 2);
+        assert_eq!(stream_column_after(2, "界"), 4);
+        assert_eq!(stream_column_after(4, "\n界"), 2);
+        assert_eq!(stream_column_after(2, "\x1b[31mred\x1b[0m"), 5);
+    }
+
+    #[test]
+    fn composer_stream_state_can_reset() {
+        let mut composer = DockedComposer::new("prompt › ".to_string());
+        composer.note_stream_text("hello");
+        assert!(composer.stream_active);
+        assert_eq!(composer.stream_col, 5);
+        composer.note_stream_text(" 界");
+        assert_eq!(composer.stream_col, 8);
+        composer.reset_stream_state();
+        assert!(!composer.stream_active);
+        assert_eq!(composer.stream_col, 0);
     }
 }

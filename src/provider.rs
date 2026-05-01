@@ -52,10 +52,18 @@ pub fn chat(
     max_tokens: Option<u32>,
     stream: bool,
 ) -> Result<String, String> {
-    chat_with_delta(messages, model, temperature, max_tokens, stream, |delta| {
-        print!("{delta}");
-        let _ = std::io::stdout().flush();
-    })
+    chat_impl(
+        messages,
+        model,
+        temperature,
+        max_tokens,
+        stream,
+        true,
+        |delta| {
+            print!("{delta}");
+            let _ = std::io::stdout().flush();
+        },
+    )
 }
 
 pub fn chat_with_delta<F>(
@@ -64,6 +72,29 @@ pub fn chat_with_delta<F>(
     temperature: Option<f32>,
     max_tokens: Option<u32>,
     stream: bool,
+    on_delta: F,
+) -> Result<String, String>
+where
+    F: FnMut(&str),
+{
+    chat_impl(
+        messages,
+        model,
+        temperature,
+        max_tokens,
+        stream,
+        false,
+        on_delta,
+    )
+}
+
+fn chat_impl<F>(
+    messages: &[Message],
+    model: &str,
+    temperature: Option<f32>,
+    max_tokens: Option<u32>,
+    stream: bool,
+    print_stream_trailing_newline: bool,
     on_delta: F,
 ) -> Result<String, String>
 where
@@ -79,7 +110,7 @@ where
     })
     .map_err(|err| err.to_string())?;
     if stream {
-        return chat_streaming(&key, body, on_delta);
+        return chat_streaming(&key, body, print_stream_trailing_newline, on_delta);
     }
     let output = Command::new("curl")
         .arg("-sS")
@@ -107,7 +138,12 @@ where
     extract_assistant_text(&raw).map(|text| cap_text(&text, DEFAULT_TEXT_CAP))
 }
 
-fn chat_streaming<F>(key: &str, body: String, mut on_delta: F) -> Result<String, String>
+fn chat_streaming<F>(
+    key: &str,
+    body: String,
+    print_trailing_newline: bool,
+    mut on_delta: F,
+) -> Result<String, String>
 where
     F: FnMut(&str),
 {
@@ -171,7 +207,7 @@ where
             redact_text(&stderr)
         });
     }
-    if !response.ends_with('\n') {
+    if print_trailing_newline && !response.ends_with('\n') {
         println!();
     }
     Ok(cap_text(response.trim(), DEFAULT_TEXT_CAP))
