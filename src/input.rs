@@ -1,7 +1,7 @@
 use std::io::{self, IsTerminal, Write};
 use std::time::Duration;
 
-use crossterm::cursor::MoveToColumn;
+use crossterm::cursor::{MoveTo, MoveToColumn};
 use crossterm::event::{self, Event, KeyCode, KeyModifiers};
 use crossterm::execute;
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode, size, Clear, ClearType};
@@ -171,7 +171,7 @@ impl DockedComposer {
     }
 
     pub fn render(&self) -> Result<(), String> {
-        render_line(&self.prompt, &self.buffer, self.cursor)
+        render_dock_line(&self.prompt, &self.buffer, self.cursor)
     }
 
     pub fn poll_action(&mut self, timeout: Duration) -> Result<Option<InputAction>, String> {
@@ -263,17 +263,12 @@ impl DockedComposer {
     pub fn print_above(&mut self, text: &str) -> Result<(), String> {
         let had_status = self.take_status_active();
         let mut stdout = io::stdout();
+        if had_status {
+            clear_rows_above_dock(&mut stdout, 1)?;
+        }
+        move_to_output_row(&mut stdout)?;
         execute!(stdout, MoveToColumn(0), Clear(ClearType::CurrentLine))
             .map_err(|err| err.to_string())?;
-        if had_status {
-            execute!(
-                stdout,
-                crossterm::cursor::MoveUp(1),
-                MoveToColumn(0),
-                Clear(ClearType::CurrentLine)
-            )
-            .map_err(|err| err.to_string())?;
-        }
         write_raw_lines(&mut stdout, text)?;
         if !text.is_empty() && !text.ends_with('\n') {
             write!(stdout, "\r\n").map_err(|err| err.to_string())?;
@@ -285,17 +280,12 @@ impl DockedComposer {
     pub fn status_above(&mut self, text: &str) -> Result<(), String> {
         let had_status = self.take_status_active();
         let mut stdout = io::stdout();
+        if had_status {
+            clear_rows_above_dock(&mut stdout, 1)?;
+        }
+        move_to_status_row(&mut stdout)?;
         execute!(stdout, MoveToColumn(0), Clear(ClearType::CurrentLine))
             .map_err(|err| err.to_string())?;
-        if had_status {
-            execute!(
-                stdout,
-                crossterm::cursor::MoveUp(1),
-                MoveToColumn(0),
-                Clear(ClearType::CurrentLine)
-            )
-            .map_err(|err| err.to_string())?;
-        }
         write_raw_lines(&mut stdout, text)?;
         if !text.ends_with('\n') {
             write!(stdout, "\r\n").map_err(|err| err.to_string())?;
@@ -310,20 +300,8 @@ impl DockedComposer {
         let lines = wrap_visible_lines(&self.stream_buffer, terminal_width());
         let prior_rows = self.transient_rows();
         let mut stdout = io::stdout();
-        execute!(stdout, MoveToColumn(0), Clear(ClearType::CurrentLine))
-            .map_err(|err| err.to_string())?;
-        for _ in 0..prior_rows {
-            execute!(
-                stdout,
-                crossterm::cursor::MoveUp(1),
-                MoveToColumn(0),
-                Clear(ClearType::CurrentLine)
-            )
-            .map_err(|err| err.to_string())?;
-        }
-        for line in &lines {
-            write!(stdout, "{line}\r\n").map_err(|err| err.to_string())?;
-        }
+        clear_rows_above_dock(&mut stdout, prior_rows)?;
+        repaint_lines_above_dock(&mut stdout, &lines)?;
         stdout.flush().map_err(|err| err.to_string())?;
         self.status_active = false;
         self.stream_rendered_rows = lines.len();
@@ -384,12 +362,14 @@ impl DockedComposer {
 impl RawModeSession {
     pub fn enable() -> Result<Self, String> {
         enable_raw_mode().map_err(|err| err.to_string())?;
+        set_output_scroll_region(1)?;
         Ok(Self)
     }
 }
 
 impl Drop for RawModeSession {
     fn drop(&mut self) {
+        let _ = reset_output_scroll_region();
         let _ = disable_raw_mode();
     }
 }
@@ -416,6 +396,24 @@ fn render_line(prompt: &str, buffer: &str, cursor: usize) -> Result<(), String> 
     write!(stdout, "{prompt}{buffer}").map_err(|err| err.to_string())?;
     let cursor_col = visible_len(prompt) + cursor;
     execute!(stdout, MoveToColumn(cursor_col as u16)).map_err(|err| err.to_string())?;
+    stdout.flush().map_err(|err| err.to_string())
+}
+
+fn render_dock_line(prompt: &str, buffer: &str, cursor: usize) -> Result<(), String> {
+    let width = terminal_width();
+    let combined = format!("{prompt}{buffer}");
+    let total_width = visible_len(&combined);
+    let offset = total_width.saturating_sub(width);
+    let visible_before_cursor = visible_len(prompt) + visible_len(&buffer_prefix(buffer, cursor));
+    let cursor_col = visible_before_cursor
+        .saturating_sub(offset)
+        .min(width.saturating_sub(1));
+    let display = visible_suffix(&combined, width);
+    let mut stdout = io::stdout();
+    execute!(stdout, MoveTo(0, dock_row()), Clear(ClearType::CurrentLine))
+        .map_err(|err| err.to_string())?;
+    write!(stdout, "{display}").map_err(|err| err.to_string())?;
+    execute!(stdout, MoveTo(cursor_col as u16, dock_row())).map_err(|err| err.to_string())?;
     stdout.flush().map_err(|err| err.to_string())
 }
 
@@ -473,6 +471,10 @@ fn char_len(buffer: &str) -> usize {
     buffer.chars().count()
 }
 
+fn buffer_prefix(buffer: &str, cursor: usize) -> String {
+    buffer.chars().take(cursor).collect()
+}
+
 fn visible_len(text: &str) -> usize {
     let mut len = 0usize;
     let mut chars = text.chars().peekable();
@@ -493,6 +495,93 @@ fn visible_len(text: &str) -> usize {
 
 fn terminal_width() -> usize {
     size().map(|(cols, _)| cols as usize).unwrap_or(80).max(1)
+}
+
+fn terminal_rows() -> u16 {
+    size().map(|(_, rows)| rows).unwrap_or(24).max(1)
+}
+
+fn dock_row() -> u16 {
+    terminal_rows().saturating_sub(1)
+}
+
+fn output_row() -> u16 {
+    terminal_rows().saturating_sub(2)
+}
+
+fn move_to_output_row(stdout: &mut io::Stdout) -> Result<(), String> {
+    execute!(stdout, MoveTo(0, output_row())).map_err(|err| err.to_string())
+}
+
+fn move_to_status_row(stdout: &mut io::Stdout) -> Result<(), String> {
+    execute!(stdout, MoveTo(0, output_row())).map_err(|err| err.to_string())
+}
+
+fn clear_rows_above_dock(stdout: &mut io::Stdout, rows: usize) -> Result<(), String> {
+    if rows == 0 {
+        return Ok(());
+    }
+    let dock = dock_row();
+    let rows = rows.min(dock as usize);
+    let start = dock.saturating_sub(rows as u16);
+    for row in start..dock {
+        execute!(stdout, MoveTo(0, row), Clear(ClearType::CurrentLine))
+            .map_err(|err| err.to_string())?;
+    }
+    Ok(())
+}
+
+fn repaint_lines_above_dock(stdout: &mut io::Stdout, lines: &[String]) -> Result<(), String> {
+    let dock = dock_row();
+    let max_rows = dock as usize;
+    let visible_lines = if lines.len() > max_rows {
+        &lines[lines.len() - max_rows..]
+    } else {
+        lines
+    };
+    let start = dock.saturating_sub(visible_lines.len() as u16);
+    for (index, line) in visible_lines.iter().enumerate() {
+        execute!(
+            stdout,
+            MoveTo(0, start + index as u16),
+            Clear(ClearType::CurrentLine)
+        )
+        .map_err(|err| err.to_string())?;
+        write!(stdout, "{line}").map_err(|err| err.to_string())?;
+    }
+    Ok(())
+}
+
+fn set_output_scroll_region(reserved_bottom_lines: usize) -> Result<(), String> {
+    let rows = terminal_rows();
+    let reserved = reserved_bottom_lines.max(1) as u16;
+    if rows <= reserved + 1 {
+        return Ok(());
+    }
+    let output_bottom = rows.saturating_sub(reserved);
+    let mut stdout = io::stdout();
+    write!(stdout, "\x1b[1;{output_bottom}r").map_err(|err| err.to_string())?;
+    stdout.flush().map_err(|err| err.to_string())
+}
+
+fn reset_output_scroll_region() -> Result<(), String> {
+    let mut stdout = io::stdout();
+    write!(stdout, "\x1b[r").map_err(|err| err.to_string())?;
+    stdout.flush().map_err(|err| err.to_string())
+}
+
+fn visible_suffix(text: &str, width: usize) -> String {
+    let mut out = Vec::new();
+    let mut visible = 0usize;
+    for ch in text.chars().rev() {
+        let ch_width = char_display_width(ch);
+        if visible + ch_width > width {
+            break;
+        }
+        visible += ch_width;
+        out.push(ch);
+    }
+    out.into_iter().rev().collect()
 }
 
 fn wrap_visible_lines(text: &str, width: usize) -> Vec<String> {
@@ -561,7 +650,8 @@ fn is_wide_char(ch: char) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        insert_at, remove_at, remove_before, visible_len, wrap_visible_lines, DockedComposer,
+        buffer_prefix, insert_at, remove_at, remove_before, visible_len, visible_suffix,
+        wrap_visible_lines, DockedComposer,
     };
 
     #[test]
@@ -581,6 +671,13 @@ mod tests {
     #[test]
     fn visible_len_ignores_ansi() {
         assert_eq!(visible_len("\x1b[36mdeepseek\x1b[0m › "), 11);
+    }
+
+    #[test]
+    fn dock_display_uses_visible_suffix_for_long_lines() {
+        assert_eq!(visible_suffix("abcdef", 4), "cdef");
+        assert_eq!(visible_suffix("ab界", 3), "b界");
+        assert_eq!(buffer_prefix("hello", 3), "hel");
     }
 
     #[test]
