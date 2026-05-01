@@ -261,8 +261,7 @@ impl DockedComposer {
     }
 
     pub fn print_above(&mut self, text: &str) -> Result<(), String> {
-        let had_status = self.status_active;
-        self.reset_stream_state();
+        let had_status = self.take_status_active();
         let mut stdout = io::stdout();
         execute!(stdout, MoveToColumn(0), Clear(ClearType::CurrentLine))
             .map_err(|err| err.to_string())?;
@@ -284,10 +283,19 @@ impl DockedComposer {
     }
 
     pub fn status_above(&mut self, text: &str) -> Result<(), String> {
-        self.reset_stream_state();
+        let had_status = self.take_status_active();
         let mut stdout = io::stdout();
         execute!(stdout, MoveToColumn(0), Clear(ClearType::CurrentLine))
             .map_err(|err| err.to_string())?;
+        if had_status {
+            execute!(
+                stdout,
+                crossterm::cursor::MoveUp(1),
+                MoveToColumn(0),
+                Clear(ClearType::CurrentLine)
+            )
+            .map_err(|err| err.to_string())?;
+        }
         write_raw_lines(&mut stdout, text)?;
         if !text.ends_with('\n') {
             write!(stdout, "\r\n").map_err(|err| err.to_string())?;
@@ -359,6 +367,12 @@ impl DockedComposer {
         self.stream_active = false;
         self.stream_col = 0;
         self.status_active = false;
+    }
+
+    fn take_status_active(&mut self) -> bool {
+        let had_status = self.status_active;
+        self.reset_stream_state();
+        had_status
     }
 
     fn previous_history(&mut self) -> Option<String> {
@@ -577,6 +591,7 @@ mod tests {
     #[test]
     fn composer_stream_state_can_reset() {
         let mut composer = DockedComposer::new("prompt › ".to_string());
+        composer.buffer = "draft".to_string();
         composer.note_stream_text("hello");
         assert!(composer.stream_active);
         assert!(!composer.status_active);
@@ -588,5 +603,15 @@ mod tests {
         assert!(!composer.stream_active);
         assert!(!composer.status_active);
         assert_eq!(composer.stream_col, 0);
+        assert_eq!(composer.buffer, "draft");
+    }
+
+    #[test]
+    fn composer_status_state_is_consumed_before_rewrite() {
+        let mut composer = DockedComposer::new("prompt › ".to_string());
+        composer.status_active = true;
+        assert!(composer.take_status_active());
+        assert!(!composer.status_active);
+        assert!(!composer.take_status_active());
     }
 }
