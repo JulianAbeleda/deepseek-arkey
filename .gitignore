@@ -1,0 +1,16 @@
+.DS_Store
+.env
+*.log
+target/
+.idea/
+.vscode/
+
+# Local credentials and transient provider state
+*.key
+*.pem
+secrets/
+active-session.json
+.deepseek/
+
+# Local development planning and audit notes
+structure/
