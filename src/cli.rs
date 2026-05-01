@@ -36,6 +36,12 @@ pub enum Command {
         max_steps: usize,
     },
     Login,
+    Debug {
+        mode: Option<String>,
+
+        #[arg(long)]
+        json: bool,
+    },
     Session {
         #[command(subcommand)]
         command: SessionCommand,

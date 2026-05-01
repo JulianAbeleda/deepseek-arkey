@@ -9,7 +9,9 @@ pub fn print_banner(model: &str) {
         accent(PROVIDER.to_ascii_lowercase()),
         muted(format!("[{model}]"))
     ));
-    print_line(muted("Enter send · ? help · /model · /end · /exit"));
+    print_line(muted(
+        "Enter send · ? help · /model · /debug · /runtime · /end · /exit",
+    ));
 }
 
 pub fn prompt_text(model: &str) -> String {
@@ -26,6 +28,8 @@ pub fn print_help(model: &str) {
     print_line("  /model              Show or switch DeepSeek model");
     print_line("  /model <id>         Switch model for this active session");
     print_line("  /status             Show active session details");
+    print_line("  /runtime            Show provider/debug runtime state");
+    print_line("  /debug [on|off]     Toggle local debug backend");
     print_line("  /end                End the current session and clear context");
     print_blank_line();
     print_line(muted("General"));
