@@ -24,6 +24,7 @@ pub struct DockedComposer {
     history_index: Option<usize>,
     stream_active: bool,
     stream_col: usize,
+    status_active: bool,
 }
 
 pub struct RawModeSession;
@@ -160,6 +161,7 @@ impl DockedComposer {
             history_index: None,
             stream_active: false,
             stream_col: 0,
+            status_active: false,
         }
     }
 
@@ -259,10 +261,20 @@ impl DockedComposer {
     }
 
     pub fn print_above(&mut self, text: &str) -> Result<(), String> {
+        let had_status = self.status_active;
         self.reset_stream_state();
         let mut stdout = io::stdout();
         execute!(stdout, MoveToColumn(0), Clear(ClearType::CurrentLine))
             .map_err(|err| err.to_string())?;
+        if had_status {
+            execute!(
+                stdout,
+                crossterm::cursor::MoveUp(1),
+                MoveToColumn(0),
+                Clear(ClearType::CurrentLine)
+            )
+            .map_err(|err| err.to_string())?;
+        }
         write_raw_lines(&mut stdout, text)?;
         if !text.is_empty() && !text.ends_with('\n') {
             write!(stdout, "\r\n").map_err(|err| err.to_string())?;
@@ -271,11 +283,34 @@ impl DockedComposer {
         self.render()
     }
 
+    pub fn status_above(&mut self, text: &str) -> Result<(), String> {
+        self.reset_stream_state();
+        let mut stdout = io::stdout();
+        execute!(stdout, MoveToColumn(0), Clear(ClearType::CurrentLine))
+            .map_err(|err| err.to_string())?;
+        write_raw_lines(&mut stdout, text)?;
+        if !text.ends_with('\n') {
+            write!(stdout, "\r\n").map_err(|err| err.to_string())?;
+        }
+        stdout.flush().map_err(|err| err.to_string())?;
+        self.status_active = true;
+        self.render()
+    }
+
     pub fn stream_above(&mut self, text: &str) -> Result<(), String> {
         let mut stdout = io::stdout();
         execute!(stdout, MoveToColumn(0), Clear(ClearType::CurrentLine))
             .map_err(|err| err.to_string())?;
-        if self.stream_active {
+        if self.status_active {
+            execute!(
+                stdout,
+                crossterm::cursor::MoveUp(1),
+                MoveToColumn(0),
+                Clear(ClearType::CurrentLine)
+            )
+            .map_err(|err| err.to_string())?;
+            self.status_active = false;
+        } else if self.stream_active {
             execute!(
                 stdout,
                 crossterm::cursor::MoveUp(1),
@@ -323,6 +358,7 @@ impl DockedComposer {
     fn reset_stream_state(&mut self) {
         self.stream_active = false;
         self.stream_col = 0;
+        self.status_active = false;
     }
 
     fn previous_history(&mut self) -> Option<String> {
@@ -543,11 +579,14 @@ mod tests {
         let mut composer = DockedComposer::new("prompt › ".to_string());
         composer.note_stream_text("hello");
         assert!(composer.stream_active);
+        assert!(!composer.status_active);
         assert_eq!(composer.stream_col, 5);
         composer.note_stream_text(" 界");
         assert_eq!(composer.stream_col, 8);
+        composer.status_active = true;
         composer.reset_stream_state();
         assert!(!composer.stream_active);
+        assert!(!composer.status_active);
         assert_eq!(composer.stream_col, 0);
     }
 }

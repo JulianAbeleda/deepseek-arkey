@@ -239,7 +239,7 @@ fn run_interactive_docked(model: &str, temperature: Option<f32>) -> Result<(), S
                         composer.finish_stream()?;
                     }
                     if let Some(next) = queued.pop_front() {
-                        composer.print_above("context: scanning\n")?;
+                        composer.status_above("context: scanning\n")?;
                         in_flight =
                             Some(spawn_prompt_turn(next, current_model.clone(), temperature));
                     }
@@ -311,7 +311,7 @@ fn run_interactive_docked(model: &str, temperature: Option<f32>) -> Result<(), S
             composer.print_above(&format!("queued: {} prompt(s)\n", queued.len()))?;
             continue;
         }
-        composer.print_above("context: scanning\n")?;
+        composer.status_above("context: scanning\n")?;
         in_flight = Some(spawn_prompt_turn(
             prompt.to_string(),
             current_model.clone(),
