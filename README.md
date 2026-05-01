@@ -71,4 +71,5 @@ Agent transcripts are written under `.deepseek/agent-transcripts/` inside the se
 cargo fmt --check
 cargo check
 cargo test --offline
+python3 scripts/docked-smoke.py --binary target/release/deepseek
 ```

@@ -352,8 +352,15 @@ fn run_prompt_streaming(
     });
     let response = if runtime_state.backend == RuntimeBackend::Debug {
         let response = debug_response(prompt, model);
+        let delay = debug_stream_delay();
+        if let Some(delay) = delay {
+            thread::sleep(delay);
+        }
         for delta in response.chars() {
             let _ = sender.send(TurnEvent::Delta(delta.to_string()));
+            if let Some(delay) = delay {
+                thread::sleep(delay);
+            }
         }
         response
     } else {
@@ -488,6 +495,14 @@ fn debug_response(prompt: &str, model: &str) -> String {
     format!(
         "debug/manual backend\nprovider: {PROVIDER}\nmodel: {model}\nprompt: {prompt}\n\nThis is a local diagnostic response. Normal chat does not get filesystem tools; use `agent --root <path> ...` for file read/write work."
     )
+}
+
+fn debug_stream_delay() -> Option<Duration> {
+    std::env::var("DEEPSEEK_DEBUG_STREAM_DELAY_MS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|delay| *delay > 0)
+        .map(Duration::from_millis)
 }
 
 fn parse_debug_command(prompt: &str) -> Option<Option<&str>> {
