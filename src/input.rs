@@ -4,7 +4,7 @@ use std::time::Duration;
 use crossterm::cursor::MoveToColumn;
 use crossterm::event::{self, Event, KeyCode, KeyModifiers};
 use crossterm::execute;
-use crossterm::terminal::{disable_raw_mode, enable_raw_mode, Clear, ClearType};
+use crossterm::terminal::{disable_raw_mode, enable_raw_mode, size, Clear, ClearType};
 
 pub enum InputAction {
     Submit(String),
@@ -22,8 +22,8 @@ pub struct DockedComposer {
     cursor: usize,
     history: Vec<String>,
     history_index: Option<usize>,
-    stream_active: bool,
-    stream_col: usize,
+    stream_buffer: String,
+    stream_rendered_rows: usize,
     status_active: bool,
 }
 
@@ -159,8 +159,8 @@ impl DockedComposer {
             cursor: 0,
             history: Vec::new(),
             history_index: None,
-            stream_active: false,
-            stream_col: 0,
+            stream_buffer: String::new(),
+            stream_rendered_rows: 0,
             status_active: false,
         }
     }
@@ -306,10 +306,13 @@ impl DockedComposer {
     }
 
     pub fn stream_above(&mut self, text: &str) -> Result<(), String> {
+        self.stream_buffer.push_str(text);
+        let lines = wrap_visible_lines(&self.stream_buffer, terminal_width());
+        let prior_rows = self.transient_rows();
         let mut stdout = io::stdout();
         execute!(stdout, MoveToColumn(0), Clear(ClearType::CurrentLine))
             .map_err(|err| err.to_string())?;
-        if self.status_active {
+        for _ in 0..prior_rows {
             execute!(
                 stdout,
                 crossterm::cursor::MoveUp(1),
@@ -317,55 +320,24 @@ impl DockedComposer {
                 Clear(ClearType::CurrentLine)
             )
             .map_err(|err| err.to_string())?;
-            self.status_active = false;
-        } else if self.stream_active {
-            execute!(
-                stdout,
-                crossterm::cursor::MoveUp(1),
-                MoveToColumn(self.stream_col as u16)
-            )
-            .map_err(|err| err.to_string())?;
         }
-        for ch in text.chars() {
-            if ch == '\n' {
-                write!(stdout, "\r\n").map_err(|err| err.to_string())?;
-            } else {
-                write!(stdout, "{ch}").map_err(|err| err.to_string())?;
-            }
+        for line in &lines {
+            write!(stdout, "{line}\r\n").map_err(|err| err.to_string())?;
         }
-        self.note_stream_text(text);
-        write!(stdout, "\r\n").map_err(|err| err.to_string())?;
         stdout.flush().map_err(|err| err.to_string())?;
+        self.status_active = false;
+        self.stream_rendered_rows = lines.len();
         self.render()
     }
 
     pub fn finish_stream(&mut self) -> Result<(), String> {
-        if !self.stream_active {
-            return self.render();
-        }
-        let mut stdout = io::stdout();
-        execute!(
-            stdout,
-            MoveToColumn(0),
-            Clear(ClearType::CurrentLine),
-            crossterm::cursor::MoveUp(1),
-            MoveToColumn(self.stream_col as u16)
-        )
-        .map_err(|err| err.to_string())?;
-        write!(stdout, "\r\n").map_err(|err| err.to_string())?;
-        stdout.flush().map_err(|err| err.to_string())?;
         self.reset_stream_state();
         self.render()
     }
 
-    fn note_stream_text(&mut self, text: &str) {
-        self.stream_col = stream_column_after(self.stream_col, text);
-        self.stream_active = true;
-    }
-
     fn reset_stream_state(&mut self) {
-        self.stream_active = false;
-        self.stream_col = 0;
+        self.stream_buffer.clear();
+        self.stream_rendered_rows = 0;
         self.status_active = false;
     }
 
@@ -373,6 +345,16 @@ impl DockedComposer {
         let had_status = self.status_active;
         self.reset_stream_state();
         had_status
+    }
+
+    fn transient_rows(&self) -> usize {
+        if self.stream_rendered_rows > 0 {
+            self.stream_rendered_rows
+        } else if self.status_active {
+            1
+        } else {
+            0
+        }
     }
 
     fn previous_history(&mut self) -> Option<String> {
@@ -509,24 +491,45 @@ fn visible_len(text: &str) -> usize {
     len
 }
 
-fn stream_column_after(start_col: usize, text: &str) -> usize {
-    let mut col = start_col;
+fn terminal_width() -> usize {
+    size().map(|(cols, _)| cols as usize).unwrap_or(80).max(1)
+}
+
+fn wrap_visible_lines(text: &str, width: usize) -> Vec<String> {
+    let width = width.max(1);
+    let mut lines = Vec::new();
+    let mut line = String::new();
+    let mut col = 0usize;
     let mut chars = text.chars().peekable();
     while let Some(ch) = chars.next() {
         if ch == '\x1b' && chars.peek() == Some(&'[') {
-            let _ = chars.next();
+            line.push(ch);
+            let _ = chars.next().map(|next| line.push(next));
             for code in chars.by_ref() {
+                line.push(code);
                 if ('@'..='~').contains(&code) {
                     break;
                 }
             }
-        } else if ch == '\n' || ch == '\r' {
-            col = 0;
-        } else {
-            col += char_display_width(ch);
+            continue;
         }
+        if ch == '\n' {
+            lines.push(std::mem::take(&mut line));
+            col = 0;
+            continue;
+        }
+        let width_of_char = char_display_width(ch);
+        if col > 0 && col + width_of_char > width {
+            lines.push(std::mem::take(&mut line));
+            col = 0;
+        }
+        line.push(ch);
+        col += width_of_char;
     }
-    col
+    if !line.is_empty() || lines.is_empty() {
+        lines.push(line);
+    }
+    lines
 }
 
 fn char_display_width(ch: char) -> usize {
@@ -558,7 +561,7 @@ fn is_wide_char(ch: char) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        insert_at, remove_at, remove_before, stream_column_after, visible_len, DockedComposer,
+        insert_at, remove_at, remove_before, visible_len, wrap_visible_lines, DockedComposer,
     };
 
     #[test]
@@ -581,28 +584,19 @@ mod tests {
     }
 
     #[test]
-    fn stream_column_tracks_newlines_ansi_and_wide_chars() {
-        assert_eq!(stream_column_after(0, "ab"), 2);
-        assert_eq!(stream_column_after(2, "界"), 4);
-        assert_eq!(stream_column_after(4, "\n界"), 2);
-        assert_eq!(stream_column_after(2, "\x1b[31mred\x1b[0m"), 5);
-    }
-
-    #[test]
     fn composer_stream_state_can_reset() {
         let mut composer = DockedComposer::new("prompt › ".to_string());
         composer.buffer = "draft".to_string();
-        composer.note_stream_text("hello");
-        assert!(composer.stream_active);
+        composer.stream_buffer = "hello".to_string();
+        composer.stream_rendered_rows = 1;
+        assert_eq!(composer.stream_buffer, "hello");
+        assert_eq!(composer.stream_rendered_rows, 1);
         assert!(!composer.status_active);
-        assert_eq!(composer.stream_col, 5);
-        composer.note_stream_text(" 界");
-        assert_eq!(composer.stream_col, 8);
         composer.status_active = true;
         composer.reset_stream_state();
-        assert!(!composer.stream_active);
+        assert!(composer.stream_buffer.is_empty());
+        assert_eq!(composer.stream_rendered_rows, 0);
         assert!(!composer.status_active);
-        assert_eq!(composer.stream_col, 0);
         assert_eq!(composer.buffer, "draft");
     }
 
@@ -613,5 +607,16 @@ mod tests {
         assert!(composer.take_status_active());
         assert!(!composer.status_active);
         assert!(!composer.take_status_active());
+    }
+
+    #[test]
+    fn wraps_stream_lines_to_terminal_width() {
+        assert_eq!(wrap_visible_lines("abcdef", 3), vec!["abc", "def"]);
+        assert_eq!(wrap_visible_lines("ab\ncd", 10), vec!["ab", "cd"]);
+        assert_eq!(wrap_visible_lines("ab界", 3), vec!["ab", "界"]);
+        assert_eq!(
+            wrap_visible_lines("\x1b[31mred\x1b[0m!", 4),
+            vec!["\x1b[31mred\x1b[0m!"]
+        );
     }
 }
