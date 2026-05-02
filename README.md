@@ -68,6 +68,7 @@ deepseek [deepseek-v4-flash] › what do you think about this design?
 The CLI keeps context only during the active ephemeral session and deletes that context when the session ends. The active state path is `~/.local/state/provider-cli/deepseek/active-session.json`, with fallback behavior for environments where the home state path cannot be determined.
 
 Use `/model` inside the interactive shell to show supported model IDs, and `/model <id>` to switch the active session model. Use `/root <path>` to choose the workspace root for routed agent tasks from chat, `/root` to show it, and `/root clear` to return to cwd-based root detection. Use `/agent` or `--agent` when you want explicit workspace-agent execution, and `/chat` to return to the docked chat shell. One-off calls can also switch models with `--model <id>`. Current DeepSeek API model IDs are `deepseek-v4-flash` and `deepseek-v4-pro`; legacy aliases `deepseek-chat` and `deepseek-reasoner` retire on 2026-07-24.
+Task prompts that reference paths outside the selected root ask for clarification instead of routing directly to agent execution.
 
 Agent mode is explicit and runs a bounded local tool loop with workspace-scoped tools, transcript logging, and approval gates for shell commands and exact text edits:
 

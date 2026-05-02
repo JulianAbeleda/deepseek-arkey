@@ -637,6 +637,36 @@ def section_H(binary, name, model):
         except: proc.terminate()
         os.close(master)
 
+    boundary_cases = [
+        ("H5", "relative path outside explicit root does not route", b"fix ../outside.md\r"),
+        ("H6", "absolute path outside explicit root does not route", b"audit /Users/example/.ssh/config\r"),
+    ]
+    for ident, label, prompt in boundary_cases:
+        home = with_temp_home(name); env = base_env(name, home); enable_debug(binary, env)
+        workspace = tempfile.mkdtemp(prefix="ws-root-")
+        Path(workspace, "README.md").write_text("workspace marker\n", encoding="utf-8")
+        master, proc = spawn(binary, ["chat"], env, rows, cols, cwd=home)
+        screen = Screen(rows, cols)
+        try:
+            drain(master, screen, 0.6)
+            os.write(master, f"/root {workspace}\r".encode())
+            wait_for(lambda: "root-source: explicit" in screen.all_text(), master, screen, timeout=4.0)
+            drain(master, screen, 0.3)
+            os.write(master, prompt)
+            wait_for(lambda: "Referenced path is outside" in screen.all_text()
+                              or "route: agent task" in screen.all_text(),
+                     master, screen, timeout=4.0)
+            drain(master, screen, 0.3)
+            text = screen.all_text()
+            blocked = "Referenced path is outside" in text and "route: agent task" not in text
+            record("H", ident, label,
+                   "PASS" if blocked else "FAIL",
+                   f"workspace={workspace}\ntext={text}")
+        finally:
+            try: os.write(master, b"\x04"); proc.wait(timeout=2)
+            except: proc.terminate()
+            os.close(master)
+
 
 # =========================================================================
 # main

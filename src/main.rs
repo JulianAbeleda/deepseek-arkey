@@ -438,6 +438,11 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
                     pending_agent_task = None;
                     continue;
                 };
+                if let Some(path) = path_boundary_violation(prompt, &root) {
+                    composer.print_above(&path_boundary_clarify_text(&root, &path))?;
+                    pending_agent_task = None;
+                    continue;
+                }
                 pending_agent_task = Some(PendingAgentTask {
                     prompt: prompt.to_string(),
                     root: root.clone(),
@@ -655,6 +660,14 @@ fn clarify_route_text() -> String {
     "route: unclear\nDo you want chat analysis or an agent task?\nType /chat to discuss, /root <path> to choose a workspace, or /agent <task> to execute.\n".to_string()
 }
 
+fn path_boundary_clarify_text(root: &Path, path: &Path) -> String {
+    format!(
+        "route: unclear\nReferenced path is outside the selected workspace root.\nroot: {}\npath: {}\nUse /root <path> to choose a different workspace, or /chat to discuss.\n",
+        root.display(),
+        path.display()
+    )
+}
+
 fn workspace_root() -> Option<PathBuf> {
     let cwd = std::env::current_dir().ok()?;
     let home = std::env::var_os("HOME").map(PathBuf::from);
@@ -716,6 +729,42 @@ fn paths_equal(left: &Path, right: &Path) -> bool {
         (Ok(left), Ok(right)) => left == right,
         _ => left == right,
     }
+}
+
+fn path_boundary_violation(prompt: &str, root: &Path) -> Option<PathBuf> {
+    let root = normalize_path(root);
+    prompt
+        .split_whitespace()
+        .filter_map(clean_prompt_token)
+        .filter(|token| is_path_like_token(token))
+        .filter_map(|token| {
+            let path = PathBuf::from(token);
+            let resolved = if path.is_absolute() {
+                normalize_path(&path)
+            } else {
+                normalize_path(&root.join(path))
+            };
+            if resolved.starts_with(&root) {
+                None
+            } else {
+                Some(resolved)
+            }
+        })
+        .next()
+}
+
+fn normalize_path(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                normalized.pop();
+            }
+            component => normalized.push(component.as_os_str()),
+        }
+    }
+    normalized
 }
 
 fn classify_intent(
@@ -816,11 +865,34 @@ fn is_task_prompt(prompt: &str, has_recent_task_context: bool) -> bool {
 
 fn references_workspace_file(prompt: &str, workspace_root: Option<&Path>) -> bool {
     prompt.split_whitespace().any(|token| {
-        let token = token.trim_matches(|ch: char| {
-            ch == '"' || ch == '\'' || ch == '`' || ch == ',' || ch == ':' || ch == ';'
-        });
+        let Some(token) = clean_prompt_token(token) else {
+            return false;
+        };
         is_path_like_token(token) || workspace_root.is_some_and(|root| root.join(token).is_file())
     })
+}
+
+fn clean_prompt_token(token: &str) -> Option<&str> {
+    let mut token = token.trim_matches(|ch: char| {
+        ch == '"'
+            || ch == '\''
+            || ch == '`'
+            || ch == ','
+            || ch == ':'
+            || ch == ';'
+            || ch == '?'
+            || ch == '!'
+            || ch == '('
+            || ch == ')'
+            || ch == '['
+            || ch == ']'
+            || ch == '{'
+            || ch == '}'
+    });
+    if token.ends_with('.') && !token.ends_with("..") {
+        token = &token[..token.len() - 1];
+    }
+    (!token.is_empty()).then_some(token)
 }
 
 fn is_path_like_token(token: &str) -> bool {
@@ -1101,7 +1173,7 @@ mod tests {
     use super::{
         classify_intent, context_scan_status, debug_response, is_agent_transcript_latest,
         is_end_command, is_exit_command, parse_debug_command, parse_model_command,
-        parse_root_command, root_status, Intent,
+        parse_root_command, path_boundary_violation, root_status, Intent,
     };
     use std::path::Path;
     use std::time::Instant;
@@ -1164,6 +1236,15 @@ mod tests {
         assert!(root_status(Some(root), true).contains("root-source: explicit"));
         assert!(root_status(Some(root), false).contains("root-source: cwd"));
         assert!(root_status(None, false).contains("root: unset"));
+    }
+
+    #[test]
+    fn detects_path_references_outside_root() {
+        let root = Path::new("/tmp/workspace");
+        assert_eq!(path_boundary_violation("fix README.md", root), None);
+        assert_eq!(path_boundary_violation("fix src/main.rs.", root), None);
+        assert!(path_boundary_violation("fix ../outside.md", root).is_some());
+        assert!(path_boundary_violation("audit /Users/example/.ssh/config", root).is_some());
     }
 
     #[test]
