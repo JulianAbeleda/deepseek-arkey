@@ -13,7 +13,7 @@ use std::path::Path;
 use std::process::ExitCode;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use clap::Parser;
 
@@ -276,23 +276,33 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
     let mut composer = DockedComposer::new(ui::prompt_text(&runtime_state.label(&current_model)));
     composer.render()?;
     let mut in_flight: Option<Receiver<TurnEvent>> = None;
+    let mut context_scan_started: Option<Instant> = None;
     let mut queued = VecDeque::<String>::new();
     let mut switch_to_agent = false;
     loop {
         if let Some(receiver) = &in_flight {
-            if let Some(result) =
-                drain_turn_events(receiver, &mut composer, "response worker disconnected")?
-            {
+            let (result, streamed) =
+                drain_turn_events(receiver, &mut composer, "response worker disconnected")?;
+            if streamed {
+                context_scan_started = None;
+            }
+            if let Some(result) = result {
                 in_flight = None;
+                context_scan_started = None;
                 if let Err(err) = result {
                     composer.print_above(&format!("error: {err}\n"))?;
                 } else {
                     composer.finish_stream()?;
                 }
                 if let Some(next) = queued.pop_front() {
-                    composer.status_above("context: scanning\n")?;
+                    context_scan_started = Some(start_context_scan(&mut composer)?);
                     in_flight = Some(spawn_prompt_turn(next, current_model.clone(), temperature));
                 }
+            }
+        }
+        if in_flight.is_some() {
+            if let Some(started) = context_scan_started {
+                composer.status_above(&context_scan_status(started))?;
             }
         }
         let Some(action) = composer.poll_action(Duration::from_millis(50))? else {
@@ -360,7 +370,7 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
             composer.print_above(&format!("queued: {} prompt(s)\n", queued.len()))?;
             continue;
         }
-        composer.status_above("context: scanning\n")?;
+        context_scan_started = Some(start_context_scan(&mut composer)?);
         in_flight = Some(spawn_prompt_turn(
             prompt.to_string(),
             current_model.clone(),
@@ -477,7 +487,7 @@ fn drain_turn_events(
     receiver: &Receiver<TurnEvent>,
     composer: &mut DockedComposer,
     disconnected_message: &str,
-) -> Result<Option<Result<(), String>>, String> {
+) -> Result<(Option<Result<(), String>>, bool), String> {
     let mut chunk = String::new();
     let mut complete = None;
     loop {
@@ -497,7 +507,26 @@ fn drain_turn_events(
     if !chunk.is_empty() {
         composer.stream_above(&chunk)?;
     }
-    Ok(complete)
+    Ok((complete, !chunk.is_empty()))
+}
+
+fn start_context_scan(composer: &mut DockedComposer) -> Result<Instant, String> {
+    let started = Instant::now();
+    composer.status_above(&context_scan_status(started))?;
+    Ok(started)
+}
+
+fn context_scan_status(started: Instant) -> String {
+    let elapsed = started.elapsed();
+    let elapsed_tenths = elapsed.as_millis() / 100;
+    let width = 12usize;
+    let filled = (elapsed_tenths as usize % (width + 1)).max(1);
+    format!(
+        "context: scanning [{}{}] {:.1}s\n",
+        "=".repeat(filled),
+        " ".repeat(width - filled),
+        elapsed.as_secs_f32()
+    )
 }
 
 fn run_prompt_streaming(
@@ -745,9 +774,10 @@ fn update_active_session_model(model: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        debug_response, is_agent_transcript_latest, is_end_command, is_exit_command,
-        parse_debug_command, parse_model_command,
+        context_scan_status, debug_response, is_agent_transcript_latest, is_end_command,
+        is_exit_command, parse_debug_command, parse_model_command,
     };
+    use std::time::Instant;
 
     #[test]
     fn parses_model_slash_command() {
@@ -798,5 +828,12 @@ mod tests {
         let response = debug_response("can you write files?", "deepseek-v4-flash");
         assert!(response.contains("local diagnostic response"));
         assert!(response.contains("agent --root"));
+    }
+
+    #[test]
+    fn context_scan_status_has_loading_bar_and_timer() {
+        let status = context_scan_status(Instant::now());
+        assert!(status.starts_with("context: scanning ["));
+        assert!(status.ends_with("s\n"));
     }
 }
