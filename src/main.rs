@@ -9,7 +9,7 @@ mod ui;
 
 use std::collections::VecDeque;
 use std::io::{self, IsTerminal};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
@@ -32,6 +32,18 @@ enum TurnEvent {
 enum InteractiveMode {
     Agent,
     Chat,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Intent {
+    Chat,
+    Task,
+    Clarify,
+}
+
+struct PendingAgentTask {
+    prompt: String,
+    root: PathBuf,
 }
 
 fn main() -> ExitCode {
@@ -276,6 +288,7 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
     let mut in_flight: Option<Receiver<TurnEvent>> = None;
     let mut context_scan_started: Option<Instant> = None;
     let mut queued = VecDeque::<String>::new();
+    let mut pending_agent_task: Option<PendingAgentTask> = None;
     let mut switch_to_agent = false;
     loop {
         if let Some(receiver) = &in_flight {
@@ -321,10 +334,28 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
             composer.print_above(&interactive_help(&current_model))?;
             continue;
         }
+        if prompt == "/chat" {
+            pending_agent_task = None;
+            composer.print_above("mode: chat\n")?;
+            continue;
+        }
         if prompt == "/agent" {
             composer.print_above("switching to agent mode\n")?;
             switch_to_agent = true;
             break;
+        }
+        if prompt == "yes agent" {
+            if let Some(task) = pending_agent_task.take() {
+                composer.print_above(&format!(
+                    "switching to agent mode\nroot: {}\npending: {}\n",
+                    task.root.display(),
+                    task.prompt
+                ))?;
+                switch_to_agent = true;
+                break;
+            }
+            composer.print_above("no pending agent task\n")?;
+            continue;
         }
         if prompt == "/status" {
             composer.print_above(&interactive_status(&current_model)?)?;
@@ -367,6 +398,31 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
             queued.push_back(prompt.to_string());
             composer.print_above(&format!("queued: {} prompt(s)\n", queued.len()))?;
             continue;
+        }
+        match classify_intent(
+            prompt,
+            recent_task_context(&queued),
+            workspace_root().as_deref(),
+        ) {
+            Intent::Chat => {}
+            Intent::Task => {
+                let Some(root) = workspace_root() else {
+                    composer.print_above(&clarify_route_text())?;
+                    pending_agent_task = None;
+                    continue;
+                };
+                pending_agent_task = Some(PendingAgentTask {
+                    prompt: prompt.to_string(),
+                    root: root.clone(),
+                });
+                composer.print_above(&agent_route_confirmation(&root))?;
+                continue;
+            }
+            Intent::Clarify => {
+                pending_agent_task = None;
+                composer.print_above(&clarify_route_text())?;
+                continue;
+            }
         }
         context_scan_started = Some(start_context_scan(&mut composer)?);
         in_flight = Some(spawn_prompt_turn(
@@ -525,6 +581,158 @@ fn context_scan_status(started: Instant) -> String {
         " ".repeat(width - filled),
         elapsed.as_secs_f32()
     )
+}
+
+fn agent_route_confirmation(root: &Path) -> String {
+    format!(
+        "route: agent task\nroot: {}\nRun this as an agent task?\nType yes agent to continue, or /chat to keep chatting.\n",
+        root.display()
+    )
+}
+
+fn clarify_route_text() -> String {
+    "route: unclear\nDo you want chat analysis or an agent task?\nType /chat to discuss, or /agent <task> to execute.\n".to_string()
+}
+
+fn workspace_root() -> Option<PathBuf> {
+    let cwd = std::env::current_dir().ok()?;
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    if home.as_ref().is_some_and(|home| paths_equal(&cwd, home)) {
+        return None;
+    }
+    Some(cwd)
+}
+
+fn paths_equal(left: &Path, right: &Path) -> bool {
+    match (left.canonicalize(), right.canonicalize()) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => left == right,
+    }
+}
+
+fn classify_intent(
+    prompt: &str,
+    has_recent_task_context: bool,
+    workspace_root: Option<&Path>,
+) -> Intent {
+    let normalized = normalize_prompt(prompt);
+    if normalized.is_empty() {
+        return Intent::Chat;
+    }
+    if is_clarify_prompt(&normalized) {
+        return Intent::Clarify;
+    }
+    if is_chat_prompt(&normalized) {
+        return Intent::Chat;
+    }
+    if is_task_prompt(&normalized, has_recent_task_context)
+        || references_workspace_file(prompt, workspace_root)
+    {
+        if workspace_root.is_none() {
+            return Intent::Clarify;
+        }
+        return Intent::Task;
+    }
+    Intent::Chat
+}
+
+fn normalize_prompt(prompt: &str) -> String {
+    prompt
+        .trim()
+        .to_lowercase()
+        .chars()
+        .map(|ch| if ch.is_ascii_punctuation() { ' ' } else { ch })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn is_chat_prompt(prompt: &str) -> bool {
+    let chat_prefixes = [
+        "what ",
+        "why ",
+        "how ",
+        "should we ",
+        "does this make sense",
+        "can you explain",
+        "help me understand",
+        "explain ",
+    ];
+    chat_prefixes
+        .iter()
+        .any(|prefix| prompt.starts_with(prefix))
+}
+
+fn is_clarify_prompt(prompt: &str) -> bool {
+    matches!(
+        prompt,
+        "can you look at this" | "can you look at this please"
+    )
+}
+
+fn is_task_prompt(prompt: &str, has_recent_task_context: bool) -> bool {
+    let task_verbs = [
+        "fix",
+        "add",
+        "remove",
+        "update",
+        "implement",
+        "run",
+        "commit",
+        "push",
+        "audit",
+        "refactor",
+        "create",
+        "delete",
+        "rename",
+        "test",
+        "build",
+    ];
+    let first = prompt.split_whitespace().next().unwrap_or("");
+    if task_verbs.contains(&first) {
+        return true;
+    }
+    has_recent_task_context
+        && [
+            "lets do it",
+            "let s do it",
+            "go ahead",
+            "make that change",
+            "apply the patch",
+            "ship it",
+        ]
+        .iter()
+        .any(|phrase| prompt.starts_with(phrase))
+}
+
+fn references_workspace_file(prompt: &str, workspace_root: Option<&Path>) -> bool {
+    prompt.split_whitespace().any(|token| {
+        let token = token.trim_matches(|ch: char| {
+            ch == '"' || ch == '\'' || ch == '`' || ch == ',' || ch == ':' || ch == ';'
+        });
+        is_path_like_token(token) || workspace_root.is_some_and(|root| root.join(token).is_file())
+    })
+}
+
+fn is_path_like_token(token: &str) -> bool {
+    token.contains('/')
+        || matches!(
+            token,
+            "README.md" | "Cargo.toml" | "Cargo.lock" | "package.json" | "tsconfig.json"
+        )
+        || token.ends_with(".rs")
+        || token.ends_with(".py")
+        || token.ends_with(".md")
+        || token.ends_with(".toml")
+        || token.ends_with(".json")
+}
+
+fn recent_task_context(queued: &VecDeque<String>) -> bool {
+    queued.iter().any(|prompt| {
+        let normalized = normalize_prompt(prompt);
+        is_task_prompt(&normalized, false)
+    })
 }
 
 fn run_prompt_streaming(
@@ -772,9 +980,10 @@ fn update_active_session_model(model: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        context_scan_status, debug_response, is_agent_transcript_latest, is_end_command,
-        is_exit_command, parse_debug_command, parse_model_command,
+        classify_intent, context_scan_status, debug_response, is_agent_transcript_latest,
+        is_end_command, is_exit_command, parse_debug_command, parse_model_command, Intent,
     };
+    use std::path::Path;
     use std::time::Instant;
 
     #[test]
@@ -833,5 +1042,56 @@ mod tests {
         let status = context_scan_status(Instant::now());
         assert!(status.starts_with("context: scanning ["));
         assert!(status.ends_with("s\n"));
+    }
+
+    #[test]
+    fn classifies_open_questions_as_chat() {
+        let root = Path::new("/tmp/workspace");
+        assert_eq!(
+            classify_intent("what do you think about this design?", false, Some(root)),
+            Intent::Chat
+        );
+        assert_eq!(
+            classify_intent("how do I fix this?", false, Some(root)),
+            Intent::Chat
+        );
+        assert_eq!(
+            classify_intent("explain this codebase", false, Some(root)),
+            Intent::Chat
+        );
+    }
+
+    #[test]
+    fn classifies_imperatives_as_tasks_inside_workspace() {
+        let root = Path::new("/tmp/workspace");
+        assert_eq!(
+            classify_intent(
+                "fix the duplicate helper in both repos and run tests",
+                false,
+                Some(root)
+            ),
+            Intent::Task
+        );
+        assert_eq!(classify_intent("fix it", false, Some(root)), Intent::Task);
+        assert_eq!(
+            classify_intent("implement a logout button", false, Some(root)),
+            Intent::Task
+        );
+    }
+
+    #[test]
+    fn classifies_ambiguous_or_home_tasks_as_clarify() {
+        assert_eq!(
+            classify_intent(
+                "can you look at this?",
+                false,
+                Some(Path::new("/tmp/workspace"))
+            ),
+            Intent::Clarify
+        );
+        assert_eq!(
+            classify_intent("fix the README in this directory", false, None),
+            Intent::Clarify
+        );
     }
 }
