@@ -284,7 +284,7 @@ impl DockedComposer {
         if had_status {
             clear_rows_above_dock(&mut stdout, 1)?;
         }
-        move_to_status_row(&mut stdout)?;
+        move_to_output_row(&mut stdout)?;
         execute!(stdout, MoveToColumn(0), Clear(ClearType::CurrentLine))
             .map_err(|err| err.to_string())?;
         write_raw_lines(&mut stdout, text)?;
@@ -522,10 +522,6 @@ fn output_row() -> u16 {
 }
 
 fn move_to_output_row(stdout: &mut io::Stdout) -> Result<(), String> {
-    execute!(stdout, MoveTo(0, output_row())).map_err(|err| err.to_string())
-}
-
-fn move_to_status_row(stdout: &mut io::Stdout) -> Result<(), String> {
     execute!(stdout, MoveTo(0, output_row())).map_err(|err| err.to_string())
 }
 
