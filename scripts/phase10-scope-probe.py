@@ -285,6 +285,7 @@ def section_B(binary, name, model):
     print(f"\nB. Four-phase dock contract (chat docked, 24x80)")
     rows, cols = 24, 80
     home = with_temp_home(name); env = base_env(name, home); enable_debug(binary, env)
+    env[f"{name.upper()}_DEBUG_STREAM_DELAY_MS"] = "50"
     master, proc = spawn(binary, ["chat"], env, rows, cols)
     screen = Screen(rows, cols)
     try:
@@ -297,12 +298,13 @@ def section_B(binary, name, model):
 
         # B2 ContextScan
         os.write(master, b"please respond\r")
-        b2_ok = wait_for(lambda: "context: scanning" in screen.all_text(),
+        b2_ok = wait_for(lambda: "context: scanning" in screen.all_text() and "›" in screen.bottom(),
                          master, screen, timeout=3.0)
         composer_still_mounted = "›" in screen.bottom()
+        scan_rows = sum(1 for line in screen.all_text().splitlines() if "context: scanning" in line)
         record("B", "B2", "ContextScan: status above composer; composer mounted",
-               "PASS" if (b2_ok and composer_still_mounted) else "FAIL",
-               f"saw_scanning={b2_ok}\ncomposer_visible={composer_still_mounted}\nbottom={screen.bottom()!r}")
+               "PASS" if (b2_ok and composer_still_mounted and scan_rows == 1) else "FAIL",
+               f"saw_scanning={b2_ok}\ncomposer_visible={composer_still_mounted}\nscan_rows={scan_rows}\nbottom={screen.bottom()!r}")
 
         # B3 ResponseRender - type during stream
         os.write(master, b"draft-mid")

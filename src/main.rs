@@ -293,23 +293,29 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
     let mut selected_root: Option<PathBuf> = None;
     let mut switch_to_agent = false;
     loop {
-        if let Some(receiver) = &in_flight {
-            let (result, streamed) =
-                drain_turn_events(receiver, &mut composer, "response worker disconnected")?;
-            if streamed {
-                context_scan_started = None;
-            }
-            if let Some(result) = result {
-                in_flight = None;
-                context_scan_started = None;
-                if let Err(err) = result {
-                    composer.print_above(&format!("error: {err}\n"))?;
-                } else {
-                    composer.finish_stream()?;
+        let context_scan_ready = context_scan_started
+            .map(|started| started.elapsed() >= Duration::from_secs(1))
+            .unwrap_or(true);
+        if context_scan_ready {
+            if let Some(receiver) = &in_flight {
+                let (result, streamed) =
+                    drain_turn_events(receiver, &mut composer, "response worker disconnected")?;
+                if streamed {
+                    context_scan_started = None;
                 }
-                if let Some(next) = queued.pop_front() {
-                    context_scan_started = Some(start_context_scan(&mut composer)?);
-                    in_flight = Some(spawn_prompt_turn(next, current_model.clone(), temperature));
+                if let Some(result) = result {
+                    in_flight = None;
+                    context_scan_started = None;
+                    if let Err(err) = result {
+                        composer.print_above(&format!("error: {err}\n"))?;
+                    } else {
+                        composer.finish_stream()?;
+                    }
+                    if let Some(next) = queued.pop_front() {
+                        context_scan_started = Some(start_context_scan(&mut composer)?);
+                        in_flight =
+                            Some(spawn_prompt_turn(next, current_model.clone(), temperature));
+                    }
                 }
             }
         }
@@ -637,12 +643,12 @@ fn start_context_scan(composer: &mut DockedComposer) -> Result<Instant, String> 
 }
 
 fn context_scan_status(started: Instant) -> String {
-    let elapsed = started.elapsed();
-    let elapsed_tenths = elapsed.as_millis() / 100;
+    let elapsed = started.elapsed().min(Duration::from_secs(1));
+    let elapsed_tenths = (elapsed.as_millis() / 100).min(10);
     let width = 12usize;
-    let filled = (elapsed_tenths as usize % (width + 1)).max(1);
+    let filled = ((elapsed_tenths as usize * width) / 10).clamp(1, width);
     format!(
-        "context: scanning [{}{}] {:.1}s\n",
+        "context: scanning [{}{}] {:.1}s",
         "=".repeat(filled),
         " ".repeat(width - filled),
         elapsed.as_secs_f32()
@@ -1272,7 +1278,8 @@ mod tests {
     fn context_scan_status_has_loading_bar_and_timer() {
         let status = context_scan_status(Instant::now());
         assert!(status.starts_with("context: scanning ["));
-        assert!(status.ends_with("s\n"));
+        assert!(status.ends_with("s"));
+        assert!(!status.ends_with('\n'));
     }
 
     #[test]

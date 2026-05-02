@@ -287,9 +287,8 @@ impl DockedComposer {
         move_to_output_row(&mut stdout)?;
         execute!(stdout, MoveToColumn(0), Clear(ClearType::CurrentLine))
             .map_err(|err| err.to_string())?;
-        write_raw_lines(&mut stdout, text)?;
-        if !text.ends_with('\n') {
-            write!(stdout, "\r\n").map_err(|err| err.to_string())?;
+        if let Some(line) = text.lines().next() {
+            write!(stdout, "{line}").map_err(|err| err.to_string())?;
         }
         stdout.flush().map_err(|err| err.to_string())?;
         self.status_active = true;
