@@ -13,6 +13,7 @@ Sections map 1:1 to the scope doc:
   E  Clarify flow ($HOME or ambiguous)
   F  Safety rules
   G  Mode switching
+  H  Root selection
 """
 import argparse
 import codecs
@@ -574,6 +575,70 @@ def section_G(binary, name, model):
 
 
 # =========================================================================
+# H. Root selection
+# =========================================================================
+def section_H(binary, name, model):
+    print(f"\nH. Root selection")
+    rows, cols = 24, 80
+    home = with_temp_home(name); env = base_env(name, home); enable_debug(binary, env)
+    workspace = tempfile.mkdtemp(prefix="ws-root-")
+    Path(workspace, "README.md").write_text("workspace marker\n", encoding="utf-8")
+    master, proc = spawn(binary, ["chat"], env, rows, cols, cwd=home)
+    screen = Screen(rows, cols)
+    try:
+        drain(master, screen, 0.6)
+        os.write(master, f"/root {workspace}\r".encode())
+        wait_for(lambda: "root-source: explicit" in screen.all_text(), master, screen, timeout=4.0)
+        drain(master, screen, 0.3)
+        text = screen.all_text()
+        explicit_root = workspace in text and "root-source: explicit" in text
+        record("H", "H1", "/root <path> sets explicit workspace root",
+               "PASS" if explicit_root else "FAIL",
+               f"workspace={workspace}\ntext={text}")
+
+        os.write(master, b"/status\r")
+        wait_for(lambda: "mode: chat" in screen.all_text()
+                          and "root-source: explicit" in screen.all_text(),
+                 master, screen, timeout=4.0)
+        drain(master, screen, 0.3)
+        text = screen.all_text()
+        status_has_root = "mode: chat" in text and workspace in text and "root-source: explicit" in text
+        record("H", "H2", "/status shows explicit chat root",
+               "PASS" if status_has_root else "FAIL",
+               f"workspace={workspace}\ntext={text}")
+
+        os.write(master, b"fix README.md\r")
+        wait_for(lambda: "route: agent task" in screen.all_text()
+                          or "route: unclear" in screen.all_text(),
+                 master, screen, timeout=4.0)
+        drain(master, screen, 0.3)
+        text = screen.all_text()
+        route_uses_root = "route: agent task" in text and workspace in text
+        record("H", "H3", "routed task uses explicit root from $HOME",
+               "PASS" if route_uses_root else "FAIL",
+               f"workspace={workspace}\ntext={text}")
+
+        os.write(master, b"/root clear\r")
+        wait_for(lambda: "root: unset" in screen.all_text(), master, screen, timeout=4.0)
+        drain(master, screen, 0.3)
+        os.write(master, b"fix README.md\r")
+        wait_for(lambda: "route: unclear" in screen.all_text()
+                          or "route: agent task" in screen.all_text(),
+                 master, screen, timeout=4.0)
+        drain(master, screen, 0.3)
+        text = screen.all_text()
+        after_clear = text.rsplit("root: unset", 1)[-1]
+        cleared_clarifies = "route: unclear" in after_clear and "route: agent task" not in after_clear
+        record("H", "H4", "/root clear restores $HOME clarify safety",
+               "PASS" if cleared_clarifies else "FAIL",
+               f"text={text}")
+    finally:
+        try: os.write(master, b"\x04"); proc.wait(timeout=2)
+        except: proc.terminate()
+        os.close(master)
+
+
+# =========================================================================
 # main
 # =========================================================================
 def summary():
@@ -601,13 +666,13 @@ def main():
     parser.add_argument("--binary", required=True)
     parser.add_argument("--name", required=True)
     parser.add_argument("--model", required=True)
-    parser.add_argument("--sections", default="ABCDEFG")
+    parser.add_argument("--sections", default="ABCDEFGH")
     args = parser.parse_args()
     args.binary = os.path.abspath(args.binary)
     print(f"# Phase 10 scope harness - {args.name}\n# binary: {args.binary}")
     sections = {
         "A": section_A, "B": section_B, "C": section_C, "D": section_D,
-        "E": section_E, "F": section_F, "G": section_G,
+        "E": section_E, "F": section_F, "G": section_G, "H": section_H,
     }
     for letter in args.sections:
         if letter in sections:

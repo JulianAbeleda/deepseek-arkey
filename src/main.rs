@@ -290,6 +290,7 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
     let mut queued = VecDeque::<String>::new();
     let mut pending_agent_task: Option<PendingAgentTask> = None;
     let mut confirmed_agent_task: Option<PendingAgentTask> = None;
+    let mut selected_root: Option<PathBuf> = None;
     let mut switch_to_agent = false;
     loop {
         if let Some(receiver) = &in_flight {
@@ -359,7 +360,32 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
             continue;
         }
         if prompt == "/status" {
-            composer.print_above(&interactive_status(&current_model)?)?;
+            composer.print_above(&interactive_chat_status(
+                &current_model,
+                effective_workspace_root(selected_root.as_deref()).as_deref(),
+                selected_root.is_some(),
+            )?)?;
+            continue;
+        }
+        if let Some(root_arg) = parse_root_command(prompt) {
+            let output = match root_arg {
+                Some(root_arg) => match update_selected_root(root_arg) {
+                    Ok(next_root) => {
+                        selected_root = next_root;
+                        pending_agent_task = None;
+                        root_status(
+                            effective_workspace_root(selected_root.as_deref()).as_deref(),
+                            selected_root.is_some(),
+                        )
+                    }
+                    Err(err) => format!("root error: {err}\n"),
+                },
+                None => root_status(
+                    effective_workspace_root(selected_root.as_deref()).as_deref(),
+                    selected_root.is_some(),
+                ),
+            };
+            composer.print_above(&output)?;
             continue;
         }
         if prompt == "/runtime" {
@@ -403,11 +429,11 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
         match classify_intent(
             prompt,
             recent_task_context(&queued),
-            workspace_root().as_deref(),
+            effective_workspace_root(selected_root.as_deref()).as_deref(),
         ) {
             Intent::Chat => {}
             Intent::Task => {
-                let Some(root) = workspace_root() else {
+                let Some(root) = effective_workspace_root(selected_root.as_deref()) else {
                     composer.print_above(&clarify_route_text())?;
                     pending_agent_task = None;
                     continue;
@@ -626,7 +652,7 @@ fn agent_route_confirmation(root: &Path) -> String {
 }
 
 fn clarify_route_text() -> String {
-    "route: unclear\nDo you want chat analysis or an agent task?\nType /chat to discuss, or /agent <task> to execute.\n".to_string()
+    "route: unclear\nDo you want chat analysis or an agent task?\nType /chat to discuss, /root <path> to choose a workspace, or /agent <task> to execute.\n".to_string()
 }
 
 fn workspace_root() -> Option<PathBuf> {
@@ -636,6 +662,53 @@ fn workspace_root() -> Option<PathBuf> {
         return None;
     }
     Some(cwd)
+}
+
+fn effective_workspace_root(selected_root: Option<&Path>) -> Option<PathBuf> {
+    selected_root.map(Path::to_path_buf).or_else(workspace_root)
+}
+
+fn parse_root_command(prompt: &str) -> Option<Option<&str>> {
+    if prompt == "/root" {
+        return Some(None);
+    }
+    prompt
+        .strip_prefix("/root ")
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(Some)
+}
+
+fn update_selected_root(root_arg: &str) -> Result<Option<PathBuf>, String> {
+    if matches!(root_arg, "clear" | "reset" | "cwd") {
+        return Ok(None);
+    }
+    let path = PathBuf::from(root_arg);
+    let path = if path.is_absolute() {
+        path
+    } else {
+        std::env::current_dir()
+            .map_err(|err| err.to_string())?
+            .join(path)
+    };
+    let root = path
+        .canonicalize()
+        .map_err(|err| format!("{}: {err}", path.display()))?;
+    if !root.is_dir() {
+        return Err(format!("{} is not a directory", root.display()));
+    }
+    Ok(Some(root))
+}
+
+fn root_status(root: Option<&Path>, explicit: bool) -> String {
+    match root {
+        Some(root) => format!(
+            "root: {}\nroot-source: {}\n",
+            root.display(),
+            if explicit { "explicit" } else { "cwd" }
+        ),
+        None => "root: unset\nroot-source: none\nUse /root <path> before running workspace tasks from $HOME.\n".to_string(),
+    }
 }
 
 fn paths_equal(left: &Path, right: &Path) -> bool {
@@ -813,7 +886,7 @@ fn run_prompt_streaming(
 
 fn interactive_help(model: &str) -> String {
     format!(
-        "DeepSeek Chat Commands\nSession\n  /model              Show or switch DeepSeek model\n  /model <id>         Switch model for this active session\n  /status             Show active session details\n  /runtime            Show provider/debug runtime state\n  /debug [on|off]     Toggle local debug backend\n  /agent              Switch to workspace agent mode\n  /end                End the current session and clear context\n\nGeneral\n  ? or /help          Show this help\n  /exit               Exit without clearing context\n\nShell\n  mode                chat\n  model               {model}\n"
+        "DeepSeek Chat Commands\nWorkspace\n  /root               Show active workspace root\n  /root <path>        Set workspace root for routed agent tasks\n  /root clear         Return to cwd-based root detection\n\nSession\n  /model              Show or switch DeepSeek model\n  /model <id>         Switch model for this active session\n  /status             Show active session details\n  /runtime            Show provider/debug runtime state\n  /debug [on|off]     Toggle local debug backend\n  /agent              Switch to workspace agent mode\n  /end                End the current session and clear context\n\nGeneral\n  ? or /help          Show this help\n  /exit               Exit without clearing context\n\nShell\n  mode                chat\n  model               {model}\n"
     )
 }
 
@@ -848,6 +921,17 @@ fn interactive_status(model: &str) -> Result<String, String> {
             ));
         }
     }
+    Ok(output)
+}
+
+fn interactive_chat_status(
+    model: &str,
+    root: Option<&Path>,
+    explicit_root: bool,
+) -> Result<String, String> {
+    let mut output = interactive_status(model)?;
+    output.push_str("mode: chat\n");
+    output.push_str(&root_status(root, explicit_root));
     Ok(output)
 }
 
@@ -1016,7 +1100,8 @@ fn update_active_session_model(model: &str) -> Result<(), String> {
 mod tests {
     use super::{
         classify_intent, context_scan_status, debug_response, is_agent_transcript_latest,
-        is_end_command, is_exit_command, parse_debug_command, parse_model_command, Intent,
+        is_end_command, is_exit_command, parse_debug_command, parse_model_command,
+        parse_root_command, root_status, Intent,
     };
     use std::path::Path;
     use std::time::Instant;
@@ -1063,6 +1148,22 @@ mod tests {
         assert_eq!(parse_debug_command("/debug off"), Some(Some("off")));
         assert_eq!(parse_debug_command("/debug manual"), Some(Some("manual")));
         assert_eq!(parse_debug_command("debug"), None);
+    }
+
+    #[test]
+    fn parses_root_slash_command() {
+        assert_eq!(parse_root_command("/root"), Some(None));
+        assert_eq!(parse_root_command("/root   .  "), Some(Some(".")));
+        assert_eq!(parse_root_command("/root clear"), Some(Some("clear")));
+        assert_eq!(parse_root_command("root ."), None);
+    }
+
+    #[test]
+    fn root_status_reports_source() {
+        let root = Path::new("/tmp/workspace");
+        assert!(root_status(Some(root), true).contains("root-source: explicit"));
+        assert!(root_status(Some(root), false).contains("root-source: cwd"));
+        assert!(root_status(None, false).contains("root: unset"));
     }
 
     #[test]
