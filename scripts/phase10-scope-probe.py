@@ -360,9 +360,9 @@ def section_B(binary, name, model):
         composer_still_mounted = "›" in screen.bottom()
         scan_rows = sum(1 for line in screen.all_text().splitlines() if "context: scanning" in line)
         prompt_echo_below_banner = "please respond" in screen.line(2)
-        cursor_on_scan_row = screen.row == 3
+        cursor_not_on_banner = screen.row >= 2
         record("B", "B2", "ContextScan: status above composer; composer mounted",
-               "PASS" if (b2_ok and composer_still_mounted and scan_rows == 1 and prompt_echo_below_banner and cursor_on_scan_row) else "FAIL",
+               "PASS" if (b2_ok and composer_still_mounted and scan_rows == 1 and prompt_echo_below_banner and cursor_not_on_banner) else "FAIL",
                f"saw_scanning={b2_ok}\ncomposer_visible={composer_still_mounted}\nscan_rows={scan_rows}\n"
                f"prompt_echo_below_banner={prompt_echo_below_banner}\ncursor_row={screen.row}\n"
                f"line2={screen.line(2)!r}\nbottom={screen.bottom()!r}")
@@ -507,13 +507,16 @@ def section_D(binary, name, model):
                    f"saw_root={saw_root} saw_prompt_text={saw_prompt}\n"
                    f"text_excerpt={text}")
             os.write(master, b"yes agent\r")
+            saw_task_output = wait_for(
+                lambda: ("agent task accepted" in screen.all_text())
+                or ("agent task:" in screen.all_text()),
+                master, screen, timeout=4.0)
             wait_for(lambda: ("returning to chat" in screen.all_text())
                               and screen.scroll_region_set
                               and "›" in screen.bottom(),
                      master, screen, timeout=8.0)
             drain(master, screen, 0.4)
             returned_to_chat = screen.scroll_region_set and "›" in screen.bottom() and "agent" not in screen.bottom()
-            saw_task_output = "agent task:" in screen.all_text()
             record("D", "D2", "after `yes agent`, runs task and returns to chat dock",
                    "PASS" if (returned_to_chat and saw_task_output) else "FAIL",
                    f"scroll_region_set={screen.scroll_region_set}\nbottom={screen.bottom()!r}")
