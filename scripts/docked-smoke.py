@@ -156,7 +156,7 @@ def main():
     parser.add_argument("--binary", default=None)
     parser.add_argument("--name", default="deepseek")
     parser.add_argument("--model", default="deepseek-v4-flash")
-    parser.add_argument("--entrypoint", choices=("chat", "switch"), default="chat")
+    parser.add_argument("--entrypoint", choices=("default", "chat", "switch"), default="chat")
     args = parser.parse_args()
 
     binary = args.binary or str((os.getcwd() + f"/target/release/{args.name}"))
@@ -169,7 +169,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix=f"{args.name}-docked-smoke-") as home:
         env = os.environ.copy()
         env["HOME"] = home
-        command = [binary, "chat"]
+        command = [binary] if args.entrypoint == "default" else [binary, "chat"]
         prompt_fragment = "debug:"
         response_fragment = "debug/manual backend"
         env[f"{args.name.upper()}_DEBUG_STREAM_DELAY_MS"] = "10"

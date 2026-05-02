@@ -112,9 +112,7 @@ fn run(args: Args) -> Result<(), String> {
                     println!("{response}");
                 }
             } else {
-                let mode = if args.chat {
-                    InteractiveMode::Chat
-                } else if args.agent_mode || io::stdin().is_terminal() {
+                let mode = if args.agent_mode {
                     InteractiveMode::Agent
                 } else {
                     InteractiveMode::Chat

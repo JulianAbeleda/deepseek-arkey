@@ -32,6 +32,7 @@ deepseek --stream -p "prompt"
 deepseek --no-session -p "prompt"
 deepseek chat
 deepseek chat -p "prompt"
+deepseek --agent
 deepseek agent --root . "Inspect README.md and summarize the CLI."
 deepseek agent --root . transcript latest
 deepseek
@@ -43,22 +44,12 @@ deepseek session end
 One-off prompt mode prints only the assistant response to stdout. Errors are printed to stderr and exit non-zero.
 Use `--stream` to print response deltas as they arrive. Cache-token stats are printed to stderr when the provider returns them.
 
-Default interactive mode is a workspace agent rooted at the current directory. Read-only file tools are available without extra approval; shell commands and edits require explicit confirmation.
+Default interactive mode is the bottom-docked chat shell. It is the primary surface for open-ended questions and normal provider chat.
 
-Agent mode:
+Chat mode:
 
 ```text
 $ deepseek
-workspace: /path/to/repo
-read tools on - edits require yes apply - shell requires yes run
-deepseek [deepseek-v4-flash] agent › can you inspect this repo?
-<response using local tools>
-```
-
-Plain chat mode remains available explicitly:
-
-```text
-$ deepseek chat
 deepseek [deepseek-v4-flash] › look at this code
 <response>
 deepseek [deepseek-v4-flash] › /model deepseek-v4-pro
@@ -66,13 +57,22 @@ model set: deepseek-v4-pro
 deepseek [deepseek-v4-pro] › /end
 ```
 
+The explicit `chat` command starts the same docked chat shell:
+
+```text
+$ deepseek chat
+deepseek [deepseek-v4-flash] › what do you think about this design?
+<response>
+```
+
 The CLI keeps context only during the active ephemeral session and deletes that context when the session ends. The active state path is `~/.local/state/provider-cli/deepseek/active-session.json`, with fallback behavior for environments where the home state path cannot be determined.
 
-Use `/model` inside the interactive shell to show supported model IDs, and `/model <id>` to switch the active session model. Use `/chat` and `/agent` to switch between workspace agent and plain chat inside the interactive shell. One-off calls can also switch models with `--model <id>`. Current DeepSeek API model IDs are `deepseek-v4-flash` and `deepseek-v4-pro`; legacy aliases `deepseek-chat` and `deepseek-reasoner` retire on 2026-07-24.
+Use `/model` inside the interactive shell to show supported model IDs, and `/model <id>` to switch the active session model. Use `/agent` or `--agent` when you want explicit workspace-agent execution, and `/chat` to return to the docked chat shell. One-off calls can also switch models with `--model <id>`. Current DeepSeek API model IDs are `deepseek-v4-flash` and `deepseek-v4-pro`; legacy aliases `deepseek-chat` and `deepseek-reasoner` retire on 2026-07-24.
 
-Agent mode runs a bounded local tool loop with workspace-scoped tools, transcript logging, and approval gates for shell commands and exact text edits:
+Agent mode is explicit and runs a bounded local tool loop with workspace-scoped tools, transcript logging, and approval gates for shell commands and exact text edits:
 
 ```bash
+deepseek --agent
 deepseek agent --root . --max-steps 8 "Inspect README.md and report the default model."
 deepseek agent --root . transcript latest
 ```
@@ -86,4 +86,6 @@ cargo fmt --check
 cargo check
 cargo test --offline
 python3 scripts/docked-smoke.py --binary target/release/deepseek
+python3 scripts/docked-smoke.py --binary target/release/deepseek --entrypoint default
+python3 scripts/agent-startup-smoke.py --binary target/release/deepseek
 ```

@@ -54,7 +54,7 @@ def main():
         master, slave = pty.openpty()
         os.set_blocking(master, False)
         fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", ROWS, COLS, 0, 0))
-        proc = subprocess.Popen([binary], stdin=slave, stdout=slave, stderr=slave, env=env, close_fds=True)
+        proc = subprocess.Popen([binary, "--agent"], stdin=slave, stdout=slave, stderr=slave, env=env, close_fds=True)
         os.close(slave)
         try:
             text = read_until(master, f"{args.name} [{args.model}] agent")
