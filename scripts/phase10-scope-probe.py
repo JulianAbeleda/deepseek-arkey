@@ -172,6 +172,33 @@ def compact_text(text):
     return " ".join(text.split())
 
 
+def response_stream_rows(screen):
+    markers = (
+        "debug/manual backend",
+        "provider:",
+        "model:",
+        "prompt:",
+        "This is a local diagnostic response",
+        "Normal chat does not get filesystem tools",
+    )
+    rows = []
+    for line in screen.all_text().splitlines():
+        stripped = line.strip()
+        if stripped and any(marker in stripped for marker in markers):
+            rows.append(stripped)
+    return rows
+
+
+def duplicate_rows(rows):
+    seen = set()
+    duplicates = []
+    for row in rows:
+        if row in seen and row not in duplicates:
+            duplicates.append(row)
+        seen.add(row)
+    return duplicates
+
+
 def with_temp_home(name):
     home = tempfile.mkdtemp(prefix=f"{name}-scope-")
     return home
@@ -306,15 +333,47 @@ def section_B(binary, name, model):
                "PASS" if (b2_ok and composer_still_mounted and scan_rows == 1) else "FAIL",
                f"saw_scanning={b2_ok}\ncomposer_visible={composer_still_mounted}\nscan_rows={scan_rows}\nbottom={screen.bottom()!r}")
 
-        # B3 ResponseRender - type during stream
+        # B3 ResponseRender - type during stream. The streamed payload should
+        # grow as one stable region above the dock, not print repeated rows or
+        # replace prior response rows one at a time.
         os.write(master, b"draft-mid")
-        drain(master, screen, 0.4)
-        draft_visible = "draft-mid" in screen.bottom()
-        wait_for(lambda: "diagnostic" in screen.all_text(), master, screen, timeout=8.0)
+        deadline = time.monotonic() + 8.0
+        draft_visible = False
+        max_stream_rows = 0
+        stream_duplicates = []
+        stream_samples = []
+        saw_terminal_response = False
+        while time.monotonic() < deadline:
+            drain(master, screen, 0.05)
+            bottom = screen.bottom()
+            draft_visible = draft_visible or ("draft-mid" in bottom and "›" in bottom)
+            rows_now = response_stream_rows(screen)
+            if rows_now:
+                max_stream_rows = max(max_stream_rows, len(rows_now))
+                if len(stream_samples) < 4:
+                    stream_samples.append(rows_now)
+                duplicates_now = duplicate_rows(rows_now)
+                if duplicates_now:
+                    stream_duplicates = duplicates_now
+                    break
+            if "diagnostic response" in screen.all_text():
+                saw_terminal_response = True
+                break
         drain(master, screen, 0.5)
-        record("B", "B3", "ResponseRender: stream above; draft typed during stream lands on composer",
-               "PASS" if draft_visible else "FAIL",
-               f"draft_on_bottom={draft_visible}\nbottom={screen.bottom()!r}")
+        composer_visible = "›" in screen.bottom()
+        b3_ok = (
+            draft_visible
+            and composer_visible
+            and saw_terminal_response
+            and max_stream_rows >= 2
+            and not stream_duplicates
+        )
+        record("B", "B3", "ResponseRender: stable stream region above composer",
+               "PASS" if b3_ok else "FAIL",
+               f"draft_on_bottom={draft_visible}\ncomposer_visible={composer_visible}\n"
+               f"saw_response={saw_terminal_response}\nmax_stream_rows={max_stream_rows}\n"
+               f"duplicates={stream_duplicates}\nsamples={stream_samples[-2:]}\n"
+               f"bottom={screen.bottom()!r}")
 
         # B4 PromptResume
         b4_ok = "draft-mid" in screen.bottom() and "›" in screen.bottom()

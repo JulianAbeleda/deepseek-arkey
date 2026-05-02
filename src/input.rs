@@ -588,6 +588,10 @@ fn repaint_changed_lines_above_dock(
     let previous_lines = visible_tail(previous, max_rows);
     let next_lines = visible_tail(next, max_rows);
     let rows = previous_lines.len().max(next_lines.len());
+    if previous_lines.len() != next_lines.len() {
+        clear_rows_above_dock(stdout, rows)?;
+        return repaint_lines_above_dock(stdout, next);
+    }
     let start = dock.saturating_sub(rows as u16);
     for index in 0..rows {
         let old = previous_lines.get(index).map(String::as_str);
