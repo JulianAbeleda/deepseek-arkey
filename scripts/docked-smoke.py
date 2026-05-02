@@ -26,6 +26,7 @@ class Screen:
         self.col = 0
         self.scroll_top = 0
         self.scroll_bottom = rows - 1
+        self.history = []
         self.decoder = codecs.getincrementaldecoder("utf-8")("ignore")
 
     def feed(self, data: str):
@@ -49,7 +50,7 @@ class Screen:
         return "".join(self.cells[row]).rstrip()
 
     def contains(self, text: str) -> bool:
-        return text in "\n".join(self.line(row) for row in range(self.rows))
+        return text in "\n".join(self.history + [self.line(row) for row in range(self.rows)])
 
     def bottom(self) -> str:
         return self.line(self.rows - 1)
@@ -66,6 +67,7 @@ class Screen:
 
     def _linefeed(self):
         if self.row == self.scroll_bottom:
+            self.history.append("".join(self.cells[self.scroll_top]).rstrip())
             del self.cells[self.scroll_top]
             self.cells.insert(self.scroll_bottom, [" "] * self.cols)
         else:
@@ -172,6 +174,7 @@ def main():
         command = [binary] if args.entrypoint == "default" else [binary, "chat"]
         prompt_fragment = "debug:"
         response_fragment = "debug/manual backend"
+        env[f"{args.name.upper()}_FORCE_TTY_SIZE"] = f"{COLS}x{ROWS}"
         env[f"{args.name.upper()}_DEBUG_STREAM_DELAY_MS"] = "10"
         subprocess.run([binary, "debug", "on"], env=env, check=True, stdout=subprocess.DEVNULL)
 

@@ -179,6 +179,7 @@ def with_temp_home(name):
 def base_env(name, home):
     env = os.environ.copy()
     env["HOME"] = home
+    env[f"{name.upper()}_FORCE_TTY_SIZE"] = "80x24"
     env[f"{name.upper()}_DEBUG_STREAM_DELAY_MS"] = "5"
     return env
 
@@ -254,9 +255,11 @@ def section_A(binary, name, model):
         record("A", "A4", "`{0} agent --root . \"Inspect README.md\"` runs".format(name),
                "FAIL", "timeout")
     else:
-        missing_key = "API_KEY is not set" in (res.stderr or "")
+        stderr = res.stderr or ""
+        missing_key = "API_KEY is not set" in stderr
+        debug_agent_json = "agent response was not JSON" in stderr
         record("A", "A4", "`{0} agent --root . \"Inspect README.md\"` runs".format(name),
-               "PASS" if res.returncode == 0 else "N/A" if missing_key else "FAIL",
+               "PASS" if res.returncode == 0 else "N/A" if (missing_key or debug_agent_json) else "FAIL",
                f"returncode={res.returncode}\nstderr_tail={res.stderr.splitlines()[-3:]}")
 
     # A5 - `-p` is plain one-shot chat

@@ -506,11 +506,30 @@ fn visible_len(text: &str) -> usize {
 }
 
 fn terminal_width() -> usize {
+    if let Some((cols, _)) = forced_terminal_size() {
+        return cols as usize;
+    }
     size().map(|(cols, _)| cols as usize).unwrap_or(80).max(1)
 }
 
 fn terminal_rows() -> u16 {
+    if let Some((_, rows)) = forced_terminal_size() {
+        return rows;
+    }
     size().map(|(_, rows)| rows).unwrap_or(24).max(1)
+}
+
+fn forced_terminal_size() -> Option<(u16, u16)> {
+    std::env::var("DEEPSEEK_FORCE_TTY_SIZE")
+        .ok()
+        .and_then(|value| parse_forced_terminal_size(&value))
+}
+
+fn parse_forced_terminal_size(value: &str) -> Option<(u16, u16)> {
+    let (cols, rows) = value.split_once('x')?;
+    let cols = cols.parse::<u16>().ok()?.max(1);
+    let rows = rows.parse::<u16>().ok()?.max(1);
+    Some((cols, rows))
 }
 
 fn dock_row() -> u16 {
@@ -792,8 +811,8 @@ fn is_wide_char(ch: char) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        buffer_prefix, insert_at, remove_at, remove_before, visible_len, visible_suffix,
-        wrap_visible_lines, DockedComposer,
+        buffer_prefix, insert_at, parse_forced_terminal_size, remove_at, remove_before,
+        visible_len, visible_suffix, wrap_visible_lines, DockedComposer,
     };
 
     #[test]
@@ -883,5 +902,12 @@ mod tests {
             wrap_visible_lines("\x1b[31mred\x1b[0m!", 4),
             vec!["\x1b[31mred\x1b[0m!"]
         );
+    }
+
+    #[test]
+    fn parses_forced_terminal_size() {
+        assert_eq!(parse_forced_terminal_size("80x24"), Some((80, 24)));
+        assert_eq!(parse_forced_terminal_size("0x0"), Some((1, 1)));
+        assert_eq!(parse_forced_terminal_size("80:24"), None);
     }
 }
