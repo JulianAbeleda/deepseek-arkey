@@ -23,3 +23,9 @@ Use `NFC` after the prefix for non-functional changes:
 ```text
 [cli] NFC - extract session helper
 ```
+
+The tracked hook in `.githooks/commit-msg` enforces this format locally when Git is configured with:
+
+```bash
+git config core.hooksPath .githooks
+```
