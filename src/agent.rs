@@ -38,6 +38,12 @@ pub struct AgentOutcome {
     pub transcript_path: PathBuf,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApprovalMode {
+    Interactive,
+    Deny,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct ToolCall {
     pub name: String,
@@ -68,6 +74,26 @@ pub fn run_agent(
     model: &str,
     temperature: Option<f32>,
     config: AgentConfig,
+) -> Result<AgentOutcome, String> {
+    run_agent_with_options(
+        task,
+        model,
+        temperature,
+        config,
+        ApprovalMode::Interactive,
+        |step, tool| {
+            eprintln!("agent step {step}: {tool}");
+        },
+    )
+}
+
+pub fn run_agent_with_options(
+    task: &str,
+    model: &str,
+    temperature: Option<f32>,
+    config: AgentConfig,
+    approval_mode: ApprovalMode,
+    mut on_step: impl FnMut(usize, &str),
 ) -> Result<AgentOutcome, String> {
     let workspace = Workspace::new(config.root)?;
     let mut messages = vec![
@@ -117,8 +143,8 @@ pub fn run_agent(
                 "agent response did not include final_answer, blocked, or tool".to_string(),
             );
         };
-        eprintln!("agent step {step}: {}", tool.name);
-        let result = execute_tool(&workspace, &tool);
+        on_step(step, &tool.name);
+        let result = execute_tool(&workspace, &tool, approval_mode);
         let result_text = cap_text(&redact_text(&result), MAX_TOOL_CHARS);
         transcript.push(TranscriptEntry {
             role: format!("tool:{}", tool.name),
@@ -213,14 +239,14 @@ fn extract_json_object(text: &str) -> Option<&str> {
     (start < end).then_some(&text[start..=end])
 }
 
-fn execute_tool(workspace: &Workspace, call: &ToolCall) -> String {
+fn execute_tool(workspace: &Workspace, call: &ToolCall, approval_mode: ApprovalMode) -> String {
     match call.name.as_str() {
         "list_files" => tool_list_files(workspace, call),
         "read_file" => tool_read_file(workspace, call),
         "search_files" => tool_search_files(workspace, call),
         "inspect_tree" => tool_inspect_tree(workspace, call),
-        "run_shell" => tool_run_shell(workspace, call),
-        "propose_patch" => tool_propose_patch(workspace, call),
+        "run_shell" => tool_run_shell(workspace, call, approval_mode),
+        "propose_patch" => tool_propose_patch(workspace, call, approval_mode),
         other => format!("error: unknown agent tool `{other}`"),
     }
 }
@@ -343,7 +369,7 @@ fn arg_string(call: &ToolCall, name: &str) -> Result<String, String> {
         .ok_or_else(|| format!("missing non-empty `{name}`"))
 }
 
-fn tool_run_shell(workspace: &Workspace, call: &ToolCall) -> String {
+fn tool_run_shell(workspace: &Workspace, call: &ToolCall, approval_mode: ApprovalMode) -> String {
     let command = match arg_string(call, "command") {
         Ok(command) => command,
         Err(err) => return format!("error: {err}"),
@@ -366,7 +392,7 @@ fn tool_run_shell(workspace: &Workspace, call: &ToolCall) -> String {
         .get("reason")
         .and_then(|value| value.as_str())
         .unwrap_or("no reason provided");
-    if !approve_shell_command(workspace, &command, &cwd, reason) {
+    if !approve_shell_command(workspace, &command, &cwd, reason, approval_mode) {
         return "denied: run_shell requires explicit interactive approval".to_string();
     }
     let output = match Command::new("sh")
@@ -397,12 +423,16 @@ struct PreparedPatch {
     updated: String,
 }
 
-fn tool_propose_patch(workspace: &Workspace, call: &ToolCall) -> String {
+fn tool_propose_patch(
+    workspace: &Workspace,
+    call: &ToolCall,
+    approval_mode: ApprovalMode,
+) -> String {
     let patch = match prepare_patch(workspace, call) {
         Ok(patch) => patch,
         Err(err) => return format!("error: {err}"),
     };
-    if !approve_patch(&patch) {
+    if !approve_patch(&patch, approval_mode) {
         return "denied: propose_patch requires explicit interactive approval".to_string();
     }
     match apply_prepared_patch(&patch) {
@@ -462,7 +492,10 @@ fn apply_prepared_patch(patch: &PreparedPatch) -> io::Result<()> {
     atomic_write(&patch.path, patch.updated.as_bytes())
 }
 
-fn approve_patch(patch: &PreparedPatch) -> bool {
+fn approve_patch(patch: &PreparedPatch, approval_mode: ApprovalMode) -> bool {
+    if approval_mode == ApprovalMode::Deny {
+        return false;
+    }
     if !io::stdin().is_terminal() {
         return false;
     }
@@ -482,7 +515,16 @@ fn approve_patch(patch: &PreparedPatch) -> bool {
         .unwrap_or(false)
 }
 
-fn approve_shell_command(workspace: &Workspace, command: &str, cwd: &Path, reason: &str) -> bool {
+fn approve_shell_command(
+    workspace: &Workspace,
+    command: &str,
+    cwd: &Path,
+    reason: &str,
+    approval_mode: ApprovalMode,
+) -> bool {
+    if approval_mode == ApprovalMode::Deny {
+        return false;
+    }
     if !io::stdin().is_terminal() {
         return false;
     }
@@ -686,9 +728,13 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        apply_prepared_patch, execute_tool, parse_decision, prepare_patch, write_transcript,
+        apply_prepared_patch, parse_decision, prepare_patch, write_transcript, ApprovalMode,
         ToolCall, TranscriptEntry, Workspace,
     };
+
+    fn execute_tool(workspace: &Workspace, call: &ToolCall) -> String {
+        super::execute_tool(workspace, call, ApprovalMode::Interactive)
+    }
 
     #[test]
     fn parses_tool_schema() {
@@ -740,6 +786,20 @@ mod tests {
                 name: "run_shell".to_string(),
                 arguments: json!({"command":"pwd","cwd":".","reason":"test"}),
             },
+        );
+        assert!(result.contains("requires explicit interactive approval"));
+    }
+
+    #[test]
+    fn deny_approval_mode_blocks_shell_without_prompting() {
+        let workspace = Workspace::new(std::env::current_dir().unwrap()).unwrap();
+        let result = super::execute_tool(
+            &workspace,
+            &ToolCall {
+                name: "run_shell".to_string(),
+                arguments: json!({"command":"pwd","cwd":".","reason":"test"}),
+            },
+            ApprovalMode::Deny,
         );
         assert!(result.contains("requires explicit interactive approval"));
     }

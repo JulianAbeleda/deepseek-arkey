@@ -156,6 +156,7 @@ def main():
     parser.add_argument("--binary", default=None)
     parser.add_argument("--name", default="deepseek")
     parser.add_argument("--model", default="deepseek-v4-flash")
+    parser.add_argument("--entrypoint", choices=("chat", "default"), default="chat")
     args = parser.parse_args()
 
     binary = args.binary or str((os.getcwd() + f"/target/release/{args.name}"))
@@ -163,26 +164,60 @@ def main():
         binary = shutil.which(args.name) or binary
     if not os.path.exists(binary):
         raise SystemExit(f"binary not found: {binary}")
+    binary = os.path.abspath(binary)
 
     with tempfile.TemporaryDirectory(prefix=f"{args.name}-docked-smoke-") as home:
         env = os.environ.copy()
         env["HOME"] = home
-        env[f"{args.name.upper()}_DEBUG_STREAM_DELAY_MS"] = "10"
-        subprocess.run([binary, "debug", "on"], env=env, check=True, stdout=subprocess.DEVNULL)
+        command = [binary, "chat"]
+        prompt_fragment = "debug:"
+        response_fragment = "agent --root"
+        cwd = None
+        if args.entrypoint == "chat":
+            env[f"{args.name.upper()}_DEBUG_STREAM_DELAY_MS"] = "10"
+            subprocess.run([binary, "debug", "on"], env=env, check=True, stdout=subprocess.DEVNULL)
+        else:
+            command = [binary]
+            prompt_fragment = "agent"
+            response_fragment = "agent dock response"
+            workspace = os.path.join(home, "workspace")
+            fake_bin = os.path.join(home, "bin")
+            os.makedirs(workspace)
+            os.makedirs(fake_bin)
+            fake_curl = os.path.join(fake_bin, "curl")
+            with open(fake_curl, "w", encoding="utf-8") as handle:
+                handle.write(
+                    "#!/bin/sh\n"
+                    "sleep 0.2\n"
+                    "printf '%s\\n' "
+                    "'{\"choices\":[{\"message\":{\"content\":\"{\\\"final_answer\\\":\\\"agent dock response: persistent composer ok\\\"}\"}}]}'\n"
+                )
+            os.chmod(fake_curl, 0o755)
+            env["PATH"] = fake_bin + os.pathsep + env.get("PATH", "")
+            env[f"{args.name.upper()}_API_KEY"] = "smoke-test-key"
+            cwd = workspace
 
         master, slave = pty.openpty()
         fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", ROWS, COLS, 0, 0))
-        proc = subprocess.Popen([binary, "chat"], stdin=slave, stdout=slave, stderr=slave, env=env, close_fds=True)
+        proc = subprocess.Popen(command, stdin=slave, stdout=slave, stderr=slave, env=env, close_fds=True, cwd=cwd)
         os.close(slave)
         screen = Screen()
         try:
-            wait_for(lambda: args.name in screen.bottom() and "debug:" in screen.bottom(), master, screen, "PromptIdle dock")
+            wait_for(lambda: args.name in screen.bottom() and prompt_fragment in screen.bottom(), master, screen, "PromptIdle dock")
             os.write(master, b"draft")
             wait_for(lambda: "dra" in screen.bottom() and "t" in screen.bottom(), master, screen, "editable draft in dock")
             os.write(master, b"\r")
             wait_for(lambda: screen.contains("context: scanning"), master, screen, "ContextScan row")
-            wait_for(lambda: screen.contains("agent --root"), master, screen, "PromptResume after response", timeout=10.0)
-            wait_for(lambda: args.name in screen.bottom() and "debug:" in screen.bottom(), master, screen, "PromptResume dock")
+            if args.entrypoint == "default":
+                os.write(master, b"keepup")
+                wait_for(
+                    lambda: "kee" in screen.bottom() and "p" in screen.bottom(),
+                    master,
+                    screen,
+                    "draft during turn",
+                )
+            wait_for(lambda: screen.contains(response_fragment), master, screen, "ResponseRender", timeout=10.0)
+            wait_for(lambda: args.name in screen.bottom() and prompt_fragment in screen.bottom(), master, screen, "PromptResume dock")
             proc.terminate()
             proc.wait(timeout=2)
         finally:
@@ -190,7 +225,7 @@ def main():
                 proc.terminate()
             os.close(master)
 
-    print(f"{args.name} docked smoke: ok")
+    print(f"{args.name} {args.entrypoint} docked smoke: ok")
 
 
 if __name__ == "__main__":
