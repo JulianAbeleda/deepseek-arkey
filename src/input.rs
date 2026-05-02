@@ -2,7 +2,7 @@ use std::io::{self, IsTerminal, Write};
 use std::iter::Peekable;
 use std::time::Duration;
 
-use crossterm::cursor::{MoveTo, MoveToColumn};
+use crossterm::cursor::{MoveTo, MoveToColumn, RestorePosition, SavePosition};
 use crossterm::event::{self, Event, KeyCode, KeyModifiers};
 use crossterm::execute;
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode, size, Clear, ClearType};
@@ -187,6 +187,10 @@ impl DockedComposer {
         render_dock_line(&self.prompt, &self.buffer, self.cursor)
     }
 
+    fn render_preserving_cursor(&self) -> Result<(), String> {
+        render_dock_line_preserving_cursor(&self.prompt, &self.buffer, self.cursor)
+    }
+
     pub fn poll_action(&mut self, timeout: Duration) -> Result<Option<InputAction>, String> {
         if !event::poll(timeout).map_err(|err| err.to_string())? {
             return Ok(None);
@@ -308,7 +312,7 @@ impl DockedComposer {
         }
         stdout.flush().map_err(|err| err.to_string())?;
         self.status_active = true;
-        self.render()
+        self.render_preserving_cursor()
     }
 
     pub fn stream_above(&mut self, text: &str) -> Result<(), String> {
@@ -331,7 +335,7 @@ impl DockedComposer {
         stdout.flush().map_err(|err| err.to_string())?;
         self.status_active = false;
         self.stream_rendered_lines = lines;
-        self.render()
+        self.render_preserving_cursor()
     }
 
     pub fn finish_stream(&mut self) -> Result<(), String> {
@@ -485,6 +489,23 @@ fn render_line(prompt: &str, buffer: &str, cursor: usize) -> Result<(), String> 
 }
 
 fn render_dock_line(prompt: &str, buffer: &str, cursor: usize) -> Result<(), String> {
+    render_dock_line_inner(prompt, buffer, cursor, false)
+}
+
+fn render_dock_line_preserving_cursor(
+    prompt: &str,
+    buffer: &str,
+    cursor: usize,
+) -> Result<(), String> {
+    render_dock_line_inner(prompt, buffer, cursor, true)
+}
+
+fn render_dock_line_inner(
+    prompt: &str,
+    buffer: &str,
+    cursor: usize,
+    preserve_cursor: bool,
+) -> Result<(), String> {
     let width = terminal_width();
     let combined = format!("{prompt}{buffer}");
     let total_width = visible_len(&combined);
@@ -495,10 +516,16 @@ fn render_dock_line(prompt: &str, buffer: &str, cursor: usize) -> Result<(), Str
         .min(width.saturating_sub(1));
     let display = visible_suffix(&combined, width);
     let mut stdout = io::stdout();
+    if preserve_cursor {
+        execute!(stdout, SavePosition).map_err(|err| err.to_string())?;
+    }
     execute!(stdout, MoveTo(0, dock_row()), Clear(ClearType::CurrentLine))
         .map_err(|err| err.to_string())?;
     write!(stdout, "{display}").map_err(|err| err.to_string())?;
     execute!(stdout, MoveTo(cursor_col as u16, dock_row())).map_err(|err| err.to_string())?;
+    if preserve_cursor {
+        execute!(stdout, RestorePosition).map_err(|err| err.to_string())?;
+    }
     stdout.flush().map_err(|err| err.to_string())
 }
 

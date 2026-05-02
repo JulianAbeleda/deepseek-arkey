@@ -44,6 +44,7 @@ class Screen:
         self.decoder = codecs.getincrementaldecoder("utf-8")("ignore")
         self.scroll_region_set = False
         self.full_clears = 0
+        self.saved_position = None
 
     def feed(self, data: str):
         i = 0
@@ -72,6 +73,13 @@ class Screen:
 
     def _escape(self, data, i):
         if i >= len(data): return i
+        if data[i] == "7":
+            self.saved_position = (self.row, self.col)
+            return i + 1
+        if data[i] == "8":
+            if self.saved_position is not None:
+                self.row, self.col = self.saved_position
+            return i + 1
         if data[i] != "[": return i + 1
         i += 1; start = i
         while i < len(data) and not ("@" <= data[i] <= "~"):
@@ -352,10 +360,12 @@ def section_B(binary, name, model):
         composer_still_mounted = "›" in screen.bottom()
         scan_rows = sum(1 for line in screen.all_text().splitlines() if "context: scanning" in line)
         prompt_echo_below_banner = "please respond" in screen.line(2)
+        cursor_on_scan_row = screen.row == 3
         record("B", "B2", "ContextScan: status above composer; composer mounted",
-               "PASS" if (b2_ok and composer_still_mounted and scan_rows == 1 and prompt_echo_below_banner) else "FAIL",
+               "PASS" if (b2_ok and composer_still_mounted and scan_rows == 1 and prompt_echo_below_banner and cursor_on_scan_row) else "FAIL",
                f"saw_scanning={b2_ok}\ncomposer_visible={composer_still_mounted}\nscan_rows={scan_rows}\n"
-               f"prompt_echo_below_banner={prompt_echo_below_banner}\nline2={screen.line(2)!r}\nbottom={screen.bottom()!r}")
+               f"prompt_echo_below_banner={prompt_echo_below_banner}\ncursor_row={screen.row}\n"
+               f"line2={screen.line(2)!r}\nbottom={screen.bottom()!r}")
 
         # B3 ResponseRender - type during stream. The streamed payload should
         # grow as one stable region above the dock, not print repeated rows or
