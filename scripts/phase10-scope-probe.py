@@ -134,7 +134,10 @@ def drain(fd, screen, seconds, raw=None):
         except OSError: break
         if not chunk: break
         if raw is not None: raw.append(chunk)
-        screen.feed(screen.decoder.decode(chunk))
+        decoded = screen.decoder.decode(chunk)
+        screen.feed(decoded)
+        if "\x1b[6n" in decoded:
+            os.write(fd, f"\x1b[{screen.row + 1};{screen.col + 1}R".encode())
 
 
 def wait_for(predicate, fd, screen, timeout=4.0, raw=None):

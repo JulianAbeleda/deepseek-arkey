@@ -282,6 +282,7 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
     }
     let _raw_mode = RawModeSession::enable()?;
     let transcript_start_row = ui::print_banner(&current_model);
+    _raw_mode.set_output_scroll_region()?;
     let mut runtime_state = runtime::load(&current_model)?;
     let mut composer = DockedComposer::new(ui::prompt_text(&runtime_state.label(&current_model)));
     composer.set_transcript_start_row(transcript_start_row);

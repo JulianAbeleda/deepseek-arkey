@@ -140,6 +140,8 @@ def read_available(fd, screen, timeout=0.1):
         text = screen.decoder.decode(chunk)
         out.append(text)
         screen.feed(text)
+        if "\x1b[6n" in text:
+            os.write(fd, f"\x1b[{screen.row + 1};{screen.col + 1}R".encode())
     return "".join(out)
 
 

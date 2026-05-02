@@ -451,8 +451,11 @@ impl DockedComposer {
 impl RawModeSession {
     pub fn enable() -> Result<Self, String> {
         enable_raw_mode().map_err(|err| err.to_string())?;
-        set_output_scroll_region(1)?;
         Ok(Self)
+    }
+
+    pub fn set_output_scroll_region(&self) -> Result<(), String> {
+        set_output_scroll_region(1)
     }
 }
 

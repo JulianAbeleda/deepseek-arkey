@@ -1,18 +1,32 @@
 use std::io::{self, Write};
 
+use crossterm::cursor::{position, MoveToColumn};
+use crossterm::execute;
+use crossterm::terminal::{size, Clear, ClearType};
+
 use crate::provider::PROVIDER;
 use crate::session;
 
 pub fn print_banner(model: &str) -> Option<u16> {
-    print_line(format!(
-        "{} {}",
+    let mut stdout = io::stdout();
+    let _ = execute!(stdout, MoveToColumn(0), Clear(ClearType::CurrentLine));
+    let _ = write!(
+        stdout,
+        "{} {}\r\n",
         accent(PROVIDER.to_ascii_lowercase()),
         muted(format!("[{model}]"))
-    ));
-    print_line(muted(
-        "Enter send · ? help · /model · /debug · /runtime · /end · /exit",
-    ));
-    Some(2)
+    );
+    let _ = execute!(stdout, MoveToColumn(0), Clear(ClearType::CurrentLine));
+    let _ = write!(
+        stdout,
+        "{}\r\n",
+        muted("Enter send · ? help · /model · /debug · /runtime · /end · /exit")
+    );
+    let _ = stdout.flush();
+    position()
+        .ok()
+        .map(|(_, row)| row.min(max_transcript_row()))
+        .filter(|row| *row >= 2)
 }
 
 pub fn prompt_text(model: &str) -> String {
@@ -114,6 +128,13 @@ fn print_line(line: impl AsRef<str>) {
 
 fn print_blank_line() {
     print_line("");
+}
+
+fn max_transcript_row() -> u16 {
+    size()
+        .ok()
+        .map(|(_, rows)| rows.saturating_sub(2))
+        .unwrap_or(u16::MAX)
 }
 
 fn accent(text: impl AsRef<str>) -> String {
