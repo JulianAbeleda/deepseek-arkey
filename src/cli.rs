@@ -21,10 +21,32 @@ pub struct Args {
 
     #[arg(long)]
     pub stream: bool,
+
+    #[arg(long)]
+    pub chat: bool,
+
+    #[arg(long = "agent")]
+    pub agent_mode: bool,
 }
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    Chat {
+        #[arg(short = 'p', long)]
+        prompt: Option<String>,
+
+        #[arg(long)]
+        no_session: bool,
+
+        #[arg(long)]
+        model: Option<String>,
+
+        #[arg(long)]
+        temperature: Option<f32>,
+
+        #[arg(long)]
+        stream: bool,
+    },
     Agent {
         #[arg(required = true, trailing_var_arg = true)]
         task: Vec<String>,

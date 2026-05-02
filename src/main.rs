@@ -9,6 +9,7 @@ mod ui;
 
 use std::collections::VecDeque;
 use std::io::{self, IsTerminal};
+use std::path::Path;
 use std::process::ExitCode;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
@@ -27,6 +28,12 @@ enum TurnEvent {
     Complete(Result<(), String>),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InteractiveMode {
+    Agent,
+    Chat,
+}
+
 fn main() -> ExitCode {
     match run(Args::parse()) {
         Ok(()) => ExitCode::SUCCESS,
@@ -38,8 +45,28 @@ fn main() -> ExitCode {
 }
 
 fn run(args: Args) -> Result<(), String> {
+    if args.chat && args.agent_mode {
+        return Err("choose only one of --chat or --agent".to_string());
+    }
     let model = args.model.unwrap_or_else(|| DEFAULT_MODEL.to_string());
     match args.command {
+        Some(Command::Chat {
+            prompt,
+            no_session,
+            model: chat_model,
+            temperature,
+            stream,
+        }) => {
+            let chat_model = chat_model.unwrap_or_else(|| model.clone());
+            if let Some(prompt) = prompt {
+                let response = run_prompt(&prompt, &chat_model, temperature, no_session, stream)?;
+                if !stream {
+                    println!("{response}");
+                }
+            } else {
+                run_interactive(&chat_model, temperature, stream, InteractiveMode::Chat)?;
+            }
+        }
         Some(Command::Agent {
             task,
             root,
@@ -85,7 +112,14 @@ fn run(args: Args) -> Result<(), String> {
                     println!("{response}");
                 }
             } else {
-                run_interactive(&model, args.temperature, args.stream)?;
+                let mode = if args.chat {
+                    InteractiveMode::Chat
+                } else if args.agent_mode || io::stdin().is_terminal() {
+                    InteractiveMode::Agent
+                } else {
+                    InteractiveMode::Chat
+                };
+                run_interactive(&model, args.temperature, args.stream, mode)?;
             }
         }
     }
@@ -129,9 +163,21 @@ fn handle_session_command(command: SessionCommand, model: &str) -> Result<(), St
     Ok(())
 }
 
-fn run_interactive(model: &str, temperature: Option<f32>, stream: bool) -> Result<(), String> {
+fn run_interactive(
+    model: &str,
+    temperature: Option<f32>,
+    stream: bool,
+    mode: InteractiveMode,
+) -> Result<(), String> {
+    if mode == InteractiveMode::Agent {
+        return run_interactive_agent(model, temperature);
+    }
+    run_interactive_chat(model, temperature, stream)
+}
+
+fn run_interactive_chat(model: &str, temperature: Option<f32>, stream: bool) -> Result<(), String> {
     if io::stdin().is_terminal() {
-        return run_interactive_docked(model, temperature);
+        return run_interactive_chat_docked(model, temperature);
     }
     let mut current_model = session::load()?
         .map(|state| state.model)
@@ -162,6 +208,10 @@ fn run_interactive(model: &str, temperature: Option<f32>, stream: bool) -> Resul
         if matches!(prompt, "?" | "/help") {
             ui::print_help(&current_model);
             continue;
+        }
+        if prompt == "/agent" {
+            run_interactive_agent(&current_model, temperature)?;
+            break;
         }
         if prompt == "/status" {
             ui::print_status(&current_model)?;
@@ -209,7 +259,7 @@ fn run_interactive(model: &str, temperature: Option<f32>, stream: bool) -> Resul
     Ok(())
 }
 
-fn run_interactive_docked(model: &str, temperature: Option<f32>) -> Result<(), String> {
+fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<(), String> {
     let mut current_model = session::load()?
         .map(|state| state.model)
         .unwrap_or_else(|| model.to_string());
@@ -227,6 +277,7 @@ fn run_interactive_docked(model: &str, temperature: Option<f32>) -> Result<(), S
     composer.render()?;
     let mut in_flight: Option<Receiver<TurnEvent>> = None;
     let mut queued = VecDeque::<String>::new();
+    let mut switch_to_agent = false;
     loop {
         if let Some(receiver) = &in_flight {
             match receiver.try_recv() {
@@ -268,6 +319,11 @@ fn run_interactive_docked(model: &str, temperature: Option<f32>) -> Result<(), S
         if matches!(prompt, "?" | "/help") {
             composer.print_above(&interactive_help(&current_model))?;
             continue;
+        }
+        if prompt == "/agent" {
+            composer.print_above("switching to agent mode\n")?;
+            switch_to_agent = true;
+            break;
         }
         if prompt == "/status" {
             composer.print_above(&interactive_status(&current_model)?)?;
@@ -317,6 +373,96 @@ fn run_interactive_docked(model: &str, temperature: Option<f32>) -> Result<(), S
             current_model.clone(),
             temperature,
         ));
+    }
+    drop(_raw_mode);
+    if switch_to_agent {
+        run_interactive_agent(&current_model, temperature)?;
+    }
+    Ok(())
+}
+
+fn run_interactive_agent(model: &str, temperature: Option<f32>) -> Result<(), String> {
+    let root = std::env::current_dir().map_err(|err| err.to_string())?;
+    let mut current_model = session::load()?
+        .map(|state| state.model)
+        .unwrap_or_else(|| model.to_string());
+    if session::load()?.is_none() {
+        session::save(&SessionState::new(
+            PROVIDER,
+            "default",
+            current_model.clone(),
+        ))?;
+    }
+    print_agent_banner(&current_model, &root);
+    let mut input = InlineInput::new();
+    loop {
+        let runtime_state = runtime::load(&current_model)?;
+        let prompt_text = agent_prompt_text(&runtime_state.label(&current_model));
+        let line = match input.read_action(&prompt_text)? {
+            InputAction::Submit(line) => line,
+            InputAction::Exit => break,
+        };
+        let prompt = line.trim();
+        if prompt.is_empty() {
+            continue;
+        }
+        if is_exit_command(prompt) {
+            break;
+        }
+        if matches!(prompt, "?" | "/help") {
+            print!("{}", agent_help(&current_model, &root));
+            continue;
+        }
+        if prompt == "/chat" {
+            run_interactive_chat(&current_model, temperature, false)?;
+            break;
+        }
+        if prompt == "/status" {
+            print!("{}", interactive_agent_status(&current_model, &root)?);
+            continue;
+        }
+        if prompt == "/runtime" {
+            println!("{}", runtime_result(&current_model, false)?);
+            continue;
+        }
+        if let Some(mode) = parse_debug_command(prompt) {
+            let output = match mode {
+                Some(mode) => debug_result(&current_model, Some(mode), false)?,
+                None => toggle_debug_result(&current_model)?,
+            };
+            println!("{output}");
+            continue;
+        }
+        if let Some(next_model) = parse_model_command(prompt) {
+            match next_model {
+                Some(next_model) => {
+                    current_model = next_model.to_string();
+                    update_active_session_model(&current_model)?;
+                    let runtime_state = runtime::load(&current_model)?.with_model(&current_model);
+                    runtime::save(&runtime_state)?;
+                    ui::print_model_set(&current_model);
+                }
+                None => ui::print_model_help(&current_model),
+            }
+            continue;
+        }
+        if is_end_command(prompt) {
+            let _ = session::delete()?;
+            ui::print_session_ended();
+            break;
+        }
+        let outcome = agent::run_agent(
+            prompt,
+            &current_model,
+            temperature,
+            agent::AgentConfig::new(root.clone(), 8),
+        )?;
+        eprintln!(
+            "agent: steps={} transcript={}",
+            outcome.steps,
+            outcome.transcript_path.display()
+        );
+        println!("{}", outcome.answer);
     }
     Ok(())
 }
@@ -377,7 +523,7 @@ fn run_prompt_streaming(
 
 fn interactive_help(model: &str) -> String {
     format!(
-        "DeepSeek Commands\nSession\n  /model              Show or switch DeepSeek model\n  /model <id>         Switch model for this active session\n  /status             Show active session details\n  /runtime            Show provider/debug runtime state\n  /debug [on|off]     Toggle local debug backend\n  /end                End the current session and clear context\n\nGeneral\n  ? or /help          Show this help\n  /exit               Exit without clearing context\n\nShell\n  model               {model}\n"
+        "DeepSeek Chat Commands\nSession\n  /model              Show or switch DeepSeek model\n  /model <id>         Switch model for this active session\n  /status             Show active session details\n  /runtime            Show provider/debug runtime state\n  /debug [on|off]     Toggle local debug backend\n  /agent              Switch to workspace agent mode\n  /end                End the current session and clear context\n\nGeneral\n  ? or /help          Show this help\n  /exit               Exit without clearing context\n\nShell\n  mode                chat\n  model               {model}\n"
     )
 }
 
@@ -412,6 +558,30 @@ fn interactive_status(model: &str) -> Result<String, String> {
             ));
         }
     }
+    Ok(output)
+}
+
+fn print_agent_banner(model: &str, root: &Path) {
+    println!("deepseek [{model}] agent");
+    println!("workspace: {}", root.display());
+    println!("read tools on - edits require yes apply - shell requires yes run");
+    println!("Enter send - ? help - /chat - /model - /status - /end - /exit");
+}
+
+fn agent_prompt_text(model: &str) -> String {
+    format!("deepseek [{model}] agent › ")
+}
+
+fn agent_help(model: &str, root: &Path) -> String {
+    format!(
+        "DeepSeek Agent Commands\nWorkspace\n  root                {}\n  read tools          list_files, read_file, search_files, inspect_tree\n  shell               requires yes run\n  edits               require yes apply\n\nSession\n  /chat               Switch to plain chat mode\n  /model              Show or switch DeepSeek model\n  /model <id>         Switch model for this active session\n  /status             Show mode, root, model, and session details\n  /runtime            Show provider/debug runtime state\n  /debug [on|off]     Toggle local debug backend\n  /end                End the current session and clear context\n\nGeneral\n  ? or /help          Show this help\n  /exit               Exit without clearing context\n\nShell\n  mode                agent\n  model               {model}\n",
+        root.display()
+    )
+}
+
+fn interactive_agent_status(model: &str, root: &Path) -> Result<String, String> {
+    let mut output = interactive_status(model)?;
+    output.push_str(&format!("mode: agent\nroot: {}\n", root.display()));
     Ok(output)
 }
 

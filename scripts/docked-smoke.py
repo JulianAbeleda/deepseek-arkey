@@ -172,7 +172,7 @@ def main():
 
         master, slave = pty.openpty()
         fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", ROWS, COLS, 0, 0))
-        proc = subprocess.Popen([binary], stdin=slave, stdout=slave, stderr=slave, env=env, close_fds=True)
+        proc = subprocess.Popen([binary, "chat"], stdin=slave, stdout=slave, stderr=slave, env=env, close_fds=True)
         os.close(slave)
         screen = Screen()
         try:
