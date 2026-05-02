@@ -18,6 +18,7 @@ Sections map 1:1 to the scope doc:
 import argparse
 import codecs
 import fcntl
+import json
 import os
 import pty
 import re
@@ -216,6 +217,29 @@ def enable_debug(binary, env):
     subprocess.run([binary, "debug", "on"], env=env, check=True, stdout=subprocess.DEVNULL)
 
 
+def with_fake_agent_curl(name, home):
+    env = base_env(name, home)
+    env[f"{name.upper()}_API_KEY"] = "scope-probe-key"
+    fake_bin = Path(tempfile.mkdtemp(prefix=f"{name}-fake-curl-"))
+    response = {
+        "choices": [
+            {
+                "message": {
+                    "content": json.dumps(
+                        {"final_answer": "agent probe ok"}, separators=(",", ":")
+                    )
+                }
+            }
+        ]
+    }
+    curl = fake_bin / "curl"
+    body = json.dumps(response, separators=(",", ":"))
+    curl.write_text(f"#!/usr/bin/env python3\nprint({body!r})\n", encoding="utf-8")
+    curl.chmod(0o755)
+    env["PATH"] = f"{fake_bin}{os.pathsep}{env.get('PATH', '')}"
+    return env
+
+
 def repo_root_from_binary(binary):
     path = Path(binary).resolve()
     if path.parent.name == "release" and path.parent.parent.name == "target":
@@ -277,18 +301,16 @@ def section_A(binary, name, model):
 
     # A4 - agent --root . "Inspect README.md" runs and exits 0
     repo_root = repo_root_from_binary(binary)
-    home = with_temp_home(name); env = base_env(name, home); enable_debug(binary, env)
+    home = with_temp_home(name); env = with_fake_agent_curl(name, home)
     res = run_one_shot(binary, ["agent", "--root", repo_root, "Inspect README.md"], env, timeout=15)
     if isinstance(res, subprocess.TimeoutExpired):
         record("A", "A4", "`{0} agent --root . \"Inspect README.md\"` runs".format(name),
                "FAIL", "timeout")
     else:
-        stderr = res.stderr or ""
-        missing_key = "API_KEY is not set" in stderr
-        debug_agent_json = "agent response was not JSON" in stderr
+        stdout = res.stdout or ""
         record("A", "A4", "`{0} agent --root . \"Inspect README.md\"` runs".format(name),
-               "PASS" if res.returncode == 0 else "N/A" if (missing_key or debug_agent_json) else "FAIL",
-               f"returncode={res.returncode}\nstderr_tail={res.stderr.splitlines()[-3:]}")
+               "PASS" if res.returncode == 0 and "agent probe ok" in stdout else "FAIL",
+               f"returncode={res.returncode}\nstdout_tail={stdout.splitlines()[-3:]}\nstderr_tail={res.stderr.splitlines()[-3:]}")
 
     # A5 - `-p` is plain one-shot chat
     expected = f"{name.upper()}_OK" if name == "deepseek" else f"{name.upper()}_M27_OK"
