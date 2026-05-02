@@ -88,4 +88,5 @@ cargo test --offline
 python3 scripts/docked-smoke.py --binary target/release/deepseek
 python3 scripts/docked-smoke.py --binary target/release/deepseek --entrypoint default
 python3 scripts/agent-startup-smoke.py --binary target/release/deepseek
+python3 scripts/phase10-scope-probe.py --binary target/release/deepseek --name deepseek --model deepseek-v4-flash
 ```
