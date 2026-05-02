@@ -3,7 +3,7 @@ use std::io::{self, Write};
 use crate::provider::PROVIDER;
 use crate::session;
 
-pub fn print_banner(model: &str) {
+pub fn print_banner(model: &str) -> Option<u16> {
     print_line(format!(
         "{} {}",
         accent(PROVIDER.to_ascii_lowercase()),
@@ -12,6 +12,7 @@ pub fn print_banner(model: &str) {
     print_line(muted(
         "Enter send · ? help · /model · /debug · /runtime · /end · /exit",
     ));
+    Some(2)
 }
 
 pub fn prompt_text(model: &str) -> String {

@@ -280,10 +280,11 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
             current_model.clone(),
         ))?;
     }
-    ui::print_banner(&current_model);
+    let transcript_start_row = ui::print_banner(&current_model);
     let _raw_mode = RawModeSession::enable()?;
     let mut runtime_state = runtime::load(&current_model)?;
     let mut composer = DockedComposer::new(ui::prompt_text(&runtime_state.label(&current_model)));
+    composer.set_transcript_start_row(transcript_start_row);
     composer.render()?;
     let mut in_flight: Option<Receiver<TurnEvent>> = None;
     let mut context_scan_started: Option<Instant> = None;

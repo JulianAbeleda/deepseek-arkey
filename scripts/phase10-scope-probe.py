@@ -351,9 +351,11 @@ def section_B(binary, name, model):
                          master, screen, timeout=3.0)
         composer_still_mounted = "›" in screen.bottom()
         scan_rows = sum(1 for line in screen.all_text().splitlines() if "context: scanning" in line)
+        prompt_echo_below_banner = "please respond" in screen.line(2)
         record("B", "B2", "ContextScan: status above composer; composer mounted",
-               "PASS" if (b2_ok and composer_still_mounted and scan_rows == 1) else "FAIL",
-               f"saw_scanning={b2_ok}\ncomposer_visible={composer_still_mounted}\nscan_rows={scan_rows}\nbottom={screen.bottom()!r}")
+               "PASS" if (b2_ok and composer_still_mounted and scan_rows == 1 and prompt_echo_below_banner) else "FAIL",
+               f"saw_scanning={b2_ok}\ncomposer_visible={composer_still_mounted}\nscan_rows={scan_rows}\n"
+               f"prompt_echo_below_banner={prompt_echo_below_banner}\nline2={screen.line(2)!r}\nbottom={screen.bottom()!r}")
 
         # B3 ResponseRender - type during stream. The streamed payload should
         # grow as one stable region above the dock, not print repeated rows or
@@ -378,10 +380,13 @@ def section_B(binary, name, model):
                 if duplicates_now:
                     stream_duplicates = duplicates_now
                     break
-            if "diagnostic response" in screen.all_text():
+            if "filesystem tools" in screen.all_text():
                 saw_terminal_response = True
                 break
-        drain(master, screen, 0.5)
+        dock_restored = wait_for(lambda: "›" in screen.bottom() and "draft-mid" in screen.bottom(),
+                                 master, screen, timeout=8.0)
+        saw_terminal_response = saw_terminal_response or dock_restored
+        drain(master, screen, 0.2)
         composer_visible = "›" in screen.bottom()
         b3_ok = (
             draft_visible
