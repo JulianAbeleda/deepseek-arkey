@@ -392,7 +392,7 @@ def section_D(binary, name, model):
         if "route: agent task" not in text:
             record("D", "D1", "exact route confirmation block",
                    "N/A", "no `route: agent task` produced - routed confirmation not yet implemented")
-            record("D", "D2", "after `yes agent`, hands off to inline agent", "N/A", "")
+            record("D", "D2", "after `yes agent`, runs task and returns to chat dock", "N/A", "")
         else:
             saw_root = "root:" in text
             compact = compact_text(text)
@@ -405,13 +405,15 @@ def section_D(binary, name, model):
                    f"saw_root={saw_root} saw_prompt_text={saw_prompt}\n"
                    f"text_excerpt={text}")
             os.write(master, b"yes agent\r")
-            wait_for(lambda: ("agent ›" in screen.all_text())
-                              or (not screen.scroll_region_set),
-                     master, screen, timeout=4.0)
+            wait_for(lambda: ("returning to chat" in screen.all_text())
+                              and screen.scroll_region_set
+                              and "›" in screen.bottom(),
+                     master, screen, timeout=8.0)
             drain(master, screen, 0.4)
-            handoff_ok = ("agent" in screen.bottom()) or (not screen.scroll_region_set)
-            record("D", "D2", "after `yes agent`, hands off to inline agent",
-                   "PASS" if handoff_ok else "FAIL",
+            returned_to_chat = screen.scroll_region_set and "›" in screen.bottom() and "agent" not in screen.bottom()
+            saw_task_output = "agent task:" in screen.all_text()
+            record("D", "D2", "after `yes agent`, runs task and returns to chat dock",
+                   "PASS" if (returned_to_chat and saw_task_output) else "FAIL",
                    f"scroll_region_set={screen.scroll_region_set}\nbottom={screen.bottom()!r}")
     finally:
         try: os.write(master, b"\x04"); proc.wait(timeout=2)

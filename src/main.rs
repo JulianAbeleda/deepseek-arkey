@@ -289,6 +289,7 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
     let mut context_scan_started: Option<Instant> = None;
     let mut queued = VecDeque::<String>::new();
     let mut pending_agent_task: Option<PendingAgentTask> = None;
+    let mut confirmed_agent_task: Option<PendingAgentTask> = None;
     let mut switch_to_agent = false;
     loop {
         if let Some(receiver) = &in_flight {
@@ -347,11 +348,11 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
         if prompt == "yes agent" {
             if let Some(task) = pending_agent_task.take() {
                 composer.print_above(&format!(
-                    "switching to agent mode\nroot: {}\npending: {}\n",
+                    "agent task accepted\nroot: {}\npending: {}\n",
                     task.root.display(),
                     task.prompt
                 ))?;
-                switch_to_agent = true;
+                confirmed_agent_task = Some(task);
                 break;
             }
             composer.print_above("no pending agent task\n")?;
@@ -432,9 +433,43 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
         ));
     }
     drop(_raw_mode);
+    if let Some(task) = confirmed_agent_task {
+        run_confirmed_agent_task(&task, &current_model, temperature)?;
+        return run_interactive_chat(&current_model, temperature, false);
+    }
     if switch_to_agent {
         run_interactive_agent(&current_model, temperature)?;
     }
+    Ok(())
+}
+
+fn run_confirmed_agent_task(
+    task: &PendingAgentTask,
+    model: &str,
+    temperature: Option<f32>,
+) -> Result<(), String> {
+    println!("agent task: {}", task.prompt);
+    println!("root: {}", task.root.display());
+    let outcome = match agent::run_agent(
+        &task.prompt,
+        model,
+        temperature,
+        agent::AgentConfig::new(task.root.clone(), 8),
+    ) {
+        Ok(outcome) => outcome,
+        Err(err) => {
+            println!("agent task failed: {err}");
+            println!("returning to chat");
+            return Ok(());
+        }
+    };
+    eprintln!(
+        "agent: steps={} transcript={}",
+        outcome.steps,
+        outcome.transcript_path.display()
+    );
+    println!("{}", outcome.answer);
+    println!("returning to chat");
     Ok(())
 }
 
