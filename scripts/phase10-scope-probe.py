@@ -659,8 +659,9 @@ def section_H(binary, name, model):
             drain(master, screen, 0.3)
             text = screen.all_text()
             blocked = "Referenced path is outside" in text and "route: agent task" not in text
+            suggested = "Suggested root:" in text and "Type /root " in text
             record("H", ident, label,
-                   "PASS" if blocked else "FAIL",
+                   "PASS" if (blocked and suggested) else "FAIL",
                    f"workspace={workspace}\ntext={text}")
         finally:
             try: os.write(master, b"\x04"); proc.wait(timeout=2)

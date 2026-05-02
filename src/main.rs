@@ -661,10 +661,13 @@ fn clarify_route_text() -> String {
 }
 
 fn path_boundary_clarify_text(root: &Path, path: &Path) -> String {
+    let suggested_root = path.parent().unwrap_or(root);
     format!(
-        "route: unclear\nReferenced path is outside the selected workspace root.\nroot: {}\npath: {}\nUse /root <path> to choose a different workspace, or /chat to discuss.\n",
+        "route: unclear\nReferenced path is outside the selected workspace root.\nroot: {}\npath: {}\nSuggested root: {}\nType /root {} to choose that workspace, or /chat to discuss.\n",
         root.display(),
-        path.display()
+        path.display(),
+        suggested_root.display(),
+        suggested_root.display()
     )
 }
 
@@ -1173,7 +1176,8 @@ mod tests {
     use super::{
         classify_intent, context_scan_status, debug_response, is_agent_transcript_latest,
         is_end_command, is_exit_command, parse_debug_command, parse_model_command,
-        parse_root_command, path_boundary_violation, root_status, Intent,
+        parse_root_command, path_boundary_clarify_text, path_boundary_violation, root_status,
+        Intent,
     };
     use std::path::Path;
     use std::time::Instant;
@@ -1245,6 +1249,16 @@ mod tests {
         assert_eq!(path_boundary_violation("fix src/main.rs.", root), None);
         assert!(path_boundary_violation("fix ../outside.md", root).is_some());
         assert!(path_boundary_violation("audit /Users/example/.ssh/config", root).is_some());
+    }
+
+    #[test]
+    fn outside_root_clarify_suggests_parent_root() {
+        let text = path_boundary_clarify_text(
+            Path::new("/tmp/workspace"),
+            Path::new("/Users/example/.ssh/config"),
+        );
+        assert!(text.contains("Suggested root: /Users/example/.ssh"));
+        assert!(text.contains("Type /root /Users/example/.ssh"));
     }
 
     #[test]
