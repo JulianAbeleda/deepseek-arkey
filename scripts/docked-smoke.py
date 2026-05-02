@@ -171,7 +171,7 @@ def main():
         env["HOME"] = home
         command = [binary, "chat"]
         prompt_fragment = "debug:"
-        response_fragment = "agent --root"
+        response_fragment = "local diagnostic response"
         cwd = None
         if args.entrypoint == "chat":
             env[f"{args.name.upper()}_DEBUG_STREAM_DELAY_MS"] = "10"
@@ -218,6 +218,9 @@ def main():
                 )
             wait_for(lambda: screen.contains(response_fragment), master, screen, "ResponseRender", timeout=10.0)
             wait_for(lambda: args.name in screen.bottom() and prompt_fragment in screen.bottom(), master, screen, "PromptResume dock")
+            if not screen.contains(response_fragment):
+                dump = "\n".join(f"{i:02d}: {screen.line(i)}" for i in range(screen.rows))
+                raise AssertionError(f"streamed response did not persist after completion\n{dump}")
             proc.terminate()
             proc.wait(timeout=2)
         finally:

@@ -283,25 +283,18 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
     let mut switch_to_agent = false;
     loop {
         if let Some(receiver) = &in_flight {
-            match receiver.try_recv() {
-                Ok(TurnEvent::Delta(delta)) => composer.stream_above(&delta)?,
-                Ok(TurnEvent::Complete(result)) => {
-                    in_flight = None;
-                    if let Err(err) = result {
-                        composer.print_above(&format!("error: {err}\n"))?;
-                    } else {
-                        composer.finish_stream()?;
-                    }
-                    if let Some(next) = queued.pop_front() {
-                        composer.status_above("context: scanning\n")?;
-                        in_flight =
-                            Some(spawn_prompt_turn(next, current_model.clone(), temperature));
-                    }
+            if let Some(result) =
+                drain_turn_events(receiver, &mut composer, "response worker disconnected")?
+            {
+                in_flight = None;
+                if let Err(err) = result {
+                    composer.print_above(&format!("error: {err}\n"))?;
+                } else {
+                    composer.finish_stream()?;
                 }
-                Err(mpsc::TryRecvError::Empty) => {}
-                Err(mpsc::TryRecvError::Disconnected) => {
-                    in_flight = None;
-                    composer.print_above("error: response worker disconnected\n")?;
+                if let Some(next) = queued.pop_front() {
+                    composer.status_above("context: scanning\n")?;
+                    in_flight = Some(spawn_prompt_turn(next, current_model.clone(), temperature));
                 }
             }
         }
@@ -406,29 +399,23 @@ fn run_interactive_agent_docked(model: &str, temperature: Option<f32>) -> Result
     let mut switch_to_chat = false;
     loop {
         if let Some(receiver) = &in_flight {
-            match receiver.try_recv() {
-                Ok(TurnEvent::Delta(delta)) => composer.stream_above(&delta)?,
-                Ok(TurnEvent::Complete(result)) => {
-                    in_flight = None;
-                    if let Err(err) = result {
-                        composer.print_above(&format!("error: {err}\n"))?;
-                    } else {
-                        composer.finish_stream()?;
-                    }
-                    if let Some(next) = queued.pop_front() {
-                        composer.status_above("context: scanning\n")?;
-                        in_flight = Some(spawn_agent_turn(
-                            next,
-                            current_model.clone(),
-                            temperature,
-                            root.clone(),
-                        ));
-                    }
+            if let Some(result) =
+                drain_turn_events(receiver, &mut composer, "agent worker disconnected")?
+            {
+                in_flight = None;
+                if let Err(err) = result {
+                    composer.print_above(&format!("error: {err}\n"))?;
+                } else {
+                    composer.finish_stream()?;
                 }
-                Err(mpsc::TryRecvError::Empty) => {}
-                Err(mpsc::TryRecvError::Disconnected) => {
-                    in_flight = None;
-                    composer.print_above("error: agent worker disconnected\n")?;
+                if let Some(next) = queued.pop_front() {
+                    composer.status_above("context: scanning\n")?;
+                    in_flight = Some(spawn_agent_turn(
+                        next,
+                        current_model.clone(),
+                        temperature,
+                        root.clone(),
+                    ));
                 }
             }
         }
@@ -609,6 +596,33 @@ fn spawn_prompt_turn(
         let _ = sender.send(TurnEvent::Complete(result));
     });
     receiver
+}
+
+fn drain_turn_events(
+    receiver: &Receiver<TurnEvent>,
+    composer: &mut DockedComposer,
+    disconnected_message: &str,
+) -> Result<Option<Result<(), String>>, String> {
+    let mut chunk = String::new();
+    let mut complete = None;
+    loop {
+        match receiver.try_recv() {
+            Ok(TurnEvent::Delta(delta)) => chunk.push_str(&delta),
+            Ok(TurnEvent::Complete(result)) => {
+                complete = Some(result);
+                break;
+            }
+            Err(mpsc::TryRecvError::Empty) => break,
+            Err(mpsc::TryRecvError::Disconnected) => {
+                complete = Some(Err(disconnected_message.to_string()));
+                break;
+            }
+        }
+    }
+    if !chunk.is_empty() {
+        composer.stream_above(&chunk)?;
+    }
+    Ok(complete)
 }
 
 fn spawn_agent_turn(

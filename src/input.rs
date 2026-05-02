@@ -24,7 +24,7 @@ pub struct DockedComposer {
     history: Vec<String>,
     history_index: Option<usize>,
     stream_buffer: String,
-    stream_rendered_rows: usize,
+    stream_rendered_lines: Vec<String>,
     status_active: bool,
 }
 
@@ -161,7 +161,7 @@ impl DockedComposer {
             history: Vec::new(),
             history_index: None,
             stream_buffer: String::new(),
-            stream_rendered_rows: 0,
+            stream_rendered_lines: Vec::new(),
             status_active: false,
         }
     }
@@ -301,22 +301,39 @@ impl DockedComposer {
         let lines = wrap_visible_lines(&self.stream_buffer, terminal_width());
         let prior_rows = self.transient_rows();
         let mut stdout = io::stdout();
-        clear_rows_above_dock(&mut stdout, prior_rows)?;
-        repaint_lines_above_dock(&mut stdout, &lines)?;
+        if self.status_active && self.stream_rendered_lines.is_empty() {
+            clear_rows_above_dock(&mut stdout, prior_rows)?;
+            repaint_lines_above_dock(&mut stdout, &lines)?;
+        } else {
+            repaint_changed_lines_above_dock(&mut stdout, &self.stream_rendered_lines, &lines)?;
+        }
         stdout.flush().map_err(|err| err.to_string())?;
         self.status_active = false;
-        self.stream_rendered_rows = lines.len();
+        self.stream_rendered_lines = lines;
         self.render()
     }
 
     pub fn finish_stream(&mut self) -> Result<(), String> {
+        if !self.stream_buffer.is_empty() {
+            let text = self.stream_buffer.clone();
+            let mut stdout = io::stdout();
+            clear_rows_above_dock(&mut stdout, self.transient_rows())?;
+            move_to_output_row(&mut stdout)?;
+            execute!(stdout, MoveToColumn(0), Clear(ClearType::CurrentLine))
+                .map_err(|err| err.to_string())?;
+            write_raw_lines(&mut stdout, &text)?;
+            if !text.ends_with('\n') {
+                write!(stdout, "\r\n").map_err(|err| err.to_string())?;
+            }
+            stdout.flush().map_err(|err| err.to_string())?;
+        }
         self.reset_stream_state();
         self.render()
     }
 
     fn reset_stream_state(&mut self) {
         self.stream_buffer.clear();
-        self.stream_rendered_rows = 0;
+        self.stream_rendered_lines.clear();
         self.status_active = false;
     }
 
@@ -327,8 +344,8 @@ impl DockedComposer {
     }
 
     fn transient_rows(&self) -> usize {
-        if self.stream_rendered_rows > 0 {
-            self.stream_rendered_rows
+        if !self.stream_rendered_lines.is_empty() {
+            self.stream_rendered_lines.len()
         } else if self.status_active {
             1
         } else {
@@ -545,6 +562,44 @@ fn repaint_lines_above_dock(stdout: &mut io::Stdout, lines: &[String]) -> Result
         write!(stdout, "{line}").map_err(|err| err.to_string())?;
     }
     Ok(())
+}
+
+fn repaint_changed_lines_above_dock(
+    stdout: &mut io::Stdout,
+    previous: &[String],
+    next: &[String],
+) -> Result<(), String> {
+    let dock = dock_row();
+    let max_rows = dock as usize;
+    let previous_lines = visible_tail(previous, max_rows);
+    let next_lines = visible_tail(next, max_rows);
+    let rows = previous_lines.len().max(next_lines.len());
+    let start = dock.saturating_sub(rows as u16);
+    for index in 0..rows {
+        let old = previous_lines.get(index).map(String::as_str);
+        let new = next_lines.get(index).map(String::as_str);
+        if old == new {
+            continue;
+        }
+        execute!(
+            stdout,
+            MoveTo(0, start + index as u16),
+            Clear(ClearType::CurrentLine)
+        )
+        .map_err(|err| err.to_string())?;
+        if let Some(line) = new {
+            write!(stdout, "{line}").map_err(|err| err.to_string())?;
+        }
+    }
+    Ok(())
+}
+
+fn visible_tail(lines: &[String], max_rows: usize) -> &[String] {
+    if lines.len() > max_rows {
+        &lines[lines.len() - max_rows..]
+    } else {
+        lines
+    }
 }
 
 fn set_output_scroll_region(reserved_bottom_lines: usize) -> Result<(), String> {
@@ -802,14 +857,14 @@ mod tests {
         let mut composer = DockedComposer::new("prompt › ".to_string());
         composer.buffer = "draft".to_string();
         composer.stream_buffer = "hello".to_string();
-        composer.stream_rendered_rows = 1;
+        composer.stream_rendered_lines = vec!["hello".to_string()];
         assert_eq!(composer.stream_buffer, "hello");
-        assert_eq!(composer.stream_rendered_rows, 1);
+        assert_eq!(composer.stream_rendered_lines, vec!["hello"]);
         assert!(!composer.status_active);
         composer.status_active = true;
         composer.reset_stream_state();
         assert!(composer.stream_buffer.is_empty());
-        assert_eq!(composer.stream_rendered_rows, 0);
+        assert!(composer.stream_rendered_lines.is_empty());
         assert!(!composer.status_active);
         assert_eq!(composer.buffer, "draft");
     }
