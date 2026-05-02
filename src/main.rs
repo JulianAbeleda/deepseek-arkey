@@ -170,9 +170,6 @@ fn run_interactive(
     mode: InteractiveMode,
 ) -> Result<(), String> {
     if mode == InteractiveMode::Agent {
-        if io::stdin().is_terminal() {
-            return run_interactive_agent_docked(model, temperature);
-        }
         return run_interactive_agent(model, temperature);
     }
     run_interactive_chat(model, temperature, stream)
@@ -372,129 +369,7 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
     }
     drop(_raw_mode);
     if switch_to_agent {
-        run_interactive_agent_docked(&current_model, temperature)?;
-    }
-    Ok(())
-}
-
-fn run_interactive_agent_docked(model: &str, temperature: Option<f32>) -> Result<(), String> {
-    let root = std::env::current_dir().map_err(|err| err.to_string())?;
-    let mut current_model = session::load()?
-        .map(|state| state.model)
-        .unwrap_or_else(|| model.to_string());
-    if session::load()?.is_none() {
-        session::save(&SessionState::new(
-            PROVIDER,
-            "default",
-            current_model.clone(),
-        ))?;
-    }
-    print_agent_banner(&current_model, &root);
-    let _raw_mode = RawModeSession::enable()?;
-    let mut runtime_state = runtime::load(&current_model)?;
-    let mut composer = DockedComposer::new(agent_prompt_text(&runtime_state.label(&current_model)));
-    composer.render()?;
-    let mut in_flight: Option<Receiver<TurnEvent>> = None;
-    let mut queued = VecDeque::<String>::new();
-    let mut switch_to_chat = false;
-    loop {
-        if let Some(receiver) = &in_flight {
-            if let Some(result) =
-                drain_turn_events(receiver, &mut composer, "agent worker disconnected")?
-            {
-                in_flight = None;
-                if let Err(err) = result {
-                    composer.print_above(&format!("error: {err}\n"))?;
-                } else {
-                    composer.finish_stream()?;
-                }
-                if let Some(next) = queued.pop_front() {
-                    composer.status_above("context: scanning\n")?;
-                    in_flight = Some(spawn_agent_turn(
-                        next,
-                        current_model.clone(),
-                        temperature,
-                        root.clone(),
-                    ));
-                }
-            }
-        }
-        let Some(action) = composer.poll_action(Duration::from_millis(50))? else {
-            continue;
-        };
-        let line = match action {
-            InputAction::Submit(line) => line,
-            InputAction::Exit => break,
-        };
-        let prompt = line.trim();
-        if prompt.is_empty() {
-            continue;
-        }
-        if is_exit_command(prompt) {
-            break;
-        }
-        if matches!(prompt, "?" | "/help") {
-            composer.print_above(&agent_help(&current_model, &root))?;
-            continue;
-        }
-        if prompt == "/chat" {
-            composer.print_above("switching to chat mode\n")?;
-            switch_to_chat = true;
-            break;
-        }
-        if prompt == "/status" {
-            composer.print_above(&interactive_agent_status(&current_model, &root)?)?;
-            continue;
-        }
-        if prompt == "/runtime" {
-            composer.print_above(&runtime_result(&current_model, false)?)?;
-            continue;
-        }
-        if let Some(mode) = parse_debug_command(prompt) {
-            let output = match mode {
-                Some(mode) => debug_result(&current_model, Some(mode), false)?,
-                None => toggle_debug_result(&current_model)?,
-            };
-            runtime_state = runtime::load(&current_model)?;
-            composer.set_prompt(agent_prompt_text(&runtime_state.label(&current_model)))?;
-            composer.print_above(&output)?;
-            continue;
-        }
-        if let Some(next_model) = parse_model_command(prompt) {
-            match next_model {
-                Some(next_model) => {
-                    current_model = next_model.to_string();
-                    update_active_session_model(&current_model)?;
-                    runtime_state = runtime_state.with_model(current_model.clone());
-                    runtime::save(&runtime_state)?;
-                    composer.set_prompt(agent_prompt_text(&runtime_state.label(&current_model)))?;
-                    composer.print_above(&format!("model set: {current_model}\n"))?;
-                }
-                None => composer.print_above(&model_help(&current_model))?,
-            }
-            continue;
-        }
-        if is_end_command(prompt) {
-            let _ = session::delete()?;
-            composer.print_above("session ended\n")?;
-            break;
-        }
-        if in_flight.is_some() {
-            queued.push_back(prompt.to_string());
-            composer.print_above(&format!("queued: {} prompt(s)\n", queued.len()))?;
-            continue;
-        }
-        composer.status_above("context: scanning\n")?;
-        in_flight = Some(spawn_agent_turn(
-            prompt.to_string(),
-            current_model.clone(),
-            temperature,
-            root.clone(),
-        ));
-    }
-    drop(_raw_mode);
-    if switch_to_chat {
-        run_interactive_chat(&current_model, temperature, false)?;
+        run_interactive_agent(&current_model, temperature)?;
     }
     Ok(())
 }
@@ -623,64 +498,6 @@ fn drain_turn_events(
         composer.stream_above(&chunk)?;
     }
     Ok(complete)
-}
-
-fn spawn_agent_turn(
-    prompt: String,
-    model: String,
-    temperature: Option<f32>,
-    root: impl Into<std::path::PathBuf>,
-) -> Receiver<TurnEvent> {
-    let (sender, receiver) = mpsc::channel();
-    let root = root.into();
-    thread::spawn(move || {
-        let result = run_agent_streaming(&prompt, &model, temperature, root, sender.clone());
-        let _ = sender.send(TurnEvent::Complete(result));
-    });
-    receiver
-}
-
-fn run_agent_streaming(
-    prompt: &str,
-    model: &str,
-    temperature: Option<f32>,
-    root: std::path::PathBuf,
-    sender: Sender<TurnEvent>,
-) -> Result<(), String> {
-    let runtime_state = runtime::load(model)?;
-    if runtime_state.backend == RuntimeBackend::Debug {
-        let response = debug_response(prompt, model);
-        let delay = debug_stream_delay();
-        if let Some(delay) = delay {
-            thread::sleep(delay);
-        }
-        for delta in response.chars() {
-            let _ = sender.send(TurnEvent::Delta(delta.to_string()));
-            if let Some(delay) = delay {
-                thread::sleep(delay);
-            }
-        }
-        return Ok(());
-    }
-    let step_sender = sender.clone();
-    let outcome = agent::run_agent_with_options(
-        prompt,
-        model,
-        temperature,
-        agent::AgentConfig::new(root, 8),
-        agent::ApprovalMode::Deny,
-        move |step, tool| {
-            let _ = step_sender.send(TurnEvent::Delta(format!("agent step {step}: {tool}\n")));
-        },
-    )?;
-    let summary = format!(
-        "agent: steps={} transcript={}\n{}\n",
-        outcome.steps,
-        outcome.transcript_path.display(),
-        outcome.answer
-    );
-    let _ = sender.send(TurnEvent::Delta(summary));
-    Ok(())
 }
 
 fn run_prompt_streaming(

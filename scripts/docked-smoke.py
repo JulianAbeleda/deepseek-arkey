@@ -156,7 +156,7 @@ def main():
     parser.add_argument("--binary", default=None)
     parser.add_argument("--name", default="deepseek")
     parser.add_argument("--model", default="deepseek-v4-flash")
-    parser.add_argument("--entrypoint", choices=("chat", "default"), default="chat")
+    parser.add_argument("--entrypoint", choices=("chat", "switch"), default="chat")
     args = parser.parse_args()
 
     binary = args.binary or str((os.getcwd() + f"/target/release/{args.name}"))
@@ -171,51 +171,30 @@ def main():
         env["HOME"] = home
         command = [binary, "chat"]
         prompt_fragment = "debug:"
-        response_fragment = "local diagnostic response"
-        cwd = None
-        if args.entrypoint == "chat":
-            env[f"{args.name.upper()}_DEBUG_STREAM_DELAY_MS"] = "10"
-            subprocess.run([binary, "debug", "on"], env=env, check=True, stdout=subprocess.DEVNULL)
-        else:
-            command = [binary]
-            prompt_fragment = "agent"
-            response_fragment = "agent dock response"
-            workspace = os.path.join(home, "workspace")
-            fake_bin = os.path.join(home, "bin")
-            os.makedirs(workspace)
-            os.makedirs(fake_bin)
-            fake_curl = os.path.join(fake_bin, "curl")
-            with open(fake_curl, "w", encoding="utf-8") as handle:
-                handle.write(
-                    "#!/bin/sh\n"
-                    "sleep 0.2\n"
-                    "printf '%s\\n' "
-                    "'{\"choices\":[{\"message\":{\"content\":\"{\\\"final_answer\\\":\\\"agent dock response: persistent composer ok\\\"}\"}}]}'\n"
-                )
-            os.chmod(fake_curl, 0o755)
-            env["PATH"] = fake_bin + os.pathsep + env.get("PATH", "")
-            env[f"{args.name.upper()}_API_KEY"] = "smoke-test-key"
-            cwd = workspace
+        response_fragment = "debug/manual backend"
+        env[f"{args.name.upper()}_DEBUG_STREAM_DELAY_MS"] = "10"
+        subprocess.run([binary, "debug", "on"], env=env, check=True, stdout=subprocess.DEVNULL)
 
         master, slave = pty.openpty()
         fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", ROWS, COLS, 0, 0))
-        proc = subprocess.Popen(command, stdin=slave, stdout=slave, stderr=slave, env=env, close_fds=True, cwd=cwd)
+        proc = subprocess.Popen(command, stdin=slave, stdout=slave, stderr=slave, env=env, close_fds=True)
         os.close(slave)
         screen = Screen()
         try:
             wait_for(lambda: args.name in screen.bottom() and prompt_fragment in screen.bottom(), master, screen, "PromptIdle dock")
+            if args.entrypoint == "switch":
+                os.write(master, b"/agent\r")
+                wait_for(lambda: screen.contains("workspace:") and screen.contains("agent"), master, screen, "inline agent mode")
+                os.write(master, b"/chat\r")
+                wait_for(lambda: args.name in screen.bottom() and "debug:" in screen.bottom(), master, screen, "chat dock after /chat")
+                proc.terminate()
+                proc.wait(timeout=2)
+                print(f"{args.name} switch docked smoke: ok")
+                return
             os.write(master, b"draft")
             wait_for(lambda: "dra" in screen.bottom() and "t" in screen.bottom(), master, screen, "editable draft in dock")
             os.write(master, b"\r")
             wait_for(lambda: screen.contains("context: scanning"), master, screen, "ContextScan row")
-            if args.entrypoint == "default":
-                os.write(master, b"keepup")
-                wait_for(
-                    lambda: "kee" in screen.bottom() and "p" in screen.bottom(),
-                    master,
-                    screen,
-                    "draft during turn",
-                )
             wait_for(lambda: screen.contains(response_fragment), master, screen, "ResponseRender", timeout=10.0)
             wait_for(lambda: args.name in screen.bottom() and prompt_fragment in screen.bottom(), master, screen, "PromptResume dock")
             if not screen.contains(response_fragment):
