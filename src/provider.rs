@@ -132,10 +132,11 @@ where
         stream,
     })
     .map_err(|err| err.to_string())?;
+    let client = CurlHttpClient;
     if stream {
-        return chat_streaming(&key, body, print_stream_trailing_newline, on_delta);
+        return chat_streaming(&client, &key, body, print_stream_trailing_newline, on_delta);
     }
-    let output = run_curl(&key, &body, false)?;
+    let output = client.post(&key, &body, false)?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
         return Err(if stderr.is_empty() {
@@ -150,6 +151,7 @@ where
 }
 
 fn chat_streaming<F>(
+    client: &impl HttpClient,
     key: &str,
     body: String,
     print_trailing_newline: bool,
@@ -158,7 +160,7 @@ fn chat_streaming<F>(
 where
     F: FnMut(&str),
 {
-    let mut child = spawn_curl(&curl_config(key, &body, true))?;
+    let mut child = client.post_stream(key, &body)?;
     let stdout = child
         .stdout
         .take()
@@ -209,53 +211,79 @@ where
     Ok(cap_text(response.trim(), DEFAULT_TEXT_CAP))
 }
 
-fn run_curl(key: &str, body: &str, stream: bool) -> Result<Output, String> {
-    spawn_curl(&curl_config(key, body, stream))?
-        .wait_with_output()
-        .map_err(|err| err.to_string())
+trait HttpClient {
+    fn post(&self, key: &str, body: &str, stream: bool) -> Result<Output, String>;
+    fn post_stream(&self, key: &str, body: &str) -> Result<Child, String>;
 }
 
-fn spawn_curl(config: &str) -> Result<Child, String> {
-    let mut child = curl_command()
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|err| format!("failed to run curl: {err}"))?;
-    child
-        .stdin
-        .take()
-        .ok_or_else(|| "failed to open curl stdin".to_string())?
-        .write_all(config.as_bytes())
-        .map_err(|err| format!("failed to write curl config: {err}"))?;
-    Ok(child)
-}
+struct CurlHttpClient;
 
-fn curl_command() -> Command {
-    let mut command = Command::new("curl");
-    command.arg("-q").arg("-K").arg("-");
-    command
-}
-
-fn curl_config(key: &str, body: &str, stream: bool) -> String {
-    let mut config = String::new();
-    config.push_str("silent\n");
-    config.push_str("show-error\n");
-    if stream {
-        config.push_str("no-buffer\n");
+impl HttpClient for CurlHttpClient {
+    fn post(&self, key: &str, body: &str, stream: bool) -> Result<Output, String> {
+        self.spawn(&self.config(key, body, stream))?
+            .wait_with_output()
+            .map_err(|err| err.to_string())
     }
-    config.push_str("request = \"POST\"\n");
-    config.push_str(&format!("url = \"{}\"\n", curl_quote(API_URL)));
-    config.push_str(&format!(
-        "header = \"{}\"\n",
-        curl_quote(&format!("Authorization: Bearer {key}"))
-    ));
-    config.push_str(&format!(
-        "header = \"{}\"\n",
-        curl_quote("Content-Type: application/json")
-    ));
-    config.push_str(&format!("data = \"{}\"\n", curl_quote(body)));
-    config
+
+    fn post_stream(&self, key: &str, body: &str) -> Result<Child, String> {
+        self.spawn(&self.config(key, body, true))
+    }
+}
+
+impl CurlHttpClient {
+    fn spawn(&self, config: &str) -> Result<Child, String> {
+        let mut child = self
+            .command()
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|err| format!("failed to run curl: {err}"))?;
+        child
+            .stdin
+            .take()
+            .ok_or_else(|| "failed to open curl stdin".to_string())?
+            .write_all(config.as_bytes())
+            .map_err(|err| format!("failed to write curl config: {err}"))?;
+        Ok(child)
+    }
+
+    fn command(&self) -> Command {
+        let mut command = Command::new("curl");
+        command.arg("-q").arg("-K").arg("-");
+        command
+    }
+
+    fn config(&self, key: &str, body: &str, stream: bool) -> String {
+        let mut config = String::new();
+        config.push_str("silent\n");
+        config.push_str("show-error\n");
+        if stream {
+            config.push_str("no-buffer\n");
+        }
+        config.push_str("request = \"POST\"\n");
+        config.push_str(&format!("url = \"{}\"\n", curl_quote(API_URL)));
+        config.push_str(&format!(
+            "header = \"{}\"\n",
+            curl_quote(&format!("Authorization: Bearer {key}"))
+        ));
+        config.push_str(&format!(
+            "header = \"{}\"\n",
+            curl_quote("Content-Type: application/json")
+        ));
+        config.push_str(&format!("data = \"{}\"\n", curl_quote(body)));
+        config
+    }
+}
+
+#[cfg(test)]
+fn curl_command() -> Command {
+    CurlHttpClient.command()
+}
+
+#[cfg(test)]
+fn curl_config(key: &str, body: &str, stream: bool) -> String {
+    CurlHttpClient.config(key, body, stream)
 }
 
 fn curl_quote(value: &str) -> String {
