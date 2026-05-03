@@ -85,6 +85,19 @@ fn run_interactive_chat(model: &str, temperature: Option<f32>, stream: bool) -> 
             run_interactive_agent(&current_model, temperature)?;
             break;
         }
+        if let Some(task) = parse_agent_task_command(prompt) {
+            let root = effective_workspace_root(None)
+                .ok_or_else(|| "agent task needs a workspace root; run from a project directory or use interactive /root <path>".to_string())?;
+            run_confirmed_agent_task(
+                &PendingAgentTask {
+                    prompt: task.to_string(),
+                    root,
+                },
+                &current_model,
+                temperature,
+            )?;
+            continue;
+        }
         if prompt == "/status" {
             ui::print_status(&current_model)?;
             continue;
@@ -236,6 +249,23 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
         if prompt == "/agent" {
             composer.print_above("switching to agent mode\n")?;
             switch_to_agent = true;
+            break;
+        }
+        if let Some(task) = parse_agent_task_command(prompt) {
+            let Some(root) = task_root_for_prompt(task, selected_root.as_deref()) else {
+                composer.print_above(&clarify_route_text())?;
+                pending_agent_task = None;
+                continue;
+            };
+            if let Some(path) = path_boundary_violation(task, &root) {
+                composer.print_above(&path_boundary_clarify_text(&root, &path))?;
+                pending_agent_task = None;
+                continue;
+            }
+            confirmed_agent_task = Some(PendingAgentTask {
+                prompt: task.to_string(),
+                root,
+            });
             break;
         }
         if is_agent_task_choice(prompt) {
@@ -575,11 +605,18 @@ fn clarify_route_text() -> String {
 }
 
 fn no_pending_agent_task_text() -> String {
-    "route: unclear\nNo pending agent task.\nType /root <path> to choose a workspace, then repeat the task; or type /agent <task> to run one directly.\n".to_string()
+    "route: unclear\nNo pending agent task to confirm.\nType /root <path> to choose a workspace, then repeat the task; or type /agent <task> with the leading slash to run one directly.\n".to_string()
 }
 
 fn is_agent_task_choice(prompt: &str) -> bool {
     matches!(prompt, "yes agent" | "agent task" | "agent")
+}
+
+fn parse_agent_task_command(prompt: &str) -> Option<&str> {
+    prompt
+        .strip_prefix("/agent ")
+        .map(str::trim)
+        .filter(|task| !task.is_empty())
 }
 
 fn task_root_for_prompt(prompt: &str, selected_root: Option<&Path>) -> Option<PathBuf> {
@@ -839,8 +876,8 @@ fn paths_equal(left: &Path, right: &Path) -> bool {
 mod tests {
     use super::{
         cap_interactive_memory, context_scan_status, is_agent_task_choice, is_end_command,
-        is_exit_command, no_pending_agent_task_text, parse_debug_command, parse_model_command,
-        task_root_for_prompt,
+        is_exit_command, no_pending_agent_task_text, parse_agent_task_command, parse_debug_command,
+        parse_model_command, task_root_for_prompt,
     };
     use crate::provider;
     use crate::runtime;
@@ -913,11 +950,26 @@ mod tests {
     }
 
     #[test]
+    fn parses_direct_agent_task_slash_command() {
+        assert_eq!(
+            parse_agent_task_command("/agent scan src"),
+            Some("scan src")
+        );
+        assert_eq!(
+            parse_agent_task_command("/agent   inspect README.md"),
+            Some("inspect README.md")
+        );
+        assert_eq!(parse_agent_task_command("/agent"), None);
+        assert_eq!(parse_agent_task_command("agent task"), None);
+    }
+
+    #[test]
     fn no_pending_agent_task_text_points_to_root_or_direct_agent() {
         let response = no_pending_agent_task_text();
-        assert!(response.contains("No pending agent task"));
+        assert!(response.contains("No pending agent task to confirm"));
         assert!(response.contains("/root <path>"));
         assert!(response.contains("/agent <task>"));
+        assert!(response.contains("leading slash"));
     }
 
     #[test]
