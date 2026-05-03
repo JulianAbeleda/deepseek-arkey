@@ -25,8 +25,8 @@ pub(crate) fn classify_intent(
     }
     let is_task = is_task_prompt(&normalized, has_recent_task_context)
         || references_workspace_file(prompt, workspace_root);
-    let has_natural_root = references_natural_location(prompt);
-    if is_task || has_natural_root {
+    let has_natural_root = references_natural_location(&normalized);
+    if is_task {
         if workspace_root.is_none() && !has_natural_root {
             return Intent::Clarify;
         }
@@ -87,12 +87,12 @@ fn is_task_prompt(prompt: &str, has_recent_task_context: bool) -> bool {
         "rename",
         "test",
         "build",
-        "read",
-        "scan",
-        "inspect",
     ];
     let first = prompt.split_whitespace().next().unwrap_or("");
     if task_verbs.contains(&first) {
+        return true;
+    }
+    if has_task_phrase(prompt) || has_declarative_task_pattern(prompt) {
         return true;
     }
     has_recent_task_context
@@ -108,11 +108,72 @@ fn is_task_prompt(prompt: &str, has_recent_task_context: bool) -> bool {
         .any(|phrase| prompt.starts_with(phrase))
 }
 
+fn has_task_phrase(prompt: &str) -> bool {
+    [
+        "go through",
+        "look at",
+        "look through",
+        "take a look at",
+        "review",
+        "read this",
+        "read my files",
+        "read files",
+        "scan my",
+        "scan the",
+        "inspect my",
+        "inspect the",
+    ]
+    .iter()
+    .any(|phrase| starts_with_phrase(prompt, phrase))
+}
+
+fn has_declarative_task_pattern(prompt: &str) -> bool {
+    let has_problem_pattern = [
+        "is broken",
+        "is failing",
+        "has errors",
+        "needs cleanup",
+        "is a mess",
+        "are a mess",
+    ]
+    .iter()
+    .any(|pattern| prompt.contains(pattern));
+    has_problem_pattern && has_scope_noun(prompt)
+}
+
+fn has_scope_noun(prompt: &str) -> bool {
+    [
+        "this repo",
+        "this project",
+        "this codebase",
+        "the repo",
+        "the project",
+        "the codebase",
+        "my files",
+        "these files",
+        "the config",
+        "config",
+        "the code",
+        "my code",
+        "desktop",
+        "downloads",
+        "documents",
+    ]
+    .iter()
+    .any(|scope| prompt.contains(scope))
+}
+
+fn starts_with_phrase(prompt: &str, phrase: &str) -> bool {
+    prompt == phrase
+        || prompt
+            .strip_prefix(phrase)
+            .is_some_and(|rest| rest.starts_with(' '))
+}
+
 fn references_natural_location(prompt: &str) -> bool {
-    let lowered = prompt.to_lowercase();
     ["desktop", "downloads", "documents"]
         .iter()
-        .any(|loc| lowered.contains(loc))
+        .any(|loc| prompt.contains(loc))
 }
 
 fn references_workspace_file(prompt: &str, workspace_root: Option<&Path>) -> bool {
@@ -232,6 +293,22 @@ mod tests {
             classify_intent("explain this codebase", false, Some(root)),
             Intent::Chat
         );
+        assert_eq!(
+            classify_intent("what is a desktop?", false, Some(root)),
+            Intent::Chat
+        );
+        assert_eq!(
+            classify_intent("how do I read files in Rust?", false, Some(root)),
+            Intent::Chat
+        );
+        assert_eq!(
+            classify_intent("can you explain config files?", false, Some(root)),
+            Intent::Chat
+        );
+        assert_eq!(
+            classify_intent("why is my code broken?", false, Some(root)),
+            Intent::Chat
+        );
     }
 
     #[test]
@@ -266,6 +343,35 @@ mod tests {
             classify_intent("fix the README in this directory", false, None),
             Intent::Clarify
         );
+        assert_eq!(
+            classify_intent("the config is broken", false, None),
+            Intent::Clarify
+        );
+        assert_eq!(
+            classify_intent("this repo needs cleanup", false, None),
+            Intent::Clarify
+        );
+        assert_eq!(
+            classify_intent("review this project", false, None),
+            Intent::Clarify
+        );
+    }
+
+    #[test]
+    fn classifies_declarative_tasks_inside_workspace() {
+        let root = Path::new("/tmp/workspace");
+        assert_eq!(
+            classify_intent("the config is broken", false, Some(root)),
+            Intent::Task
+        );
+        assert_eq!(
+            classify_intent("this repo needs cleanup", false, Some(root)),
+            Intent::Task
+        );
+        assert_eq!(
+            classify_intent("review this project", false, Some(root)),
+            Intent::Task
+        );
     }
 
     #[test]
@@ -280,6 +386,10 @@ mod tests {
         );
         assert_eq!(
             classify_intent("look through downloads", false, None),
+            Intent::Task
+        );
+        assert_eq!(
+            classify_intent("go through downloads", false, None),
             Intent::Task
         );
         assert_eq!(
@@ -309,6 +419,30 @@ mod tests {
         assert_eq!(
             classify_intent("inspect the config", false, None),
             Intent::Clarify
+        );
+        assert_eq!(
+            classify_intent("look at the config", false, None),
+            Intent::Clarify
+        );
+    }
+
+    #[test]
+    fn scoped_mess_statements_route_to_task_context() {
+        assert_eq!(
+            classify_intent("my files are a mess", false, None),
+            Intent::Clarify
+        );
+        assert_eq!(
+            classify_intent("my desktop files are a mess", false, None),
+            Intent::Task
+        );
+        assert_eq!(
+            classify_intent(
+                "this repo is a mess",
+                false,
+                Some(Path::new("/tmp/workspace"))
+            ),
+            Intent::Task
         );
     }
 }

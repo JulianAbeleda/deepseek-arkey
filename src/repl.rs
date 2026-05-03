@@ -311,10 +311,7 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
         ) {
             Intent::Chat => {}
             Intent::Task => {
-                let root = selected_root
-                    .clone()
-                    .or_else(|| infer_natural_root(prompt))
-                    .or_else(|| effective_workspace_root(None));
+                let root = task_root_for_prompt(prompt, selected_root.as_deref());
                 let Some(root) = root else {
                     composer.print_above(&clarify_route_text())?;
                     pending_agent_task = None;
@@ -549,6 +546,12 @@ fn clarify_route_text() -> String {
     "route: unclear\nDo you want chat analysis or an agent task?\nType /chat to discuss, /root <path> to choose a workspace, or /agent <task> to execute.\n".to_string()
 }
 
+fn task_root_for_prompt(prompt: &str, selected_root: Option<&Path>) -> Option<PathBuf> {
+    infer_natural_root(prompt)
+        .or_else(|| selected_root.map(Path::to_path_buf))
+        .or_else(|| effective_workspace_root(None))
+}
+
 fn run_prompt_streaming(
     prompt: &str,
     model: &str,
@@ -732,9 +735,10 @@ fn paths_equal(left: &Path, right: &Path) -> bool {
 mod tests {
     use super::{
         context_scan_status, is_end_command, is_exit_command, parse_debug_command,
-        parse_model_command,
+        parse_model_command, task_root_for_prompt,
     };
     use crate::runtime;
+    use std::path::{Path, PathBuf};
     use std::time::Instant;
 
     #[test]
@@ -777,6 +781,20 @@ mod tests {
         let response = runtime::debug_response("can you write files?", "deepseek-v4-flash");
         assert!(response.contains("local diagnostic response"));
         assert!(response.contains("agent --root"));
+    }
+
+    #[test]
+    fn natural_location_prompt_wins_over_selected_root() {
+        let home = std::env::var_os("HOME").map(PathBuf::from).unwrap();
+        let selected = Path::new("/tmp/selected-workspace");
+        assert_eq!(
+            task_root_for_prompt("go through downloads", Some(selected)),
+            Some(home.join("Downloads"))
+        );
+        assert_eq!(
+            task_root_for_prompt("fix this repo", Some(selected)),
+            Some(selected.to_path_buf())
+        );
     }
 
     #[test]
