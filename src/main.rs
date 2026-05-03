@@ -341,7 +341,7 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
             break;
         }
         if matches!(prompt, "?" | "/help") {
-            composer.print_above(&interactive_help(&current_model))?;
+            composer.print_above(&ui::interactive_help(&current_model))?;
             continue;
         }
         if prompt == "/chat" {
@@ -420,7 +420,7 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
                     composer.set_prompt(ui::prompt_text(&runtime_state.label(&current_model)))?;
                     composer.print_above(&format!("model set: {current_model}\n"))?;
                 }
-                None => composer.print_above(&model_help(&current_model))?,
+                None => composer.print_above(&ui::model_help(&current_model))?,
             }
             continue;
         }
@@ -541,7 +541,7 @@ fn run_interactive_agent(model: &str, temperature: Option<f32>) -> Result<(), St
             break;
         }
         if matches!(prompt, "?" | "/help") {
-            print!("{}", agent_help(&current_model, &root));
+            print!("{}", ui::agent_help(&current_model, &root));
             continue;
         }
         if prompt == "/chat" {
@@ -709,18 +709,6 @@ fn run_prompt_streaming(
     Ok(())
 }
 
-fn interactive_help(model: &str) -> String {
-    format!(
-        "DeepSeek Chat Commands\nWorkspace\n  /root               Show active workspace root\n  /root <path>        Set workspace root for routed agent tasks\n  /root clear         Return to cwd-based root detection\n\nSession\n  /model              Show or switch DeepSeek model\n  /model <id>         Switch model for this active session\n  /status             Show active session details\n  /runtime            Show provider/debug runtime state\n  /debug [on|off]     Toggle local debug backend\n  /agent              Switch to workspace agent mode\n  /end                End the current session and clear context\n\nGeneral\n  ? or /help          Show this help\n  /exit               Exit without clearing context\n\nShell\n  mode                chat\n  model               {model}\n"
-    )
-}
-
-fn model_help(model: &str) -> String {
-    format!(
-        "Model commands\ncurrent: {model}\n\nUsage\n  /model <id>\n\nCurrent DeepSeek text models\n  deepseek-v4-flash\n  deepseek-v4-pro\n\nLegacy aliases deepseek-chat and deepseek-reasoner retire on 2026-07-24.\n"
-    )
-}
-
 fn interactive_status(model: &str) -> Result<String, String> {
     let mut output = format!(
         "DeepSeek Status\nsession-path: {}\n",
@@ -769,13 +757,6 @@ fn print_agent_banner(model: &str, root: &Path) {
 
 fn agent_prompt_text(model: &str) -> String {
     format!("deepseek [{model}] agent › ")
-}
-
-fn agent_help(model: &str, root: &Path) -> String {
-    format!(
-        "DeepSeek Agent Commands\nWorkspace\n  root                {}\n  read tools          list_files, read_file, search_files, inspect_tree\n  shell               requires yes run\n  edits               require yes apply\n\nSession\n  /chat               Switch to plain chat mode\n  /model              Show or switch DeepSeek model\n  /model <id>         Switch model for this active session\n  /status             Show mode, root, model, and session details\n  /runtime            Show provider/debug runtime state\n  /debug [on|off]     Toggle local debug backend\n  /end                End the current session and clear context\n\nGeneral\n  ? or /help          Show this help\n  /exit               Exit without clearing context\n\nShell\n  mode                agent\n  model               {model}\n",
-        root.display()
-    )
 }
 
 fn interactive_agent_status(model: &str, root: &Path) -> Result<String, String> {

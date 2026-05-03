@@ -1,4 +1,5 @@
 use std::io::{self, Write};
+use std::path::Path;
 
 use crossterm::cursor::{position, MoveToColumn};
 use crossterm::execute;
@@ -74,6 +75,25 @@ pub fn print_model_help(model: &str) {
 
 pub fn print_model_set(model: &str) {
     print_line(format!("model set: {}", accent(model)));
+}
+
+pub fn interactive_help(model: &str) -> String {
+    format!(
+        "DeepSeek Chat Commands\nWorkspace\n  /root               Show active workspace root\n  /root <path>        Set workspace root for routed agent tasks\n  /root clear         Return to cwd-based root detection\n\nSession\n  /model              Show or switch DeepSeek model\n  /model <id>         Switch model for this active session\n  /status             Show active session details\n  /runtime            Show provider/debug runtime state\n  /debug [on|off]     Toggle local debug backend\n  /agent              Switch to workspace agent mode\n  /end                End the current session and clear context\n\nGeneral\n  ? or /help          Show this help\n  /exit               Exit without clearing context\n\nShell\n  mode                chat\n  model               {model}\n"
+    )
+}
+
+pub fn model_help(model: &str) -> String {
+    format!(
+        "Model commands\ncurrent: {model}\n\nUsage\n  /model <id>\n\nCurrent DeepSeek text models\n  deepseek-v4-flash\n  deepseek-v4-pro\n\nLegacy aliases deepseek-chat and deepseek-reasoner retire on 2026-07-24.\n"
+    )
+}
+
+pub fn agent_help(model: &str, root: &Path) -> String {
+    format!(
+        "DeepSeek Agent Commands\nWorkspace\n  root                {}\n  read tools          list_files, read_file, search_files, inspect_tree\n  shell               requires yes run\n  edits               require yes apply\n\nSession\n  /chat               Switch to plain chat mode\n  /model              Show or switch DeepSeek model\n  /model <id>         Switch model for this active session\n  /status             Show mode, root, model, and session details\n  /runtime            Show provider/debug runtime state\n  /debug [on|off]     Toggle local debug backend\n  /end                End the current session and clear context\n\nGeneral\n  ? or /help          Show this help\n  /exit               Exit without clearing context\n\nShell\n  mode                agent\n  model               {model}\n",
+        root.display()
+    )
 }
 
 pub fn print_status(model: &str) -> Result<(), String> {
