@@ -130,16 +130,22 @@ fn run_interactive_chat(model: &str, temperature: Option<f32>, stream: bool) -> 
 }
 
 fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<(), String> {
-    let mut current_model = session::load()?
-        .map(|state| state.model)
+    let active_session = session::load()?;
+    let mut current_model = active_session
+        .as_ref()
+        .map(|state| state.model.clone())
         .unwrap_or_else(|| model.to_string());
-    if session::load()?.is_none() {
+    if active_session.is_none() {
         session::save(&SessionState::new(
             PROVIDER,
             DEFAULT_SESSION_NAME,
             current_model.clone(),
         ))?;
     }
+    let mut approved_agent_root = active_session
+        .as_ref()
+        .and_then(SessionState::agent_root_path)
+        .filter(|root| root.is_dir());
     let raw_mode = RawModeSession::enable()?;
     let transcript_start_row = ui::print_banner(&current_model);
     raw_mode.set_output_scroll_region()?;
@@ -152,7 +158,7 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
     let mut queued = VecDeque::<String>::new();
     let mut pending_agent_task: Option<PendingAgentTask> = None;
     let mut confirmed_agent_task: Option<PendingAgentTask> = None;
-    let mut selected_root: Option<PathBuf> = None;
+    let mut selected_root: Option<PathBuf> = approved_agent_root.clone();
     let mut switch_to_agent = false;
     loop {
         let context_scan_ready = context_scan_started
@@ -216,6 +222,7 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
         }
         if prompt == "yes agent" {
             if let Some(task) = pending_agent_task.take() {
+                approve_session_agent_root(&task.root)?;
                 composer.print_above(&format!(
                     "agent task accepted\nroot: {}\npending: {}\n",
                     task.root.display(),
@@ -232,6 +239,7 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
                 &current_model,
                 effective_workspace_root(selected_root.as_deref()).as_deref(),
                 selected_root.is_some(),
+                approved_agent_root.as_deref(),
             )?)?;
             continue;
         }
@@ -240,6 +248,8 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
                 Some(root_arg) => match update_selected_root(root_arg) {
                     Ok(next_root) => {
                         selected_root = next_root;
+                        approved_agent_root = None;
+                        clear_session_agent_root()?;
                         pending_agent_task = None;
                         root_status(
                             effective_workspace_root(selected_root.as_deref()).as_deref(),
@@ -310,6 +320,13 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
                     composer.print_above(&path_boundary_clarify_text(&root, &path))?;
                     pending_agent_task = None;
                     continue;
+                }
+                if agent_root_matches(approved_agent_root.as_deref(), &root) {
+                    confirmed_agent_task = Some(PendingAgentTask {
+                        prompt: prompt.to_string(),
+                        root: root.clone(),
+                    });
+                    break;
                 }
                 pending_agent_task = Some(PendingAgentTask {
                     prompt: prompt.to_string(),
@@ -598,10 +615,18 @@ fn interactive_chat_status(
     model: &str,
     root: Option<&Path>,
     explicit_root: bool,
+    approved_agent_root: Option<&Path>,
 ) -> Result<String, String> {
     let mut output = interactive_status(model)?;
     output.push_str("mode: chat\n");
     output.push_str(&root_status(root, explicit_root));
+    match approved_agent_root {
+        Some(root) => output.push_str(&format!(
+            "agent-session: allowed\nagent-root: {}\n",
+            root.display()
+        )),
+        None => output.push_str("agent-session: confirm-required\n"),
+    }
     Ok(output)
 }
 
@@ -667,6 +692,36 @@ fn update_active_session_model(model: &str) -> Result<(), String> {
     };
     state.model = model.to_string();
     session::save(&state)
+}
+
+fn approve_session_agent_root(root: &Path) -> Result<(), String> {
+    let Some(mut state) = session::load()? else {
+        return Ok(());
+    };
+    state.approve_agent_root(root);
+    session::save(&state)
+}
+
+fn clear_session_agent_root() -> Result<(), String> {
+    let Some(mut state) = session::load()? else {
+        return Ok(());
+    };
+    state.clear_agent_root();
+    session::save(&state)
+}
+
+fn agent_root_matches(approved: Option<&Path>, root: &Path) -> bool {
+    let Some(approved) = approved else {
+        return false;
+    };
+    paths_equal(approved, root)
+}
+
+fn paths_equal(left: &Path, right: &Path) -> bool {
+    match (left.canonicalize(), right.canonicalize()) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => left == right,
+    }
 }
 
 #[cfg(test)]

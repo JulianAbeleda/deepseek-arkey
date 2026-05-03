@@ -17,6 +17,8 @@ pub struct SessionState {
     pub model: String,
     pub updated_at: u64,
     pub messages: Vec<Message>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_root: Option<String>,
 }
 
 impl SessionState {
@@ -27,6 +29,7 @@ impl SessionState {
             model: model.into(),
             updated_at: unix_timestamp(),
             messages: Vec::new(),
+            agent_root: None,
         }
     }
 
@@ -35,6 +38,20 @@ impl SessionState {
         self.messages.push(assistant_message(assistant));
         self.updated_at = unix_timestamp();
         self.cap_history();
+    }
+
+    pub fn approve_agent_root(&mut self, root: &Path) {
+        self.agent_root = Some(root.display().to_string());
+        self.updated_at = unix_timestamp();
+    }
+
+    pub fn clear_agent_root(&mut self) {
+        self.agent_root = None;
+        self.updated_at = unix_timestamp();
+    }
+
+    pub fn agent_root_path(&self) -> Option<PathBuf> {
+        self.agent_root.as_ref().map(PathBuf::from)
     }
 
     fn cap_history(&mut self) {
@@ -142,6 +159,7 @@ mod tests {
         assert_eq!(loaded.provider, PROVIDER);
         assert_eq!(loaded.name, DEFAULT_SESSION_NAME);
         assert_eq!(loaded.model, "model-a");
+        assert_eq!(loaded.agent_root, None);
         assert_eq!(loaded.messages.len(), 2);
         assert_eq!(loaded.messages[0].role, "user");
         assert_eq!(loaded.messages[0].content, "hello");
@@ -151,6 +169,41 @@ mod tests {
         assert!(delete_path(&path).unwrap());
         assert!(load_from_path(&path).unwrap().is_none());
         assert!(!delete_path(&path).unwrap());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn stores_agent_root_permission() {
+        let root = std::env::temp_dir().join("deepseek-agent-root");
+        let mut state = SessionState::new(PROVIDER, DEFAULT_SESSION_NAME, "model-a");
+
+        state.approve_agent_root(&root);
+        assert_eq!(state.agent_root_path().as_deref(), Some(root.as_path()));
+
+        state.clear_agent_root();
+        assert_eq!(state.agent_root_path(), None);
+    }
+
+    #[test]
+    fn saves_and_loads_agent_root_permission() {
+        let root = std::env::temp_dir().join(format!(
+            "deepseek-session-agent-root-test-{}",
+            std::process::id()
+        ));
+        let path = root.join("active-session.json");
+        let approved_root = root.join("workspace");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&approved_root).unwrap();
+
+        let mut state = SessionState::new(PROVIDER, DEFAULT_SESSION_NAME, "model-a");
+        state.approve_agent_root(&approved_root);
+        save_to_path(&path, &state).unwrap();
+
+        let loaded = load_from_path(&path).unwrap().unwrap();
+        assert_eq!(
+            loaded.agent_root_path().as_deref(),
+            Some(approved_root.as_path())
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 }
