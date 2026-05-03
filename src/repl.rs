@@ -282,6 +282,14 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
             composer.print_above(&no_pending_agent_task_text())?;
             continue;
         }
+        if is_agent_task_cancel_choice(prompt) {
+            if pending_agent_task.take().is_some() {
+                composer.print_above("agent task cancelled\nmode: chat\n")?;
+            } else {
+                composer.print_above(&no_pending_agent_task_text())?;
+            }
+            continue;
+        }
         if prompt == "/status" {
             composer.print_above(&interactive_chat_status(
                 &current_model,
@@ -595,7 +603,7 @@ fn context_scan_status(started: Instant) -> String {
 
 fn agent_route_confirmation(root: &Path) -> String {
     format!(
-        "route: agent task\nroot: {}\nRun this as an agent task?\nType yes agent to continue, or /chat to keep chatting.\n",
+        "route: agent task\nroot: {}\nRun this as an agent task?\nType y to continue, n to cancel, or /chat to keep chatting.\n",
         root.display()
     )
 }
@@ -609,7 +617,11 @@ fn no_pending_agent_task_text() -> String {
 }
 
 fn is_agent_task_choice(prompt: &str) -> bool {
-    matches!(prompt, "yes agent" | "agent task" | "agent")
+    matches!(prompt, "y" | "yes" | "yes agent" | "agent task" | "agent")
+}
+
+fn is_agent_task_cancel_choice(prompt: &str) -> bool {
+    matches!(prompt, "n" | "no")
 }
 
 fn parse_agent_task_command(prompt: &str) -> Option<&str> {
@@ -875,8 +887,9 @@ fn paths_equal(left: &Path, right: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        cap_interactive_memory, context_scan_status, is_agent_task_choice, is_end_command,
-        is_exit_command, no_pending_agent_task_text, parse_agent_task_command, parse_debug_command,
+        agent_route_confirmation, cap_interactive_memory, context_scan_status,
+        is_agent_task_cancel_choice, is_agent_task_choice, is_end_command, is_exit_command,
+        no_pending_agent_task_text, parse_agent_task_command, parse_debug_command,
         parse_model_command, task_root_for_prompt,
     };
     use crate::provider;
@@ -942,11 +955,30 @@ mod tests {
 
     #[test]
     fn agent_task_choice_accepts_natural_confirmation_words() {
+        assert!(is_agent_task_choice("y"));
+        assert!(is_agent_task_choice("yes"));
         assert!(is_agent_task_choice("yes agent"));
         assert!(is_agent_task_choice("agent task"));
         assert!(is_agent_task_choice("agent"));
+        assert!(!is_agent_task_choice("n"));
         assert!(!is_agent_task_choice("/agent"));
         assert!(!is_agent_task_choice("agent task please"));
+    }
+
+    #[test]
+    fn agent_task_cancel_choice_accepts_short_negative_words() {
+        assert!(is_agent_task_cancel_choice("n"));
+        assert!(is_agent_task_cancel_choice("no"));
+        assert!(!is_agent_task_cancel_choice("y"));
+        assert!(!is_agent_task_cancel_choice("no thanks"));
+    }
+
+    #[test]
+    fn agent_route_confirmation_points_to_short_choices() {
+        let response = agent_route_confirmation(Path::new("/tmp/workspace"));
+        assert!(response.contains("Type y to continue"));
+        assert!(response.contains("n to cancel"));
+        assert!(!response.contains("yes agent"));
     }
 
     #[test]

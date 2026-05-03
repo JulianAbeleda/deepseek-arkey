@@ -211,6 +211,11 @@ def duplicate_rows(rows):
     return duplicates
 
 
+def chat_prompt_visible(screen, name):
+    text = screen.all_text()
+    return f"{name} [" in text and "›" in text and "agent ›" not in text
+
+
 def with_temp_home(name):
     home = tempfile.mkdtemp(prefix=f"{name}-scope-")
     return home
@@ -477,7 +482,7 @@ def section_C(binary, name, model):
 # D. Routed-task confirmation
 # =========================================================================
 EXPECTED_ROUTE_TEXT = (
-    "Run this as an agent task? Type yes agent to continue, or /chat to keep chatting."
+    "Run this as an agent task? Type y to continue, n to cancel, or /chat to keep chatting."
 )
 def section_D(binary, name, model):
     print(f"\nD. Routed-task confirmation")
@@ -497,30 +502,30 @@ def section_D(binary, name, model):
         if "route: agent task" not in text:
             record("D", "D1", "exact route confirmation block",
                    "N/A", "no `route: agent task` produced - routed confirmation not yet implemented")
-            record("D", "D2", "after `yes agent`, runs task and returns to chat dock", "N/A", "")
+            record("D", "D2", "after `y`, runs task and returns to chat dock", "N/A", "")
         else:
             saw_root = "root:" in text
             compact = compact_text(text)
             saw_prompt = all(
                 part in compact
-                for part in ("Run this as an agent task", "yes agent", "/chat")
+                for part in ("Run this as an agent task", "Type y", "n to cancel", "/chat")
             )
             record("D", "D1", "exact route confirmation block",
                    "PASS" if (saw_root and saw_prompt) else "FAIL",
                    f"saw_root={saw_root} saw_prompt_text={saw_prompt}\n"
                    f"text_excerpt={text}")
-            os.write(master, b"yes agent\r")
+            os.write(master, b"y\r")
             saw_task_output = wait_for(
                 lambda: ("agent task accepted" in screen.all_text())
                 or ("agent task:" in screen.all_text()),
                 master, screen, timeout=4.0)
             wait_for(lambda: ("returning to chat" in screen.all_text())
                               and screen.scroll_region_set
-                              and "›" in screen.bottom(),
+                              and chat_prompt_visible(screen, name),
                      master, screen, timeout=8.0)
             drain(master, screen, 0.4)
-            returned_to_chat = screen.scroll_region_set and "›" in screen.bottom() and "agent" not in screen.bottom()
-            record("D", "D2", "after `yes agent`, runs task and returns to chat dock",
+            returned_to_chat = screen.scroll_region_set and chat_prompt_visible(screen, name)
+            record("D", "D2", "after `y`, runs task and returns to chat dock",
                    "PASS" if (returned_to_chat and saw_task_output) else "FAIL",
                    f"scroll_region_set={screen.scroll_region_set}\nbottom={screen.bottom()!r}")
     finally:
