@@ -87,12 +87,15 @@ fn is_task_prompt(prompt: &str, has_recent_task_context: bool) -> bool {
         "rename",
         "test",
         "build",
+        "read",
+        "scan",
+        "inspect",
     ];
     let first = prompt.split_whitespace().next().unwrap_or("");
     if task_verbs.contains(&first) {
         return true;
     }
-    if has_task_phrase(prompt) || has_declarative_task_pattern(prompt) {
+    if has_task_phrase(prompt) || has_scoped_problem_statement(prompt) {
         return true;
     }
     has_recent_task_context
@@ -127,21 +130,35 @@ fn has_task_phrase(prompt: &str) -> bool {
     .any(|phrase| starts_with_phrase(prompt, phrase))
 }
 
-fn has_declarative_task_pattern(prompt: &str) -> bool {
-    let has_problem_pattern = [
+fn has_scoped_problem_statement(prompt: &str) -> bool {
+    let has_problem = [
         "is broken",
         "is failing",
+        "are failing",
         "has errors",
+        "have errors",
         "needs cleanup",
+        "needs refactor",
+        "needs fixing",
+        "needs to be fixed",
+        "is not working",
+        "are not working",
+        "does not work",
+        "doesnt work",
+        "don t work",
+        "won t build",
+        "will not build",
+        "is crashing",
+        "keeps crashing",
         "is a mess",
         "are a mess",
     ]
     .iter()
     .any(|pattern| prompt.contains(pattern));
-    has_problem_pattern && has_scope_noun(prompt)
+    has_problem && references_task_scope(prompt)
 }
 
-fn has_scope_noun(prompt: &str) -> bool {
+fn references_task_scope(prompt: &str) -> bool {
     [
         "this repo",
         "this project",
@@ -149,12 +166,22 @@ fn has_scope_noun(prompt: &str) -> bool {
         "the repo",
         "the project",
         "the codebase",
+        "my repo",
+        "my project",
+        "my codebase",
         "my files",
         "these files",
         "the config",
         "config",
         "the code",
         "my code",
+        "the tests",
+        "tests",
+        "test suite",
+        "the build",
+        "build",
+        "the app",
+        "app",
         "desktop",
         "downloads",
         "documents",
@@ -306,6 +333,14 @@ mod tests {
             Intent::Chat
         );
         assert_eq!(
+            classify_intent("can you explain this repo structure?", false, Some(root)),
+            Intent::Chat
+        );
+        assert_eq!(
+            classify_intent("what is a config file?", false, Some(root)),
+            Intent::Chat
+        );
+        assert_eq!(
             classify_intent("why is my code broken?", false, Some(root)),
             Intent::Chat
         );
@@ -355,6 +390,14 @@ mod tests {
             classify_intent("review this project", false, None),
             Intent::Clarify
         );
+        assert_eq!(
+            classify_intent("my files are a mess", false, None),
+            Intent::Clarify
+        );
+        assert_eq!(
+            classify_intent("the tests are failing", false, None),
+            Intent::Clarify
+        );
     }
 
     #[test]
@@ -372,6 +415,26 @@ mod tests {
             classify_intent("review this project", false, Some(root)),
             Intent::Task
         );
+        assert_eq!(
+            classify_intent("go through the codebase", false, Some(root)),
+            Intent::Task
+        );
+        assert_eq!(
+            classify_intent("my files are a mess", false, Some(root)),
+            Intent::Task
+        );
+        assert_eq!(
+            classify_intent("the tests are failing", false, Some(root)),
+            Intent::Task
+        );
+        assert_eq!(
+            classify_intent("the app is not working", false, Some(root)),
+            Intent::Task
+        );
+        assert_eq!(
+            classify_intent("the build won't build", false, Some(root)),
+            Intent::Task
+        );
     }
 
     #[test]
@@ -384,6 +447,7 @@ mod tests {
             classify_intent("scan my desktop", false, None),
             Intent::Task
         );
+        assert_eq!(classify_intent("scan desktop", false, None), Intent::Task);
         assert_eq!(
             classify_intent("look through downloads", false, None),
             Intent::Task
