@@ -24,7 +24,6 @@ pub struct DockedComposer {
     history: Vec<String>,
     history_index: Option<usize>,
     stream_buffer: String,
-    stream_rendered_lines: Vec<String>,
     status_active: bool,
     transcript_start_row: Option<u16>,
     transcript_cursor_row: Option<u16>,
@@ -164,7 +163,6 @@ impl DockedComposer {
             history: Vec::new(),
             history_index: None,
             stream_buffer: String::new(),
-            stream_rendered_lines: Vec::new(),
             status_active: false,
             transcript_start_row: None,
             transcript_cursor_row: None,
@@ -316,49 +314,41 @@ impl DockedComposer {
     }
 
     pub fn stream_above(&mut self, text: &str) -> Result<(), String> {
-        self.stream_buffer.push_str(text);
-        let lines = wrap_visible_lines(&self.stream_buffer, terminal_width());
         let mut stdout = io::stdout();
-        self.move_to_transcript_cursor(&mut stdout)?;
+        if self.stream_buffer.is_empty() {
+            self.move_to_transcript_cursor(&mut stdout)?;
+        }
         if self.status_active {
             clear_transient_rows(&mut stdout, self.transcript_row(), 1)?;
+            self.move_to_transcript_cursor(&mut stdout)?;
+            self.status_active = false;
         }
-        repaint_stream_lines_from_row(
-            &mut stdout,
-            self.transcript_row(),
-            &self.stream_rendered_lines,
-            &lines,
-        )?;
+        write_raw_lines(&mut stdout, text)?;
         stdout.flush().map_err(|err| err.to_string())?;
-        self.status_active = false;
-        self.stream_rendered_lines = visible_lines_above_dock(&lines);
+        self.stream_buffer.push_str(text);
+        self.advance_transcript_text(text);
         self.render_preserving_cursor()
     }
 
     pub fn finish_stream(&mut self) -> Result<(), String> {
-        let stream = std::mem::take(&mut self.stream_buffer);
-        let rows = self.transient_rows();
+        let stream_had_content = !self.stream_buffer.is_empty();
         let mut stdout = io::stdout();
-        clear_transient_rows(&mut stdout, self.transcript_row(), rows)?;
-        self.move_to_transcript_cursor(&mut stdout)?;
-        execute!(stdout, MoveToColumn(0), Clear(ClearType::CurrentLine))
-            .map_err(|err| err.to_string())?;
-        write_raw_lines(&mut stdout, &stream)?;
-        if !stream.is_empty() && !stream.ends_with('\n') {
-            write!(stdout, "\r\n").map_err(|err| err.to_string())?;
+        if !stream_had_content {
+            self.reset_stream_state();
+            return self.render();
         }
-        stdout.flush().map_err(|err| err.to_string())?;
-        self.advance_transcript_text(&stream);
-        if !stream.is_empty() && !stream.ends_with('\n') {
+        self.move_to_transcript_cursor(&mut stdout)?;
+        if !self.stream_buffer.ends_with('\n') {
+            write!(stdout, "\r\n").map_err(|err| err.to_string())?;
             self.advance_transcript_text("\n");
         }
+        stdout.flush().map_err(|err| err.to_string())?;
         self.reset_stream_state();
         self.render()
     }
 
     fn reset_stream_state(&mut self) {
         self.stream_buffer.clear();
-        self.stream_rendered_lines.clear();
         self.status_active = false;
     }
 
@@ -366,16 +356,6 @@ impl DockedComposer {
         let had_status = self.status_active;
         self.reset_stream_state();
         had_status
-    }
-
-    fn transient_rows(&self) -> usize {
-        if !self.stream_rendered_lines.is_empty() {
-            self.stream_rendered_lines.len()
-        } else if self.status_active {
-            1
-        } else {
-            0
-        }
     }
 
     fn transcript_row(&self) -> u16 {
@@ -662,85 +642,6 @@ fn clear_transient_rows(stdout: &mut io::Stdout, start: u16, rows: usize) -> Res
     Ok(())
 }
 
-fn repaint_lines_from_row(
-    stdout: &mut io::Stdout,
-    start: u16,
-    lines: &[String],
-) -> Result<(), String> {
-    let bottom = output_row();
-    let available = bottom.saturating_sub(start) as usize + 1;
-    let visible_lines = visible_tail(lines, available);
-    repaint_lines_at(stdout, start, visible_lines)
-}
-
-fn repaint_stream_lines_from_row(
-    stdout: &mut io::Stdout,
-    start: u16,
-    previous: &[String],
-    lines: &[String],
-) -> Result<(), String> {
-    let bottom = output_row();
-    let available = bottom.saturating_sub(start) as usize + 1;
-    let visible_lines = visible_tail(lines, available);
-    if stream_repaint_needs_full_repaint(previous, visible_lines) {
-        clear_transient_rows(stdout, start, previous.len().max(visible_lines.len()))?;
-        return repaint_lines_from_row(stdout, start, lines);
-    }
-
-    let unchanged = common_prefix_len(previous, visible_lines);
-    if unchanged == visible_lines.len() {
-        return Ok(());
-    }
-
-    repaint_lines_at(
-        stdout,
-        start.saturating_add(unchanged as u16),
-        &visible_lines[unchanged..],
-    )
-}
-
-fn stream_repaint_needs_full_repaint(previous: &[String], visible_lines: &[String]) -> bool {
-    previous.is_empty() || previous.len() != visible_lines.len()
-}
-
-fn repaint_lines_at(stdout: &mut io::Stdout, start: u16, lines: &[String]) -> Result<(), String> {
-    for (index, line) in lines.iter().enumerate() {
-        execute!(
-            stdout,
-            MoveTo(0, start + index as u16),
-            Clear(ClearType::CurrentLine)
-        )
-        .map_err(|err| err.to_string())?;
-        write!(stdout, "{line}").map_err(|err| err.to_string())?;
-    }
-    Ok(())
-}
-
-fn visible_tail(lines: &[String], max_rows: usize) -> &[String] {
-    if lines.len() > max_rows {
-        &lines[lines.len() - max_rows..]
-    } else {
-        lines
-    }
-}
-
-fn visible_lines_above_dock(lines: &[String]) -> Vec<String> {
-    let dock = dock_row();
-    let max_rows = dock as usize;
-    if lines.len() > max_rows {
-        lines[lines.len() - max_rows..].to_vec()
-    } else {
-        lines.to_vec()
-    }
-}
-
-fn common_prefix_len(left: &[String], right: &[String]) -> usize {
-    left.iter()
-        .zip(right)
-        .take_while(|(left, right)| left == right)
-        .count()
-}
-
 fn set_output_scroll_region(reserved_bottom_lines: usize) -> Result<(), String> {
     let rows = terminal_rows();
     let reserved = reserved_bottom_lines.max(1) as u16;
@@ -808,36 +709,6 @@ fn visible_suffix(text: &str, width: usize) -> String {
         }
     }
     out
-}
-
-fn wrap_visible_lines(text: &str, width: usize) -> Vec<String> {
-    let width = width.max(1);
-    let mut lines = Vec::new();
-    let mut line = String::new();
-    let mut col = 0usize;
-    let mut chars = text.chars().peekable();
-    while let Some(ch) = chars.next() {
-        if let Some(sequence) = take_ansi_sequence(ch, &mut chars) {
-            line.push_str(&sequence);
-            continue;
-        }
-        if ch == '\n' {
-            lines.push(std::mem::take(&mut line));
-            col = 0;
-            continue;
-        }
-        let width_of_char = char_display_width(ch);
-        if col > 0 && col + width_of_char > width {
-            lines.push(std::mem::take(&mut line));
-            col = 0;
-        }
-        line.push(ch);
-        col += width_of_char;
-    }
-    if !line.is_empty() || lines.is_empty() {
-        lines.push(line);
-    }
-    lines
 }
 
 enum VisibleToken {
@@ -935,9 +806,8 @@ fn is_wide_char(ch: char) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        buffer_prefix, common_prefix_len, insert_at, parse_forced_terminal_size, remove_at,
-        remove_before, stream_repaint_needs_full_repaint, visible_len, visible_suffix,
-        wrap_visible_lines, DockedComposer,
+        buffer_prefix, insert_at, parse_forced_terminal_size, remove_at, remove_before,
+        visible_len, visible_suffix, DockedComposer,
     };
 
     #[test]
@@ -997,14 +867,11 @@ mod tests {
         let mut composer = DockedComposer::new("prompt › ".to_string());
         composer.buffer = "draft".to_string();
         composer.stream_buffer = "hello".to_string();
-        composer.stream_rendered_lines = vec!["hello".to_string()];
         assert_eq!(composer.stream_buffer, "hello");
-        assert_eq!(composer.stream_rendered_lines, vec!["hello"]);
         assert!(!composer.status_active);
         composer.status_active = true;
         composer.reset_stream_state();
         assert!(composer.stream_buffer.is_empty());
-        assert!(composer.stream_rendered_lines.is_empty());
         assert!(!composer.status_active);
         assert_eq!(composer.buffer, "draft");
     }
@@ -1019,33 +886,15 @@ mod tests {
     }
 
     #[test]
-    fn wraps_stream_lines_to_terminal_width() {
-        assert_eq!(wrap_visible_lines("abcdef", 3), vec!["abc", "def"]);
-        assert_eq!(wrap_visible_lines("ab\ncd", 10), vec!["ab", "cd"]);
-        assert_eq!(wrap_visible_lines("ab界", 3), vec!["ab", "界"]);
-        assert_eq!(
-            wrap_visible_lines("\x1b[31mred\x1b[0m!", 4),
-            vec!["\x1b[31mred\x1b[0m!"]
-        );
-    }
-
-    #[test]
-    fn stream_repaint_can_keep_unchanged_prefix() {
-        let previous = vec!["first".to_string(), "partial".to_string()];
-        let next = vec!["first".to_string(), "partial update".to_string()];
-
-        assert!(!stream_repaint_needs_full_repaint(&previous, &next));
-        assert_eq!(common_prefix_len(&previous, &next), 1);
-        assert_eq!(common_prefix_len(&next, &next), 2);
-    }
-
-    #[test]
-    fn stream_repaint_full_repaints_when_visible_row_count_changes() {
-        let previous = vec!["first".to_string()];
-        let next = vec!["first".to_string(), "second".to_string()];
-
-        assert!(stream_repaint_needs_full_repaint(&[], &next));
-        assert!(stream_repaint_needs_full_repaint(&previous, &next));
+    fn sequential_stream_cursor_advances_with_text() {
+        let mut composer = DockedComposer::new("prompt › ".to_string());
+        composer.set_transcript_start_row(Some(0));
+        composer.advance_transcript_text("abc");
+        assert_eq!(composer.transcript_cursor_row, Some(0));
+        assert_eq!(composer.transcript_cursor_column, 3);
+        composer.advance_transcript_text("\ndef");
+        assert_eq!(composer.transcript_cursor_row, Some(1));
+        assert_eq!(composer.transcript_cursor_column, 3);
     }
 
     #[test]
