@@ -204,7 +204,7 @@ def spawn_chat(binary, env, cwd):
 def run_prompt(binary, env, name, cwd, prompt, setup_commands=None):
     master, proc, screen = spawn_chat(binary, env, cwd)
     try:
-        wait_for(master, screen, lambda: name in screen.bottom(), "initial prompt")
+        wait_for(master, screen, lambda: name in screen.text() and "›" in screen.text(), "initial prompt")
         for command in setup_commands or []:
             os.write(master, (command + "\r").encode())
             wait_for(master, screen, lambda: command.split()[0] in screen.text(), command)

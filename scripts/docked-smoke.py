@@ -28,13 +28,21 @@ class Screen:
         self.scroll_bottom = rows - 1
         self.history = []
         self.decoder = codecs.getincrementaldecoder("utf-8")("ignore")
+        self.pending_escape = ""
 
     def feed(self, data: str):
+        if self.pending_escape:
+            data = self.pending_escape + data
+            self.pending_escape = ""
         index = 0
         while index < len(data):
             ch = data[index]
             if ch == "\x1b":
-                index = self._escape(data, index + 1)
+                next_index = self._escape(data, index + 1)
+                if next_index is None:
+                    self.pending_escape = data[index:]
+                    break
+                index = next_index + 1
                 continue
             if ch == "\r":
                 self.col = 0
@@ -75,18 +83,22 @@ class Screen:
 
     def _escape(self, data: str, index: int) -> int:
         if index >= len(data):
-            return index
+            return None
         if data[index] != "[":
-            return index
+            return min(len(data) - 1, index)
         index += 1
         start = index
         while index < len(data) and not ("@" <= data[index] <= "~"):
             index += 1
         if index >= len(data):
-            return index
+            return None
         params = data[start:index]
         final = data[index]
-        nums = [int(part) if part else 0 for part in params.split(";") if part != "?25"]
+        nums = []
+        for part in params.split(";"):
+            if part in ("", "?25") or part.startswith("?"):
+                continue
+            nums.append(int(part))
         if final == "H" or final == "f":
             row = nums[0] if len(nums) > 0 and nums[0] else 1
             col = nums[1] if len(nums) > 1 and nums[1] else 1
@@ -196,8 +208,24 @@ def main():
                 proc.wait(timeout=2)
                 print(f"{args.name} switch docked smoke: ok")
                 return
-            os.write(master, b"draft")
-            wait_for(lambda: "dra" in screen.bottom() and "t" in screen.bottom(), master, screen, "editable draft in dock")
+            os.write(master, b"/sta\t")
+            wait_for(lambda: "/status" in screen.bottom(), master, screen, "slash command completion")
+            os.write(master, b"\x03")
+            wait_for(lambda: screen.bottom().endswith("›"), master, screen, "clear completed slash command")
+            os.write(master, b"one two")
+            wait_for(lambda: "one two" in screen.bottom(), master, screen, "editable draft in dock")
+            os.write(master, b"\x1b[1;5D")
+            os.write(master, b"X")
+            wait_for(lambda: "one Xtwo" in screen.bottom(), master, screen, "ctrl-left word movement")
+            os.write(master, b"\x03")
+            wait_for(lambda: screen.bottom().endswith("›"), master, screen, "clear word movement draft")
+            os.write(master, b"\x1b[200~line one\nline two\x1b[201~")
+            wait_for(
+                lambda: "line one" in screen.above_bottom() and "line two" in screen.bottom(),
+                master,
+                screen,
+                "bracketed paste multiline insert",
+            )
             os.write(master, b"\r")
             wait_for(lambda: screen.contains("context: scanning"), master, screen, "ContextScan row")
             wait_for(lambda: screen.contains(response_fragment), master, screen, "ResponseRender", timeout=10.0)
