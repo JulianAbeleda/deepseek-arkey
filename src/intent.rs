@@ -398,6 +398,10 @@ mod tests {
             classify_intent("the tests are failing", false, None),
             Intent::Clarify
         );
+        assert_eq!(
+            classify_intent("scan the config", false, None),
+            Intent::Clarify
+        );
     }
 
     #[test]
@@ -409,6 +413,22 @@ mod tests {
         );
         assert_eq!(
             classify_intent("this repo needs cleanup", false, Some(root)),
+            Intent::Task
+        );
+        assert_eq!(
+            classify_intent("the repo is broken", false, Some(root)),
+            Intent::Task
+        );
+        assert_eq!(
+            classify_intent("the project is failing", false, Some(root)),
+            Intent::Task
+        );
+        assert_eq!(
+            classify_intent("the codebase has errors", false, Some(root)),
+            Intent::Task
+        );
+        assert_eq!(
+            classify_intent("the project needs cleanup", false, Some(root)),
             Intent::Task
         );
         assert_eq!(
@@ -448,6 +468,10 @@ mod tests {
             Intent::Task
         );
         assert_eq!(classify_intent("scan desktop", false, None), Intent::Task);
+        assert_eq!(
+            classify_intent("scan the downloads", false, None),
+            Intent::Task
+        );
         assert_eq!(
             classify_intent("look through downloads", false, None),
             Intent::Task
