@@ -220,7 +220,7 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
             switch_to_agent = true;
             break;
         }
-        if prompt == "yes agent" {
+        if is_agent_task_choice(prompt) {
             if let Some(task) = pending_agent_task.take() {
                 approve_session_agent_root(&task.root)?;
                 composer.print_above(&format!(
@@ -231,7 +231,7 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
                 confirmed_agent_task = Some(task);
                 break;
             }
-            composer.print_above("no pending agent task\n")?;
+            composer.print_above(&no_pending_agent_task_text())?;
             continue;
         }
         if prompt == "/status" {
@@ -546,6 +546,14 @@ fn clarify_route_text() -> String {
     "route: unclear\nDo you want chat analysis or an agent task?\nType /chat to discuss, /root <path> to choose a workspace, or /agent <task> to execute.\n".to_string()
 }
 
+fn no_pending_agent_task_text() -> String {
+    "route: unclear\nNo pending agent task.\nType /root <path> to choose a workspace, then repeat the task; or type /agent <task> to run one directly.\n".to_string()
+}
+
+fn is_agent_task_choice(prompt: &str) -> bool {
+    matches!(prompt, "yes agent" | "agent task" | "agent")
+}
+
 fn task_root_for_prompt(prompt: &str, selected_root: Option<&Path>) -> Option<PathBuf> {
     infer_natural_root(prompt)
         .or_else(|| selected_root.map(Path::to_path_buf))
@@ -734,8 +742,8 @@ fn paths_equal(left: &Path, right: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        context_scan_status, is_end_command, is_exit_command, parse_debug_command,
-        parse_model_command, task_root_for_prompt,
+        context_scan_status, is_agent_task_choice, is_end_command, is_exit_command,
+        no_pending_agent_task_text, parse_debug_command, parse_model_command, task_root_for_prompt,
     };
     use crate::runtime;
     use std::path::{Path, PathBuf};
@@ -795,6 +803,23 @@ mod tests {
             task_root_for_prompt("fix this repo", Some(selected)),
             Some(selected.to_path_buf())
         );
+    }
+
+    #[test]
+    fn agent_task_choice_accepts_natural_confirmation_words() {
+        assert!(is_agent_task_choice("yes agent"));
+        assert!(is_agent_task_choice("agent task"));
+        assert!(is_agent_task_choice("agent"));
+        assert!(!is_agent_task_choice("/agent"));
+        assert!(!is_agent_task_choice("agent task please"));
+    }
+
+    #[test]
+    fn no_pending_agent_task_text_points_to_root_or_direct_agent() {
+        let response = no_pending_agent_task_text();
+        assert!(response.contains("No pending agent task"));
+        assert!(response.contains("/root <path>"));
+        assert!(response.contains("/agent <task>"));
     }
 
     #[test]

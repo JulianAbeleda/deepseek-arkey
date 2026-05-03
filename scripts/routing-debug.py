@@ -301,6 +301,7 @@ def main():
             (home, "my desktop files are a mess", "agent", desktop, None),
             (home, "read this function", "clarify", None, None),
             (home, "the config is broken", "clarify", None, None),
+            (home, "agent task", "clarify", None, None),
             (workspace, "the config is broken", "agent", workspace, None),
             (workspace, "this repo needs cleanup", "agent", workspace, None),
             (workspace, "review this project", "agent", workspace, None),
