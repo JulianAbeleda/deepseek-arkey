@@ -23,10 +23,11 @@ pub(crate) fn classify_intent(
     if is_chat_prompt(&normalized) {
         return Intent::Chat;
     }
-    if is_task_prompt(&normalized, has_recent_task_context)
-        || references_workspace_file(prompt, workspace_root)
-    {
-        if workspace_root.is_none() {
+    let is_task = is_task_prompt(&normalized, has_recent_task_context)
+        || references_workspace_file(prompt, workspace_root);
+    let has_natural_root = references_natural_location(prompt);
+    if is_task || has_natural_root {
+        if workspace_root.is_none() && !has_natural_root {
             return Intent::Clarify;
         }
         return Intent::Task;
@@ -86,6 +87,9 @@ fn is_task_prompt(prompt: &str, has_recent_task_context: bool) -> bool {
         "rename",
         "test",
         "build",
+        "read",
+        "scan",
+        "inspect",
     ];
     let first = prompt.split_whitespace().next().unwrap_or("");
     if task_verbs.contains(&first) {
@@ -102,6 +106,13 @@ fn is_task_prompt(prompt: &str, has_recent_task_context: bool) -> bool {
         ]
         .iter()
         .any(|phrase| prompt.starts_with(phrase))
+}
+
+fn references_natural_location(prompt: &str) -> bool {
+    let lowered = prompt.to_lowercase();
+    ["desktop", "downloads", "documents"]
+        .iter()
+        .any(|loc| lowered.contains(loc))
 }
 
 fn references_workspace_file(prompt: &str, workspace_root: Option<&Path>) -> bool {
@@ -253,6 +264,50 @@ mod tests {
         );
         assert_eq!(
             classify_intent("fix the README in this directory", false, None),
+            Intent::Clarify
+        );
+    }
+
+    #[test]
+    fn natural_location_phrases_route_to_task() {
+        assert_eq!(
+            classify_intent("read my files on my desktop", false, None),
+            Intent::Task
+        );
+        assert_eq!(
+            classify_intent("scan my desktop", false, None),
+            Intent::Task
+        );
+        assert_eq!(
+            classify_intent("look through downloads", false, None),
+            Intent::Task
+        );
+        assert_eq!(
+            classify_intent("inspect my documents folder", false, None),
+            Intent::Task
+        );
+    }
+
+    #[test]
+    fn what_questions_stay_chat_even_with_natural_locations() {
+        assert_eq!(
+            classify_intent("what files are on my desktop?", false, None),
+            Intent::Chat
+        );
+        assert_eq!(
+            classify_intent("how do I find files in downloads?", false, None),
+            Intent::Chat
+        );
+    }
+
+    #[test]
+    fn read_scan_inspect_without_natural_root_clarify_when_no_workspace() {
+        assert_eq!(
+            classify_intent("read this function", false, None),
+            Intent::Clarify
+        );
+        assert_eq!(
+            classify_intent("inspect the config", false, None),
             Intent::Clarify
         );
     }

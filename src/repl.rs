@@ -13,8 +13,8 @@ use crate::runtime::{self, RuntimeBackend};
 use crate::session::{self, SessionState};
 use crate::ui;
 use crate::workspace::{
-    effective_workspace_root, parse_root_command, path_boundary_clarify_text, root_status,
-    update_selected_root,
+    effective_workspace_root, infer_natural_root, parse_root_command, path_boundary_clarify_text,
+    root_status, update_selected_root,
 };
 
 enum TurnEvent {
@@ -311,7 +311,11 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
         ) {
             Intent::Chat => {}
             Intent::Task => {
-                let Some(root) = effective_workspace_root(selected_root.as_deref()) else {
+                let root = selected_root
+                    .clone()
+                    .or_else(|| infer_natural_root(prompt))
+                    .or_else(|| effective_workspace_root(None));
+                let Some(root) = root else {
                     composer.print_above(&clarify_route_text())?;
                     pending_agent_task = None;
                     continue;

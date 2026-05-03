@@ -13,6 +13,21 @@ pub(crate) fn effective_workspace_root(selected_root: Option<&Path>) -> Option<P
     selected_root.map(Path::to_path_buf).or_else(workspace_root)
 }
 
+pub(crate) fn infer_natural_root(prompt: &str) -> Option<PathBuf> {
+    let home = std::env::var_os("HOME").map(PathBuf::from)?;
+    let lowered = prompt.to_lowercase();
+    if lowered.contains("desktop") {
+        return Some(home.join("Desktop"));
+    }
+    if lowered.contains("downloads") {
+        return Some(home.join("Downloads"));
+    }
+    if lowered.contains("documents") {
+        return Some(home.join("Documents"));
+    }
+    None
+}
+
 pub(crate) fn parse_root_command(prompt: &str) -> Option<Option<&str>> {
     if prompt == "/root" {
         return Some(None);
@@ -93,6 +108,27 @@ mod tests {
         assert!(root_status(Some(root), true).contains("root-source: explicit"));
         assert!(root_status(Some(root), false).contains("root-source: cwd"));
         assert!(root_status(None, false).contains("root: unset"));
+    }
+
+    #[test]
+    fn infers_natural_roots_from_prompt() {
+        use super::infer_natural_root;
+        let home = std::env::var_os("HOME")
+            .map(std::path::PathBuf::from)
+            .unwrap();
+        assert_eq!(
+            infer_natural_root("read my files on my desktop"),
+            Some(home.join("Desktop"))
+        );
+        assert_eq!(
+            infer_natural_root("scan my downloads"),
+            Some(home.join("Downloads"))
+        );
+        assert_eq!(
+            infer_natural_root("inspect documents"),
+            Some(home.join("Documents"))
+        );
+        assert_eq!(infer_natural_root("fix main.rs"), None);
     }
 
     #[test]
