@@ -25,6 +25,12 @@ pub(crate) fn infer_natural_root(prompt: &str) -> Option<PathBuf> {
     if lowered.contains("documents") {
         return Some(home.join("Documents"));
     }
+    if lowered.contains("env folder")
+        || lowered.contains("env directory")
+        || lowered.contains("my env")
+    {
+        return Some(home.join("env"));
+    }
     None
 }
 
@@ -127,6 +133,10 @@ mod tests {
         assert_eq!(
             infer_natural_root("inspect documents"),
             Some(home.join("Documents"))
+        );
+        assert_eq!(
+            infer_natural_root("go to my env folder"),
+            Some(home.join("env"))
         );
         assert_eq!(infer_natural_root("fix main.rs"), None);
     }

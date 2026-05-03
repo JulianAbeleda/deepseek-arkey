@@ -114,6 +114,7 @@ fn is_task_prompt(prompt: &str, has_recent_task_context: bool) -> bool {
 fn has_task_phrase(prompt: &str) -> bool {
     [
         "go through",
+        "go to",
         "look at",
         "look through",
         "take a look at",
@@ -198,9 +199,16 @@ fn starts_with_phrase(prompt: &str, phrase: &str) -> bool {
 }
 
 fn references_natural_location(prompt: &str) -> bool {
-    ["desktop", "downloads", "documents"]
-        .iter()
-        .any(|loc| prompt.contains(loc))
+    [
+        "desktop",
+        "downloads",
+        "documents",
+        "env folder",
+        "env directory",
+        "my env",
+    ]
+    .iter()
+    .any(|loc| prompt.contains(loc))
 }
 
 fn references_workspace_file(prompt: &str, workspace_root: Option<&Path>) -> bool {
@@ -478,6 +486,10 @@ mod tests {
         );
         assert_eq!(
             classify_intent("go through downloads", false, None),
+            Intent::Task
+        );
+        assert_eq!(
+            classify_intent("go to my env folder and tell me what you find", false, None),
             Intent::Task
         );
         assert_eq!(

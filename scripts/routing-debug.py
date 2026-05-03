@@ -221,7 +221,7 @@ def run_prompt(binary, env, name, cwd, prompt, setup_commands=None):
                 )
             ),
             f"route for {prompt!r}",
-            timeout=8.0,
+            timeout=15.0,
         )
         return screen.text()
     finally:
@@ -282,8 +282,9 @@ def main():
         desktop = home / "Desktop"
         downloads = home / "Downloads"
         documents = home / "Documents"
+        env_root = home / "env"
         workspace = home / "workspace"
-        for path in (desktop, downloads, documents, workspace):
+        for path in (desktop, downloads, documents, env_root, workspace):
             path.mkdir()
         (workspace / "README.md").write_text("routing debug workspace\n", encoding="utf-8")
 
@@ -300,6 +301,7 @@ def main():
             (home, "why is my code broken?", "chat", None, None),
             (home, "read my files on my desktop", "agent", desktop, None),
             (home, "go through downloads", "agent", downloads, None),
+            (home, "go to my env folder and tell me what you find there", "agent", env_root, None),
             (home, "scan desktop", "agent", desktop, None),
             (home, "scan the downloads", "agent", downloads, None),
             (home, "my desktop files are a mess", "agent", desktop, None),
