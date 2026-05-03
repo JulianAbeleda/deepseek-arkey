@@ -1,6 +1,6 @@
 use std::fs;
 use std::io::{self, IsTerminal, Write};
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use serde::{Deserialize, Serialize};
@@ -9,7 +9,9 @@ use crate::provider::{self, Message};
 use crate::safety::{atomic_write, cap_text, redact_text};
 
 mod transcript;
+mod workspace;
 use transcript::{write_transcript, TranscriptEntry};
+use workspace::Workspace;
 
 const MAX_TOOL_CHARS: usize = 12_000;
 const MAX_READ_BYTES: u64 = 64 * 1024;
@@ -636,51 +638,6 @@ fn is_ignored(path: &Path) -> bool {
         .is_some_and(|name| matches!(name, ".git" | "target" | "node_modules"))
 }
 
-#[derive(Debug, Clone)]
-struct Workspace {
-    root: PathBuf,
-}
-
-impl Workspace {
-    fn new(root: PathBuf) -> Result<Self, String> {
-        let root = root.canonicalize().map_err(|err| err.to_string())?;
-        Ok(Self { root })
-    }
-
-    fn resolve_existing(&self, requested: &str) -> Result<PathBuf, String> {
-        let requested_path = Path::new(requested);
-        if requested_path.components().any(|component| {
-            matches!(
-                component,
-                Component::ParentDir | Component::Prefix(_) | Component::RootDir
-            )
-        }) {
-            return Err("path must stay inside workspace root".to_string());
-        }
-        let joined = self.root.join(requested_path);
-        let resolved = joined.canonicalize().map_err(|err| err.to_string())?;
-        if !resolved.starts_with(&self.root) {
-            return Err("path escapes workspace root".to_string());
-        }
-        Ok(resolved)
-    }
-
-    fn display_path(&self, path: &Path) -> String {
-        path.strip_prefix(&self.root)
-            .ok()
-            .and_then(|path| path.to_str())
-            .filter(|path| !path.is_empty())
-            .unwrap_or(".")
-            .to_string()
-    }
-
-    fn contains_existing(&self, path: &Path) -> bool {
-        path.canonicalize()
-            .map(|path| path.starts_with(&self.root))
-            .unwrap_or(false)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -688,9 +645,10 @@ mod tests {
 
     use serde_json::json;
 
+    use super::workspace::Workspace;
     use super::{
         apply_prepared_patch, parse_decision, prepare_patch, write_transcript, ApprovalMode,
-        ToolCall, TranscriptEntry, Workspace,
+        ToolCall, TranscriptEntry,
     };
 
     fn execute_tool(workspace: &Workspace, call: &ToolCall) -> String {
