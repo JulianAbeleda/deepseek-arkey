@@ -267,7 +267,7 @@ def section_A(binary, name, model):
     print(f"\nA. Startup mode")
     rows, cols = 24, 80
 
-    # A1 - bare deepseek lands on chat dock
+    # A1 - bare CLI lands on chat dock
     home = with_temp_home(name); env = base_env(name, home); enable_debug(binary, env)
     master, proc = spawn(binary, [], env, rows, cols)
     screen = Screen(rows, cols)
@@ -283,7 +283,7 @@ def section_A(binary, name, model):
     except: proc.terminate()
     os.close(master)
 
-    # A2 - deepseek chat lands on chat dock
+    # A2 - CLI chat subcommand lands on chat dock
     home = with_temp_home(name); env = base_env(name, home); enable_debug(binary, env)
     master, proc = spawn(binary, ["chat"], env, rows, cols)
     screen = Screen(rows, cols)
@@ -324,7 +324,7 @@ def section_A(binary, name, model):
                f"returncode={res.returncode}\nstdout_tail={stdout.splitlines()[-3:]}\nstderr_tail={res.stderr.splitlines()[-3:]}")
 
     # A5 - `-p` is plain one-shot chat
-    expected = f"{name.upper()}_OK" if name == "deepseek" else f"{name.upper()}_M27_OK"
+    expected = f"{name.upper()}_OK"
     home = with_temp_home(name); env = base_env(name, home); enable_debug(binary, env)
     res = run_one_shot(binary, ["-p", f"Say exactly: {expected}"], env, timeout=15)
     if isinstance(res, subprocess.TimeoutExpired):

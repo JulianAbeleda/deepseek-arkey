@@ -11,7 +11,6 @@ target/
 secrets/
 active-session.json
 .deepseek/
-.minimax/
 
 # Local development planning and audit notes
 structure/
