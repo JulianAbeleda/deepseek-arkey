@@ -318,43 +318,39 @@ impl DockedComposer {
     pub fn stream_above(&mut self, text: &str) -> Result<(), String> {
         self.stream_buffer.push_str(text);
         let lines = wrap_visible_lines(&self.stream_buffer, terminal_width());
-        let prior_rows = self.transient_rows();
         let mut stdout = io::stdout();
         self.move_to_transcript_cursor(&mut stdout)?;
-        if self.status_active && self.stream_rendered_lines.is_empty() {
-            clear_transient_rows(&mut stdout, self.transcript_row(), prior_rows)?;
-            repaint_lines_from_row(&mut stdout, self.transcript_row(), &lines)?;
-        } else {
-            repaint_changed_lines_from_row(
-                &mut stdout,
-                self.transcript_row(),
-                &self.stream_rendered_lines,
-                &lines,
-            )?;
+        if self.status_active {
+            clear_transient_rows(&mut stdout, self.transcript_row(), 1)?;
         }
+        repaint_stream_lines_from_row(
+            &mut stdout,
+            self.transcript_row(),
+            &self.stream_rendered_lines,
+            &lines,
+        )?;
         stdout.flush().map_err(|err| err.to_string())?;
         self.status_active = false;
-        self.stream_rendered_lines = lines;
+        self.stream_rendered_lines = visible_lines_above_dock(&lines);
         self.render_preserving_cursor()
     }
 
     pub fn finish_stream(&mut self) -> Result<(), String> {
-        if !self.stream_buffer.is_empty() {
-            let text = self.stream_buffer.clone();
-            let mut stdout = io::stdout();
-            clear_transient_rows(&mut stdout, self.transcript_row(), self.transient_rows())?;
-            self.move_to_transcript_cursor(&mut stdout)?;
-            execute!(stdout, MoveToColumn(0), Clear(ClearType::CurrentLine))
-                .map_err(|err| err.to_string())?;
-            write_raw_lines(&mut stdout, &text)?;
-            if !text.ends_with('\n') {
-                write!(stdout, "\r\n").map_err(|err| err.to_string())?;
-            }
-            stdout.flush().map_err(|err| err.to_string())?;
-            self.advance_transcript_text(&text);
-            if !text.ends_with('\n') {
-                self.advance_transcript_text("\n");
-            }
+        let stream = std::mem::take(&mut self.stream_buffer);
+        let rows = self.transient_rows();
+        let mut stdout = io::stdout();
+        clear_transient_rows(&mut stdout, self.transcript_row(), rows)?;
+        self.move_to_transcript_cursor(&mut stdout)?;
+        execute!(stdout, MoveToColumn(0), Clear(ClearType::CurrentLine))
+            .map_err(|err| err.to_string())?;
+        write_raw_lines(&mut stdout, &stream)?;
+        if !stream.is_empty() && !stream.ends_with('\n') {
+            write!(stdout, "\r\n").map_err(|err| err.to_string())?;
+        }
+        stdout.flush().map_err(|err| err.to_string())?;
+        self.advance_transcript_text(&stream);
+        if !stream.is_empty() && !stream.ends_with('\n') {
+            self.advance_transcript_text("\n");
         }
         self.reset_stream_state();
         self.render()
@@ -674,7 +670,41 @@ fn repaint_lines_from_row(
     let bottom = output_row();
     let available = bottom.saturating_sub(start) as usize + 1;
     let visible_lines = visible_tail(lines, available);
-    for (index, line) in visible_lines.iter().enumerate() {
+    repaint_lines_at(stdout, start, visible_lines)
+}
+
+fn repaint_stream_lines_from_row(
+    stdout: &mut io::Stdout,
+    start: u16,
+    previous: &[String],
+    lines: &[String],
+) -> Result<(), String> {
+    let bottom = output_row();
+    let available = bottom.saturating_sub(start) as usize + 1;
+    let visible_lines = visible_tail(lines, available);
+    if stream_repaint_needs_full_repaint(previous, visible_lines) {
+        clear_transient_rows(stdout, start, previous.len().max(visible_lines.len()))?;
+        return repaint_lines_from_row(stdout, start, lines);
+    }
+
+    let unchanged = common_prefix_len(previous, visible_lines);
+    if unchanged == visible_lines.len() {
+        return Ok(());
+    }
+
+    repaint_lines_at(
+        stdout,
+        start.saturating_add(unchanged as u16),
+        &visible_lines[unchanged..],
+    )
+}
+
+fn stream_repaint_needs_full_repaint(previous: &[String], visible_lines: &[String]) -> bool {
+    previous.is_empty() || previous.len() != visible_lines.len()
+}
+
+fn repaint_lines_at(stdout: &mut io::Stdout, start: u16, lines: &[String]) -> Result<(), String> {
+    for (index, line) in lines.iter().enumerate() {
         execute!(
             stdout,
             MoveTo(0, start + index as u16),
@@ -686,46 +716,29 @@ fn repaint_lines_from_row(
     Ok(())
 }
 
-fn repaint_changed_lines_from_row(
-    stdout: &mut io::Stdout,
-    start: u16,
-    previous: &[String],
-    next: &[String],
-) -> Result<(), String> {
-    let bottom = output_row();
-    let available = bottom.saturating_sub(start) as usize + 1;
-    let previous_lines = visible_tail(previous, available);
-    let next_lines = visible_tail(next, available);
-    let rows = previous_lines.len().max(next_lines.len());
-    if previous_lines.len() != next_lines.len() {
-        clear_transient_rows(stdout, start, rows)?;
-        return repaint_lines_from_row(stdout, start, next);
-    }
-    for index in 0..rows {
-        let old = previous_lines.get(index).map(String::as_str);
-        let new = next_lines.get(index).map(String::as_str);
-        if old == new {
-            continue;
-        }
-        execute!(
-            stdout,
-            MoveTo(0, start + index as u16),
-            Clear(ClearType::CurrentLine)
-        )
-        .map_err(|err| err.to_string())?;
-        if let Some(line) = new {
-            write!(stdout, "{line}").map_err(|err| err.to_string())?;
-        }
-    }
-    Ok(())
-}
-
 fn visible_tail(lines: &[String], max_rows: usize) -> &[String] {
     if lines.len() > max_rows {
         &lines[lines.len() - max_rows..]
     } else {
         lines
     }
+}
+
+fn visible_lines_above_dock(lines: &[String]) -> Vec<String> {
+    let dock = dock_row();
+    let max_rows = dock as usize;
+    if lines.len() > max_rows {
+        lines[lines.len() - max_rows..].to_vec()
+    } else {
+        lines.to_vec()
+    }
+}
+
+fn common_prefix_len(left: &[String], right: &[String]) -> usize {
+    left.iter()
+        .zip(right)
+        .take_while(|(left, right)| left == right)
+        .count()
 }
 
 fn set_output_scroll_region(reserved_bottom_lines: usize) -> Result<(), String> {
@@ -922,8 +935,9 @@ fn is_wide_char(ch: char) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        buffer_prefix, insert_at, parse_forced_terminal_size, remove_at, remove_before,
-        visible_len, visible_suffix, wrap_visible_lines, DockedComposer,
+        buffer_prefix, common_prefix_len, insert_at, parse_forced_terminal_size, remove_at,
+        remove_before, stream_repaint_needs_full_repaint, visible_len, visible_suffix,
+        wrap_visible_lines, DockedComposer,
     };
 
     #[test]
@@ -1013,6 +1027,25 @@ mod tests {
             wrap_visible_lines("\x1b[31mred\x1b[0m!", 4),
             vec!["\x1b[31mred\x1b[0m!"]
         );
+    }
+
+    #[test]
+    fn stream_repaint_can_keep_unchanged_prefix() {
+        let previous = vec!["first".to_string(), "partial".to_string()];
+        let next = vec!["first".to_string(), "partial update".to_string()];
+
+        assert!(!stream_repaint_needs_full_repaint(&previous, &next));
+        assert_eq!(common_prefix_len(&previous, &next), 1);
+        assert_eq!(common_prefix_len(&next, &next), 2);
+    }
+
+    #[test]
+    fn stream_repaint_full_repaints_when_visible_row_count_changes() {
+        let previous = vec!["first".to_string()];
+        let next = vec!["first".to_string(), "second".to_string()];
+
+        assert!(stream_repaint_needs_full_repaint(&[], &next));
+        assert!(stream_repaint_needs_full_repaint(&previous, &next));
     }
 
     #[test]
