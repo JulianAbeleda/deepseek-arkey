@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use crate::agent;
 use crate::input::{DockedComposer, InlineInput, InputAction, RawModeSession};
 use crate::intent::{classify_intent, path_boundary_violation, recent_task_context, Intent};
-use crate::provider::{self, DEFAULT_SESSION_NAME, PROVIDER};
+use crate::provider::{self, Message, DEFAULT_SESSION_NAME, PROVIDER};
 use crate::runtime::{self, RuntimeBackend};
 use crate::session::{self, SessionState};
 use crate::ui;
@@ -19,7 +19,7 @@ use crate::workspace::{
 
 enum TurnEvent {
     Delta(String),
-    Complete(Result<(), String>),
+    Complete(Result<(String, String), String>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -49,7 +49,8 @@ fn run_interactive_chat(model: &str, temperature: Option<f32>, stream: bool) -> 
     if io::stdin().is_terminal() {
         return run_interactive_chat_docked(model, temperature);
     }
-    let mut current_model = session::load()?
+    let active_session = reset_persisted_chat_messages()?;
+    let mut current_model = active_session
         .map(|state| state.model)
         .unwrap_or_else(|| model.to_string());
     if session::load()?.is_none() {
@@ -61,6 +62,7 @@ fn run_interactive_chat(model: &str, temperature: Option<f32>, stream: bool) -> 
     }
     ui::print_banner(&current_model);
     let mut input = InlineInput::new();
+    let mut memory = Vec::<Message>::new();
     loop {
         let runtime_state = runtime::load(&current_model)?;
         let prompt_text = ui::prompt_text(&runtime_state.label(&current_model));
@@ -117,8 +119,15 @@ fn run_interactive_chat(model: &str, temperature: Option<f32>, stream: bool) -> 
             ui::print_session_ended();
             break;
         }
-        match crate::run_prompt(prompt, &current_model, temperature, false, stream) {
-            Ok(response) => {
+        match run_prompt_with_memory(
+            &mut memory,
+            prompt,
+            &current_model,
+            temperature,
+            stream,
+            None,
+        ) {
+            Ok((_, response)) => {
                 if !stream {
                     println!("{response}");
                 }
@@ -130,7 +139,7 @@ fn run_interactive_chat(model: &str, temperature: Option<f32>, stream: bool) -> 
 }
 
 fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<(), String> {
-    let active_session = session::load()?;
+    let active_session = reset_persisted_chat_messages()?;
     let mut current_model = active_session
         .as_ref()
         .map(|state| state.model.clone())
@@ -156,6 +165,7 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
     let mut in_flight: Option<Receiver<TurnEvent>> = None;
     let mut context_scan_started: Option<Instant> = None;
     let mut queued = VecDeque::<String>::new();
+    let mut memory = Vec::<Message>::new();
     let mut pending_agent_task: Option<PendingAgentTask> = None;
     let mut confirmed_agent_task: Option<PendingAgentTask> = None;
     let mut selected_root: Option<PathBuf> = approved_agent_root.clone();
@@ -174,15 +184,23 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
                 if let Some(result) = result {
                     in_flight = None;
                     context_scan_started = None;
-                    if let Err(err) = result {
-                        composer.print_above(&format!("error: {err}\n"))?;
-                    } else {
-                        composer.finish_stream()?;
+                    match result {
+                        Ok((prompt, response)) => {
+                            push_interactive_turn(&mut memory, prompt, response);
+                            composer.finish_stream()?;
+                        }
+                        Err(err) => {
+                            composer.print_above(&format!("error: {err}\n"))?;
+                        }
                     }
                     if let Some(next) = queued.pop_front() {
                         context_scan_started = Some(start_context_scan(&mut composer)?);
-                        in_flight =
-                            Some(spawn_prompt_turn(next, current_model.clone(), temperature));
+                        in_flight = Some(spawn_prompt_turn(
+                            &memory,
+                            next,
+                            current_model.clone(),
+                            temperature,
+                        ));
                     }
                 }
             }
@@ -240,6 +258,7 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
                 effective_workspace_root(selected_root.as_deref()).as_deref(),
                 selected_root.is_some(),
                 approved_agent_root.as_deref(),
+                memory.len() / 2,
             )?)?;
             continue;
         }
@@ -344,6 +363,7 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
         }
         context_scan_started = Some(start_context_scan(&mut composer)?);
         in_flight = Some(spawn_prompt_turn(
+            &memory,
             prompt.to_string(),
             current_model.clone(),
             temperature,
@@ -392,7 +412,7 @@ fn run_confirmed_agent_task(
 
 fn run_interactive_agent(model: &str, temperature: Option<f32>) -> Result<(), String> {
     let root = std::env::current_dir().map_err(|err| err.to_string())?;
-    let mut current_model = session::load()?
+    let mut current_model = reset_persisted_chat_messages()?
         .map(|state| state.model)
         .unwrap_or_else(|| model.to_string());
     if session::load()?.is_none() {
@@ -477,13 +497,21 @@ fn run_interactive_agent(model: &str, temperature: Option<f32>) -> Result<(), St
 }
 
 fn spawn_prompt_turn(
+    prior_messages: &[Message],
     prompt: String,
     model: String,
     temperature: Option<f32>,
 ) -> Receiver<TurnEvent> {
     let (sender, receiver) = mpsc::channel();
+    let prior_messages = prior_messages.to_vec();
     thread::spawn(move || {
-        let result = run_prompt_streaming(&prompt, &model, temperature, sender.clone());
+        let result = run_prompt_streaming(
+            &prior_messages,
+            &prompt,
+            &model,
+            temperature,
+            sender.clone(),
+        );
         let _ = sender.send(TurnEvent::Complete(result));
     });
     receiver
@@ -493,7 +521,7 @@ fn drain_turn_events(
     receiver: &Receiver<TurnEvent>,
     composer: &mut DockedComposer,
     disconnected_message: &str,
-) -> Result<(Option<Result<(), String>>, bool), String> {
+) -> Result<(Option<Result<(String, String), String>>, bool), String> {
     let mut chunk = String::new();
     let mut complete = None;
     loop {
@@ -561,17 +589,14 @@ fn task_root_for_prompt(prompt: &str, selected_root: Option<&Path>) -> Option<Pa
 }
 
 fn run_prompt_streaming(
+    prior_messages: &[Message],
     prompt: &str,
     model: &str,
     temperature: Option<f32>,
     sender: Sender<TurnEvent>,
-) -> Result<(), String> {
+) -> Result<(String, String), String> {
     let runtime_state = runtime::load(model)?;
-    let active_state = session::load()?;
-    let mut messages = active_state
-        .as_ref()
-        .map(|state| state.messages.clone())
-        .unwrap_or_default();
+    let mut messages = prior_messages.to_vec();
     messages.push(provider::user_message(prompt));
     let response = if runtime_state.backend == RuntimeBackend::Debug {
         let response = runtime::debug_response(prompt, model);
@@ -591,11 +616,67 @@ fn run_prompt_streaming(
             let _ = sender.send(TurnEvent::Delta(delta.to_string()));
         })?
     };
-    if let Some(mut state) = active_state {
-        state.push_turn(prompt.to_string(), response.clone());
-        session::save(&state)?;
+    Ok((prompt.to_string(), response))
+}
+
+fn run_prompt_with_memory(
+    memory: &mut Vec<Message>,
+    prompt: &str,
+    model: &str,
+    temperature: Option<f32>,
+    stream: bool,
+    sender: Option<Sender<TurnEvent>>,
+) -> Result<(String, String), String> {
+    let runtime_state = runtime::load(model)?;
+    let mut messages = memory.clone();
+    messages.push(provider::user_message(prompt));
+    let response = if runtime_state.backend == RuntimeBackend::Debug {
+        let response = runtime::debug_response(prompt, model);
+        if stream {
+            if let Some(sender) = sender {
+                for delta in response.chars() {
+                    let _ = sender.send(TurnEvent::Delta(delta.to_string()));
+                }
+            } else {
+                print!("{response}");
+            }
+        }
+        response
+    } else if let Some(sender) = sender {
+        provider::chat_with_delta(&messages, model, temperature, None, true, |delta| {
+            let _ = sender.send(TurnEvent::Delta(delta.to_string()));
+        })?
+    } else {
+        provider::chat(&messages, model, temperature, None, stream)?
+    };
+    push_interactive_turn(memory, prompt.to_string(), response.clone());
+    Ok((prompt.to_string(), response))
+}
+
+fn push_interactive_turn(memory: &mut Vec<Message>, prompt: String, response: String) {
+    memory.push(provider::user_message(prompt));
+    memory.push(provider::assistant_message(response));
+    cap_interactive_memory(memory);
+}
+
+fn cap_interactive_memory(memory: &mut Vec<Message>) {
+    const MAX_TURNS: usize = 20;
+    const MAX_CHARS: usize = 40_000;
+    let max_messages = MAX_TURNS * 2;
+    if memory.len() > max_messages {
+        let drop_count = memory.len() - max_messages;
+        memory.drain(0..drop_count);
     }
-    Ok(())
+    while total_message_chars(memory) > MAX_CHARS && memory.len() > 2 {
+        memory.drain(0..2);
+    }
+}
+
+fn total_message_chars(messages: &[Message]) -> usize {
+    messages
+        .iter()
+        .map(|message| message.content.chars().count())
+        .sum()
 }
 
 fn interactive_status(model: &str) -> Result<String, String> {
@@ -631,9 +712,13 @@ fn interactive_chat_status(
     root: Option<&Path>,
     explicit_root: bool,
     approved_agent_root: Option<&Path>,
+    memory_turns: usize,
 ) -> Result<String, String> {
     let mut output = interactive_status(model)?;
     output.push_str("mode: chat\n");
+    output.push_str(&format!(
+        "chat-memory: process\nchat-turns: {memory_turns}\n"
+    ));
     output.push_str(&root_status(root, explicit_root));
     match approved_agent_root {
         Some(root) => output.push_str(&format!(
@@ -701,6 +786,17 @@ fn is_end_command(prompt: &str) -> bool {
     matches!(prompt, "session end" | "/end" | "/end session")
 }
 
+fn reset_persisted_chat_messages() -> Result<Option<SessionState>, String> {
+    let Some(mut state) = session::load()? else {
+        return Ok(None);
+    };
+    if !state.messages.is_empty() {
+        state.clear_messages();
+        session::save(&state)?;
+    }
+    Ok(Some(state))
+}
+
 fn update_active_session_model(model: &str) -> Result<(), String> {
     let Some(mut state) = session::load()? else {
         return Ok(());
@@ -742,9 +838,11 @@ fn paths_equal(left: &Path, right: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        context_scan_status, is_agent_task_choice, is_end_command, is_exit_command,
-        no_pending_agent_task_text, parse_debug_command, parse_model_command, task_root_for_prompt,
+        cap_interactive_memory, context_scan_status, is_agent_task_choice, is_end_command,
+        is_exit_command, no_pending_agent_task_text, parse_debug_command, parse_model_command,
+        task_root_for_prompt,
     };
+    use crate::provider;
     use crate::runtime;
     use std::path::{Path, PathBuf};
     use std::time::Instant;
@@ -820,6 +918,18 @@ mod tests {
         assert!(response.contains("No pending agent task"));
         assert!(response.contains("/root <path>"));
         assert!(response.contains("/agent <task>"));
+    }
+
+    #[test]
+    fn interactive_memory_is_capped_in_process() {
+        let mut memory = Vec::new();
+        for index in 0..25 {
+            memory.push(provider::user_message(format!("u{index}")));
+            memory.push(provider::assistant_message(format!("a{index}")));
+        }
+        cap_interactive_memory(&mut memory);
+        assert_eq!(memory.len(), 40);
+        assert_eq!(memory[0].content, "u5");
     }
 
     #[test]

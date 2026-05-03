@@ -50,6 +50,11 @@ impl SessionState {
         self.updated_at = unix_timestamp();
     }
 
+    pub fn clear_messages(&mut self) {
+        self.messages.clear();
+        self.updated_at = unix_timestamp();
+    }
+
     pub fn agent_root_path(&self) -> Option<PathBuf> {
         self.agent_root.as_ref().map(PathBuf::from)
     }
@@ -182,6 +187,20 @@ mod tests {
 
         state.clear_agent_root();
         assert_eq!(state.agent_root_path(), None);
+    }
+
+    #[test]
+    fn clears_messages_without_clearing_session_metadata() {
+        let root = std::env::temp_dir().join("deepseek-agent-root");
+        let mut state = SessionState::new(PROVIDER, DEFAULT_SESSION_NAME, "model-a");
+        state.push_turn("hello".to_string(), "world".to_string());
+        state.approve_agent_root(&root);
+
+        state.clear_messages();
+
+        assert!(state.messages.is_empty());
+        assert_eq!(state.model, "model-a");
+        assert_eq!(state.agent_root_path().as_deref(), Some(root.as_path()));
     }
 
     #[test]
