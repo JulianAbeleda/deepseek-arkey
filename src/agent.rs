@@ -2,15 +2,16 @@ use std::fs;
 use std::io::{self, IsTerminal, Write};
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
 use crate::provider::{self, Message};
 use crate::safety::{atomic_write, cap_text, redact_text};
 
+mod transcript;
+use transcript::{write_transcript, TranscriptEntry};
+
 const MAX_TOOL_CHARS: usize = 12_000;
-const MAX_TRANSCRIPT_CHARS: usize = 80_000;
 const MAX_READ_BYTES: u64 = 64 * 1024;
 const MAX_LIST_ENTRIES: usize = 200;
 const MAX_SEARCH_MATCHES: usize = 80;
@@ -61,12 +62,6 @@ pub struct AgentDecision {
     pub final_answer: Option<String>,
     #[serde(default)]
     pub blocked: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-struct TranscriptEntry {
-    role: String,
-    content: String,
 }
 
 pub fn run_agent(
@@ -173,23 +168,9 @@ pub fn run_agent_with_options(
 pub fn read_latest_transcript(
     root: impl Into<PathBuf>,
 ) -> Result<Option<(PathBuf, String)>, String> {
-    let workspace = Workspace::new(root.into())?;
-    let dir = transcript_dir(&workspace.root);
-    if !dir.exists() {
-        return Ok(None);
-    }
-    let mut entries = fs::read_dir(&dir)
-        .map_err(|err| err.to_string())?
-        .filter_map(Result::ok)
-        .map(|entry| entry.path())
-        .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("json"))
-        .collect::<Vec<_>>();
-    entries.sort();
-    let Some(path) = entries.pop() else {
-        return Ok(None);
-    };
-    let content = fs::read_to_string(&path).map_err(|err| err.to_string())?;
-    Ok(Some((path, content)))
+    transcript::read_latest_transcript(root, |root| {
+        Workspace::new(root).map(|workspace| workspace.root)
+    })
 }
 
 fn system_prompt(root: &Path) -> String {
@@ -653,26 +634,6 @@ fn is_ignored(path: &Path) -> bool {
     path.file_name()
         .and_then(|name| name.to_str())
         .is_some_and(|name| matches!(name, ".git" | "target" | "node_modules"))
-}
-
-fn write_transcript(root: &Path, entries: &[TranscriptEntry]) -> Result<PathBuf, String> {
-    let dir = transcript_dir(root);
-    let path = dir.join(format!("{}.json", unix_timestamp()));
-    let bytes = serde_json::to_vec_pretty(entries).map_err(|err| err.to_string())?;
-    let text = cap_text(&String::from_utf8_lossy(&bytes), MAX_TRANSCRIPT_CHARS);
-    atomic_write(&path, text.as_bytes()).map_err(|err| err.to_string())?;
-    Ok(path)
-}
-
-fn transcript_dir(root: &Path) -> PathBuf {
-    root.join(".deepseek/agent-transcripts")
-}
-
-fn unix_timestamp() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_secs())
-        .unwrap_or_default()
 }
 
 #[derive(Debug, Clone)]
