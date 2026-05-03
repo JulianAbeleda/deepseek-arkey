@@ -23,7 +23,7 @@ use cli::{Args, Command, SessionCommand};
 use input::{DockedComposer, InlineInput, InputAction, RawModeSession};
 use intent::{classify_intent, path_boundary_violation, recent_task_context, Intent};
 use provider::{Message, DEFAULT_MODEL, PROVIDER};
-use runtime::{RuntimeBackend, RuntimeState};
+use runtime::RuntimeBackend;
 use session::SessionState;
 use workspace::{
     effective_workspace_root, parse_root_command, path_boundary_clarify_text, root_status,
@@ -107,7 +107,7 @@ fn run(args: Args) -> Result<(), String> {
             ui::print_login_ok();
         }
         Some(Command::Debug { mode, json }) => {
-            let output = debug_result(&model, mode.as_deref(), json)?;
+            let output = runtime::debug_result(&model, mode.as_deref(), json)?;
             println!("{output}");
         }
         Some(Command::Session { command }) => handle_session_command(command, &model)?,
@@ -228,13 +228,13 @@ fn run_interactive_chat(model: &str, temperature: Option<f32>, stream: bool) -> 
             continue;
         }
         if prompt == "/runtime" {
-            println!("{}", runtime_result(&current_model, false)?);
+            println!("{}", runtime::runtime_result(&current_model, false)?);
             continue;
         }
         if let Some(mode) = parse_debug_command(prompt) {
             let output = match mode {
-                Some(mode) => debug_result(&current_model, Some(mode), false)?,
-                None => toggle_debug_result(&current_model)?,
+                Some(mode) => runtime::debug_result(&current_model, Some(mode), false)?,
+                None => runtime::toggle_debug_result(&current_model)?,
             };
             println!("{output}");
             continue;
@@ -397,13 +397,13 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
             continue;
         }
         if prompt == "/runtime" {
-            composer.print_above(&runtime_result(&current_model, false)?)?;
+            composer.print_above(&runtime::runtime_result(&current_model, false)?)?;
             continue;
         }
         if let Some(mode) = parse_debug_command(prompt) {
             let output = match mode {
-                Some(mode) => debug_result(&current_model, Some(mode), false)?,
-                None => toggle_debug_result(&current_model)?,
+                Some(mode) => runtime::debug_result(&current_model, Some(mode), false)?,
+                None => runtime::toggle_debug_result(&current_model)?,
             };
             runtime_state = runtime::load(&current_model)?;
             composer.set_prompt(ui::prompt_text(&runtime_state.label(&current_model)))?;
@@ -553,13 +553,13 @@ fn run_interactive_agent(model: &str, temperature: Option<f32>) -> Result<(), St
             continue;
         }
         if prompt == "/runtime" {
-            println!("{}", runtime_result(&current_model, false)?);
+            println!("{}", runtime::runtime_result(&current_model, false)?);
             continue;
         }
         if let Some(mode) = parse_debug_command(prompt) {
             let output = match mode {
-                Some(mode) => debug_result(&current_model, Some(mode), false)?,
-                None => toggle_debug_result(&current_model)?,
+                Some(mode) => runtime::debug_result(&current_model, Some(mode), false)?,
+                None => runtime::toggle_debug_result(&current_model)?,
             };
             println!("{output}");
             continue;
@@ -685,8 +685,8 @@ fn run_prompt_streaming(
         content: prompt.to_string(),
     });
     let response = if runtime_state.backend == RuntimeBackend::Debug {
-        let response = debug_response(prompt, model);
-        let delay = debug_stream_delay();
+        let response = runtime::debug_response(prompt, model);
+        let delay = runtime::debug_stream_delay();
         if let Some(delay) = delay {
             thread::sleep(delay);
         }
@@ -783,7 +783,7 @@ fn run_prompt(
         content: prompt.to_string(),
     });
     let response = if runtime_state.backend == RuntimeBackend::Debug {
-        let response = debug_response(prompt, model);
+        let response = runtime::debug_response(prompt, model);
         if stream {
             print!("{response}");
         }
@@ -796,63 +796,6 @@ fn run_prompt(
         session::save(&state)?;
     }
     Ok(response)
-}
-
-fn debug_result(model: &str, mode: Option<&str>, json: bool) -> Result<String, String> {
-    let state = match mode {
-        Some(mode) => {
-            let backend = RuntimeBackend::parse(mode).ok_or_else(|| {
-                "debug mode must be one of: on, off, debug, manual, provider".to_string()
-            })?;
-            runtime::set_backend(model, backend)?
-        }
-        None => runtime::load(model)?,
-    };
-    if json {
-        return serde_json::to_string_pretty(&state).map_err(|err| err.to_string());
-    }
-    Ok(format_runtime_state(&state, model))
-}
-
-fn runtime_result(model: &str, json: bool) -> Result<String, String> {
-    debug_result(model, None, json)
-}
-
-fn toggle_debug_result(model: &str) -> Result<String, String> {
-    let current = runtime::load(model)?;
-    let next = match current.backend {
-        RuntimeBackend::Provider => RuntimeBackend::Debug,
-        RuntimeBackend::Debug => RuntimeBackend::Provider,
-    };
-    let state = runtime::set_backend(model, next)?;
-    Ok(format_runtime_state(&state, model))
-}
-
-fn format_runtime_state(state: &RuntimeState, fallback_model: &str) -> String {
-    let backend = match state.backend {
-        RuntimeBackend::Provider => "provider",
-        RuntimeBackend::Debug => "debug",
-    };
-    format!(
-        "LLM: {backend}\nRuntime: {}\nModel: {}\nUpdated: {}\n",
-        state.runtime,
-        state.model.as_deref().unwrap_or(fallback_model),
-        state.updated_at
-    )
-}
-
-fn debug_response(prompt: &str, model: &str) -> String {
-    format!(
-        "debug/manual backend\nprovider: {PROVIDER}\nmodel: {model}\nprompt: {prompt}\n\nThis is a local diagnostic response. Normal chat does not get filesystem tools; use `agent --root <path> ...` for file read/write work."
-    )
-}
-
-fn debug_stream_delay() -> Option<Duration> {
-    std::env::var("DEEPSEEK_DEBUG_STREAM_DELAY_MS")
-        .ok()
-        .and_then(|value| value.parse::<u64>().ok())
-        .filter(|delay| *delay > 0)
-        .map(Duration::from_millis)
 }
 
 fn parse_debug_command(prompt: &str) -> Option<Option<&str>> {
@@ -904,9 +847,10 @@ fn update_active_session_model(model: &str) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
+    use super::runtime;
     use super::{
-        context_scan_status, debug_response, is_agent_transcript_latest, is_end_command,
-        is_exit_command, parse_debug_command, parse_model_command,
+        context_scan_status, is_agent_transcript_latest, is_end_command, is_exit_command,
+        parse_debug_command, parse_model_command,
     };
     use std::time::Instant;
 
@@ -956,7 +900,7 @@ mod tests {
 
     #[test]
     fn debug_response_points_file_work_to_agent_mode() {
-        let response = debug_response("can you write files?", "deepseek-v4-flash");
+        let response = runtime::debug_response("can you write files?", "deepseek-v4-flash");
         assert!(response.contains("local diagnostic response"));
         assert!(response.contains("agent --root"));
     }

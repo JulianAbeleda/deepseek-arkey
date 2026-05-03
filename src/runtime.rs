@@ -1,10 +1,14 @@
 use std::fs;
 use std::path::PathBuf;
+use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
+use crate::provider::PROVIDER;
 use crate::safety::atomic_write;
+
+const DEBUG_STREAM_DELAY_ENV: &str = "DEEPSEEK_DEBUG_STREAM_DELAY_MS";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -87,6 +91,63 @@ pub fn set_backend(default_model: &str, backend: RuntimeBackend) -> Result<Runti
     let state = load(default_model)?.with_backend(backend);
     save(&state)?;
     Ok(state)
+}
+
+pub fn debug_result(model: &str, mode: Option<&str>, json: bool) -> Result<String, String> {
+    let state = match mode {
+        Some(mode) => {
+            let backend = RuntimeBackend::parse(mode).ok_or_else(|| {
+                "debug mode must be one of: on, off, debug, manual, provider".to_string()
+            })?;
+            set_backend(model, backend)?
+        }
+        None => load(model)?,
+    };
+    if json {
+        return serde_json::to_string_pretty(&state).map_err(|err| err.to_string());
+    }
+    Ok(format_runtime_state(&state, model))
+}
+
+pub fn runtime_result(model: &str, json: bool) -> Result<String, String> {
+    debug_result(model, None, json)
+}
+
+pub fn toggle_debug_result(model: &str) -> Result<String, String> {
+    let current = load(model)?;
+    let next = match current.backend {
+        RuntimeBackend::Provider => RuntimeBackend::Debug,
+        RuntimeBackend::Debug => RuntimeBackend::Provider,
+    };
+    let state = set_backend(model, next)?;
+    Ok(format_runtime_state(&state, model))
+}
+
+pub fn format_runtime_state(state: &RuntimeState, fallback_model: &str) -> String {
+    let backend = match state.backend {
+        RuntimeBackend::Provider => "provider",
+        RuntimeBackend::Debug => "debug",
+    };
+    format!(
+        "LLM: {backend}\nRuntime: {}\nModel: {}\nUpdated: {}\n",
+        state.runtime,
+        state.model.as_deref().unwrap_or(fallback_model),
+        state.updated_at
+    )
+}
+
+pub fn debug_response(prompt: &str, model: &str) -> String {
+    format!(
+        "debug/manual backend\nprovider: {PROVIDER}\nmodel: {model}\nprompt: {prompt}\n\nThis is a local diagnostic response. Normal chat does not get filesystem tools; use `agent --root <path> ...` for file read/write work."
+    )
+}
+
+pub fn debug_stream_delay() -> Option<Duration> {
+    std::env::var(DEBUG_STREAM_DELAY_ENV)
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|delay| *delay > 0)
+        .map(Duration::from_millis)
 }
 
 fn unix_timestamp() -> u64 {
