@@ -1,11 +1,13 @@
 mod agent;
 mod cli;
 mod input;
+mod intent;
 mod provider;
 mod runtime;
 mod safety;
 mod session;
 mod ui;
+mod workspace;
 
 use std::collections::VecDeque;
 use std::io::{self, IsTerminal};
@@ -19,9 +21,14 @@ use clap::Parser;
 
 use cli::{Args, Command, SessionCommand};
 use input::{DockedComposer, InlineInput, InputAction, RawModeSession};
+use intent::{classify_intent, path_boundary_violation, recent_task_context, Intent};
 use provider::{Message, DEFAULT_MODEL, PROVIDER};
 use runtime::{RuntimeBackend, RuntimeState};
 use session::SessionState;
+use workspace::{
+    effective_workspace_root, parse_root_command, path_boundary_clarify_text, root_status,
+    update_selected_root,
+};
 
 enum TurnEvent {
     Delta(String),
@@ -32,13 +39,6 @@ enum TurnEvent {
 enum InteractiveMode {
     Agent,
     Chat,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Intent {
-    Chat,
-    Task,
-    Clarify,
 }
 
 struct PendingAgentTask {
@@ -668,264 +668,6 @@ fn clarify_route_text() -> String {
     "route: unclear\nDo you want chat analysis or an agent task?\nType /chat to discuss, /root <path> to choose a workspace, or /agent <task> to execute.\n".to_string()
 }
 
-fn path_boundary_clarify_text(root: &Path, path: &Path) -> String {
-    let suggested_root = path.parent().unwrap_or(root);
-    format!(
-        "route: unclear\nReferenced path is outside the selected workspace root.\nroot: {}\npath: {}\nSuggested root: {}\nType /root {} to choose that workspace, or /chat to discuss.\n",
-        root.display(),
-        path.display(),
-        suggested_root.display(),
-        suggested_root.display()
-    )
-}
-
-fn workspace_root() -> Option<PathBuf> {
-    let cwd = std::env::current_dir().ok()?;
-    let home = std::env::var_os("HOME").map(PathBuf::from);
-    if home.as_ref().is_some_and(|home| paths_equal(&cwd, home)) {
-        return None;
-    }
-    Some(cwd)
-}
-
-fn effective_workspace_root(selected_root: Option<&Path>) -> Option<PathBuf> {
-    selected_root.map(Path::to_path_buf).or_else(workspace_root)
-}
-
-fn parse_root_command(prompt: &str) -> Option<Option<&str>> {
-    if prompt == "/root" {
-        return Some(None);
-    }
-    prompt
-        .strip_prefix("/root ")
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(Some)
-}
-
-fn update_selected_root(root_arg: &str) -> Result<Option<PathBuf>, String> {
-    if matches!(root_arg, "clear" | "reset" | "cwd") {
-        return Ok(None);
-    }
-    let path = PathBuf::from(root_arg);
-    let path = if path.is_absolute() {
-        path
-    } else {
-        std::env::current_dir()
-            .map_err(|err| err.to_string())?
-            .join(path)
-    };
-    let root = path
-        .canonicalize()
-        .map_err(|err| format!("{}: {err}", path.display()))?;
-    if !root.is_dir() {
-        return Err(format!("{} is not a directory", root.display()));
-    }
-    Ok(Some(root))
-}
-
-fn root_status(root: Option<&Path>, explicit: bool) -> String {
-    match root {
-        Some(root) => format!(
-            "root: {}\nroot-source: {}\n",
-            root.display(),
-            if explicit { "explicit" } else { "cwd" }
-        ),
-        None => "root: unset\nroot-source: none\nUse /root <path> before running workspace tasks from $HOME.\n".to_string(),
-    }
-}
-
-fn paths_equal(left: &Path, right: &Path) -> bool {
-    match (left.canonicalize(), right.canonicalize()) {
-        (Ok(left), Ok(right)) => left == right,
-        _ => left == right,
-    }
-}
-
-fn path_boundary_violation(prompt: &str, root: &Path) -> Option<PathBuf> {
-    let root = normalize_path(root);
-    prompt
-        .split_whitespace()
-        .filter_map(clean_prompt_token)
-        .filter(|token| is_path_like_token(token))
-        .filter_map(|token| {
-            let path = PathBuf::from(token);
-            let resolved = if path.is_absolute() {
-                normalize_path(&path)
-            } else {
-                normalize_path(&root.join(path))
-            };
-            if resolved.starts_with(&root) {
-                None
-            } else {
-                Some(resolved)
-            }
-        })
-        .next()
-}
-
-fn normalize_path(path: &Path) -> PathBuf {
-    let mut normalized = PathBuf::new();
-    for component in path.components() {
-        match component {
-            std::path::Component::CurDir => {}
-            std::path::Component::ParentDir => {
-                normalized.pop();
-            }
-            component => normalized.push(component.as_os_str()),
-        }
-    }
-    normalized
-}
-
-fn classify_intent(
-    prompt: &str,
-    has_recent_task_context: bool,
-    workspace_root: Option<&Path>,
-) -> Intent {
-    let normalized = normalize_prompt(prompt);
-    if normalized.is_empty() {
-        return Intent::Chat;
-    }
-    if is_clarify_prompt(&normalized) {
-        return Intent::Clarify;
-    }
-    if is_chat_prompt(&normalized) {
-        return Intent::Chat;
-    }
-    if is_task_prompt(&normalized, has_recent_task_context)
-        || references_workspace_file(prompt, workspace_root)
-    {
-        if workspace_root.is_none() {
-            return Intent::Clarify;
-        }
-        return Intent::Task;
-    }
-    Intent::Chat
-}
-
-fn normalize_prompt(prompt: &str) -> String {
-    prompt
-        .trim()
-        .to_lowercase()
-        .chars()
-        .map(|ch| if ch.is_ascii_punctuation() { ' ' } else { ch })
-        .collect::<String>()
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
-fn is_chat_prompt(prompt: &str) -> bool {
-    let chat_prefixes = [
-        "what ",
-        "why ",
-        "how ",
-        "should we ",
-        "does this make sense",
-        "can you explain",
-        "help me understand",
-        "explain ",
-    ];
-    chat_prefixes
-        .iter()
-        .any(|prefix| prompt.starts_with(prefix))
-}
-
-fn is_clarify_prompt(prompt: &str) -> bool {
-    matches!(
-        prompt,
-        "can you look at this" | "can you look at this please"
-    )
-}
-
-fn is_task_prompt(prompt: &str, has_recent_task_context: bool) -> bool {
-    let task_verbs = [
-        "fix",
-        "add",
-        "remove",
-        "update",
-        "implement",
-        "run",
-        "commit",
-        "push",
-        "audit",
-        "refactor",
-        "create",
-        "delete",
-        "rename",
-        "test",
-        "build",
-    ];
-    let first = prompt.split_whitespace().next().unwrap_or("");
-    if task_verbs.contains(&first) {
-        return true;
-    }
-    has_recent_task_context
-        && [
-            "lets do it",
-            "let s do it",
-            "go ahead",
-            "make that change",
-            "apply the patch",
-            "ship it",
-        ]
-        .iter()
-        .any(|phrase| prompt.starts_with(phrase))
-}
-
-fn references_workspace_file(prompt: &str, workspace_root: Option<&Path>) -> bool {
-    prompt.split_whitespace().any(|token| {
-        let Some(token) = clean_prompt_token(token) else {
-            return false;
-        };
-        is_path_like_token(token) || workspace_root.is_some_and(|root| root.join(token).is_file())
-    })
-}
-
-fn clean_prompt_token(token: &str) -> Option<&str> {
-    let mut token = token.trim_matches(|ch: char| {
-        ch == '"'
-            || ch == '\''
-            || ch == '`'
-            || ch == ','
-            || ch == ':'
-            || ch == ';'
-            || ch == '?'
-            || ch == '!'
-            || ch == '('
-            || ch == ')'
-            || ch == '['
-            || ch == ']'
-            || ch == '{'
-            || ch == '}'
-    });
-    if token.ends_with('.') && !token.ends_with("..") {
-        token = &token[..token.len() - 1];
-    }
-    (!token.is_empty()).then_some(token)
-}
-
-fn is_path_like_token(token: &str) -> bool {
-    token.contains('/')
-        || matches!(
-            token,
-            "README.md" | "Cargo.toml" | "Cargo.lock" | "package.json" | "tsconfig.json"
-        )
-        || token.ends_with(".rs")
-        || token.ends_with(".py")
-        || token.ends_with(".md")
-        || token.ends_with(".toml")
-        || token.ends_with(".json")
-}
-
-fn recent_task_context(queued: &VecDeque<String>) -> bool {
-    queued.iter().any(|prompt| {
-        let normalized = normalize_prompt(prompt);
-        is_task_prompt(&normalized, false)
-    })
-}
-
 fn run_prompt_streaming(
     prompt: &str,
     model: &str,
@@ -1182,12 +924,9 @@ fn update_active_session_model(model: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        classify_intent, context_scan_status, debug_response, is_agent_transcript_latest,
-        is_end_command, is_exit_command, parse_debug_command, parse_model_command,
-        parse_root_command, path_boundary_clarify_text, path_boundary_violation, root_status,
-        Intent,
+        context_scan_status, debug_response, is_agent_transcript_latest, is_end_command,
+        is_exit_command, parse_debug_command, parse_model_command,
     };
-    use std::path::Path;
     use std::time::Instant;
 
     #[test]
@@ -1235,41 +974,6 @@ mod tests {
     }
 
     #[test]
-    fn parses_root_slash_command() {
-        assert_eq!(parse_root_command("/root"), Some(None));
-        assert_eq!(parse_root_command("/root   .  "), Some(Some(".")));
-        assert_eq!(parse_root_command("/root clear"), Some(Some("clear")));
-        assert_eq!(parse_root_command("root ."), None);
-    }
-
-    #[test]
-    fn root_status_reports_source() {
-        let root = Path::new("/tmp/workspace");
-        assert!(root_status(Some(root), true).contains("root-source: explicit"));
-        assert!(root_status(Some(root), false).contains("root-source: cwd"));
-        assert!(root_status(None, false).contains("root: unset"));
-    }
-
-    #[test]
-    fn detects_path_references_outside_root() {
-        let root = Path::new("/tmp/workspace");
-        assert_eq!(path_boundary_violation("fix README.md", root), None);
-        assert_eq!(path_boundary_violation("fix src/main.rs.", root), None);
-        assert!(path_boundary_violation("fix ../outside.md", root).is_some());
-        assert!(path_boundary_violation("audit /Users/example/.ssh/config", root).is_some());
-    }
-
-    #[test]
-    fn outside_root_clarify_suggests_parent_root() {
-        let text = path_boundary_clarify_text(
-            Path::new("/tmp/workspace"),
-            Path::new("/Users/example/.ssh/config"),
-        );
-        assert!(text.contains("Suggested root: /Users/example/.ssh"));
-        assert!(text.contains("Type /root /Users/example/.ssh"));
-    }
-
-    #[test]
     fn debug_response_points_file_work_to_agent_mode() {
         let response = debug_response("can you write files?", "deepseek-v4-flash");
         assert!(response.contains("local diagnostic response"));
@@ -1282,56 +986,5 @@ mod tests {
         assert!(status.starts_with("context: scanning ["));
         assert!(status.ends_with("s"));
         assert!(!status.ends_with('\n'));
-    }
-
-    #[test]
-    fn classifies_open_questions_as_chat() {
-        let root = Path::new("/tmp/workspace");
-        assert_eq!(
-            classify_intent("what do you think about this design?", false, Some(root)),
-            Intent::Chat
-        );
-        assert_eq!(
-            classify_intent("how do I fix this?", false, Some(root)),
-            Intent::Chat
-        );
-        assert_eq!(
-            classify_intent("explain this codebase", false, Some(root)),
-            Intent::Chat
-        );
-    }
-
-    #[test]
-    fn classifies_imperatives_as_tasks_inside_workspace() {
-        let root = Path::new("/tmp/workspace");
-        assert_eq!(
-            classify_intent(
-                "fix the duplicate helper in both repos and run tests",
-                false,
-                Some(root)
-            ),
-            Intent::Task
-        );
-        assert_eq!(classify_intent("fix it", false, Some(root)), Intent::Task);
-        assert_eq!(
-            classify_intent("implement a logout button", false, Some(root)),
-            Intent::Task
-        );
-    }
-
-    #[test]
-    fn classifies_ambiguous_or_home_tasks_as_clarify() {
-        assert_eq!(
-            classify_intent(
-                "can you look at this?",
-                false,
-                Some(Path::new("/tmp/workspace"))
-            ),
-            Intent::Clarify
-        );
-        assert_eq!(
-            classify_intent("fix the README in this directory", false, None),
-            Intent::Clarify
-        );
     }
 }
