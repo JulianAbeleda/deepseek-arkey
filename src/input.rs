@@ -16,8 +16,7 @@ pub enum InputAction {
 
 const DOCK_RESERVED_ROWS: usize = 5;
 const SLASH_COMMANDS: &[&str] = &[
-    "/chat", "/agent", "/root", "/model", "/debug", "/runtime", "/status", "/session", "/end",
-    "/exit", "?",
+    "/chat", "/agent", "/root", "/model", "/debug", "/runtime", "/status", "/end", "/exit", "?",
 ];
 
 pub struct InlineInput {
