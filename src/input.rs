@@ -37,6 +37,7 @@ pub struct DockedComposer {
     transcript_start_row: Option<u16>,
     transcript_cursor_row: Option<u16>,
     transcript_cursor_column: usize,
+    rendered_dock_rows: usize,
 }
 
 pub struct RawModeSession;
@@ -195,6 +196,7 @@ impl DockedComposer {
             transcript_start_row: None,
             transcript_cursor_row: None,
             transcript_cursor_column: 0,
+            rendered_dock_rows: 0,
         }
     }
 
@@ -209,12 +211,24 @@ impl DockedComposer {
         self.render()
     }
 
-    pub fn render(&self) -> Result<(), String> {
-        render_dock_lines(&self.prompt, &self.buffer, self.cursor)
+    pub fn render(&mut self) -> Result<(), String> {
+        self.rendered_dock_rows = render_dock_lines(
+            &self.prompt,
+            &self.buffer,
+            self.cursor,
+            self.rendered_dock_rows,
+        )?;
+        Ok(())
     }
 
-    fn render_preserving_cursor(&self) -> Result<(), String> {
-        render_dock_lines_preserving_cursor(&self.prompt, &self.buffer, self.cursor)
+    fn render_preserving_cursor(&mut self) -> Result<(), String> {
+        self.rendered_dock_rows = render_dock_lines_preserving_cursor(
+            &self.prompt,
+            &self.buffer,
+            self.cursor,
+            self.rendered_dock_rows,
+        )?;
+        Ok(())
     }
 
     pub fn poll_action(&mut self, timeout: Duration) -> Result<Option<InputAction>, String> {
@@ -654,24 +668,31 @@ fn render_line(prompt: &str, buffer: &str, cursor: usize) -> Result<(), String> 
     stdout.flush().map_err(|err| err.to_string())
 }
 
-fn render_dock_lines(prompt: &str, buffer: &str, cursor: usize) -> Result<(), String> {
-    render_dock_lines_inner(prompt, buffer, cursor, false)
+fn render_dock_lines(
+    prompt: &str,
+    buffer: &str,
+    cursor: usize,
+    previous_rows: usize,
+) -> Result<usize, String> {
+    render_dock_lines_inner(prompt, buffer, cursor, previous_rows, false)
 }
 
 fn render_dock_lines_preserving_cursor(
     prompt: &str,
     buffer: &str,
     cursor: usize,
-) -> Result<(), String> {
-    render_dock_lines_inner(prompt, buffer, cursor, true)
+    previous_rows: usize,
+) -> Result<usize, String> {
+    render_dock_lines_inner(prompt, buffer, cursor, previous_rows, true)
 }
 
 fn render_dock_lines_inner(
     prompt: &str,
     buffer: &str,
     cursor: usize,
+    previous_rows: usize,
     preserve_cursor: bool,
-) -> Result<(), String> {
+) -> Result<usize, String> {
     let rows = compose_dock_rows(prompt, buffer, cursor, terminal_width());
     let visible_rows = rows
         .lines
@@ -693,7 +714,7 @@ fn render_dock_lines_inner(
     if preserve_cursor {
         execute!(stdout, SavePosition).map_err(|err| err.to_string())?;
     }
-    clear_dock_area(&mut stdout)?;
+    clear_dock_rows(&mut stdout, display_lines.len().max(previous_rows))?;
     for (index, line) in display_lines.iter().enumerate() {
         execute!(
             stdout,
@@ -711,7 +732,8 @@ fn render_dock_lines_inner(
     if preserve_cursor {
         execute!(stdout, RestorePosition).map_err(|err| err.to_string())?;
     }
-    stdout.flush().map_err(|err| err.to_string())
+    stdout.flush().map_err(|err| err.to_string())?;
+    Ok(display_lines.len().min(DOCK_RESERVED_ROWS))
 }
 
 fn newline() -> Result<(), String> {
@@ -949,12 +971,13 @@ fn transcript_view_height() -> usize {
     output_row() as usize + 1
 }
 
-fn composer_top_row() -> u16 {
-    terminal_rows().saturating_sub(DOCK_RESERVED_ROWS as u16)
-}
-
-fn clear_dock_area(stdout: &mut io::Stdout) -> Result<(), String> {
-    for row in composer_top_row()..=dock_row() {
+fn clear_dock_rows(stdout: &mut io::Stdout, rows: usize) -> Result<(), String> {
+    if rows == 0 {
+        return Ok(());
+    }
+    let rows = rows.min(DOCK_RESERVED_ROWS);
+    let first_row = dock_row().saturating_sub(rows.saturating_sub(1) as u16);
+    for row in first_row..=dock_row() {
         execute!(stdout, MoveTo(0, row), Clear(ClearType::CurrentLine))
             .map_err(|err| err.to_string())?;
     }
