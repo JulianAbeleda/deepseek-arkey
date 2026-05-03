@@ -5,7 +5,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
-use crate::provider::PROVIDER;
+use crate::provider::{PROVIDER, PROVIDER_DIR, PROVIDER_STATE_DIR};
 use crate::safety::atomic_write;
 
 const DEBUG_STREAM_DELAY_ENV: &str = "DEEPSEEK_DEBUG_STREAM_DELAY_MS";
@@ -59,7 +59,8 @@ impl RuntimeState {
 impl RuntimeBackend {
     pub fn parse(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
-            "provider" | "deepseek" | "off" => Some(Self::Provider),
+            "provider" | "off" => Some(Self::Provider),
+            provider if provider == PROVIDER_DIR => Some(Self::Provider),
             "debug" | "debug-manual" | "manual" | "on" => Some(Self::Debug),
             _ => None,
         }
@@ -68,9 +69,12 @@ impl RuntimeBackend {
 
 pub fn runtime_path() -> PathBuf {
     if let Some(home) = std::env::var_os("HOME") {
-        return PathBuf::from(home).join(".local/state/provider-cli/deepseek/runtime-state.json");
+        return PathBuf::from(home)
+            .join(".local/state/provider-cli")
+            .join(PROVIDER_DIR)
+            .join("runtime-state.json");
     }
-    PathBuf::from(".deepseek/runtime-state.json")
+    PathBuf::from(PROVIDER_STATE_DIR).join("runtime-state.json")
 }
 
 pub fn load(default_model: &str) -> Result<RuntimeState, String> {

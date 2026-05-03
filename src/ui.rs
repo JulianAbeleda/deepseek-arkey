@@ -5,7 +5,7 @@ use crossterm::cursor::{position, MoveToColumn};
 use crossterm::execute;
 use crossterm::terminal::{size, Clear, ClearType};
 
-use crate::provider::PROVIDER;
+use crate::provider::{PROVIDER, SUPPORTED_MODELS};
 use crate::session;
 
 pub fn print_banner(model: &str) -> Option<u16> {
@@ -64,7 +64,7 @@ pub fn print_model_help(model: &str) {
     print_line("  /model <id>");
     print_blank_line();
     print_line(muted("Current DeepSeek text models"));
-    for model in ["deepseek-v4-flash", "deepseek-v4-pro"] {
+    for model in SUPPORTED_MODELS {
         print_line(format!("  {model}"));
     }
     print_blank_line();
@@ -85,7 +85,8 @@ pub fn interactive_help(model: &str) -> String {
 
 pub fn model_help(model: &str) -> String {
     format!(
-        "Model commands\ncurrent: {model}\n\nUsage\n  /model <id>\n\nCurrent DeepSeek text models\n  deepseek-v4-flash\n  deepseek-v4-pro\n\nLegacy aliases deepseek-chat and deepseek-reasoner retire on 2026-07-24.\n"
+        "Model commands\ncurrent: {model}\n\nUsage\n  /model <id>\n\nCurrent DeepSeek text models\n  {}\n\nLegacy aliases deepseek-chat and deepseek-reasoner retire on 2026-07-24.\n",
+        SUPPORTED_MODELS.join("\n  ")
     )
 }
 

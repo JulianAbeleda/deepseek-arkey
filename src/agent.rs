@@ -170,6 +170,8 @@ mod tests {
 
     use serde_json::json;
 
+    use crate::provider::PROVIDER_STATE_DIR;
+
     use super::workspace::Workspace;
     use super::write_tools::{apply_prepared_patch, prepare_patch};
     use super::{parse_decision, write_transcript, ApprovalMode, ToolCall, TranscriptEntry};
@@ -454,7 +456,7 @@ mod tests {
             }],
         )
         .unwrap();
-        assert!(path.starts_with(root.join(".deepseek/agent-transcripts")));
+        assert!(path.starts_with(root.join(PROVIDER_STATE_DIR).join("agent-transcripts")));
         assert!(path.exists());
         let _ = fs::remove_dir_all(root);
     }

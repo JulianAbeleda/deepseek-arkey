@@ -6,8 +6,12 @@ use serde::{Deserialize, Serialize};
 use crate::safety::{cap_text, redact_text, DEFAULT_TEXT_CAP};
 
 pub const PROVIDER: &str = "DeepSeek";
+pub const PROVIDER_DIR: &str = "deepseek";
+pub const PROVIDER_STATE_DIR: &str = ".deepseek";
 pub const ENV_KEY: &str = "DEEPSEEK_API_KEY";
 pub const DEFAULT_MODEL: &str = "deepseek-v4-flash";
+pub const DEFAULT_SESSION_NAME: &str = "default";
+pub const SUPPORTED_MODELS: &[&str] = &["deepseek-v4-flash", "deepseek-v4-pro"];
 const API_URL: &str = "https://api.deepseek.com/chat/completions";
 const LOGIN_MAX_TOKENS: u32 = 128;
 

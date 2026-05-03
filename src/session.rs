@@ -4,7 +4,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
-use crate::provider::Message;
+use crate::provider::{Message, PROVIDER_DIR, PROVIDER_STATE_DIR};
 use crate::safety::atomic_write;
 
 const MAX_TURNS: usize = 20;
@@ -57,9 +57,12 @@ impl SessionState {
 
 pub fn session_path() -> PathBuf {
     if let Some(home) = std::env::var_os("HOME") {
-        return PathBuf::from(home).join(".local/state/provider-cli/deepseek/active-session.json");
+        return PathBuf::from(home)
+            .join(".local/state/provider-cli")
+            .join(PROVIDER_DIR)
+            .join("active-session.json");
     }
-    PathBuf::from(".deepseek/active-session.json")
+    PathBuf::from(PROVIDER_STATE_DIR).join("active-session.json")
 }
 
 pub fn load() -> Result<Option<SessionState>, String> {
@@ -104,10 +107,11 @@ fn unix_timestamp() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::SessionState;
+    use crate::provider::{DEFAULT_SESSION_NAME, PROVIDER};
 
     #[test]
     fn caps_turn_count() {
-        let mut state = SessionState::new("DeepSeek", "default", "model");
+        let mut state = SessionState::new(PROVIDER, DEFAULT_SESSION_NAME, "model");
         for index in 0..25 {
             state.push_turn(format!("u{index}"), format!("a{index}"));
         }

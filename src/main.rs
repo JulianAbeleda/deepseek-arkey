@@ -15,7 +15,7 @@ use std::process::ExitCode;
 use clap::Parser;
 
 use cli::{Args, Command, SessionCommand};
-use provider::{Message, DEFAULT_MODEL, PROVIDER};
+use provider::{Message, DEFAULT_MODEL, DEFAULT_SESSION_NAME, PROVIDER};
 use runtime::RuntimeBackend;
 use session::SessionState;
 
@@ -134,7 +134,7 @@ fn print_latest_agent_transcript(root: String) -> Result<(), String> {
 fn handle_session_command(command: SessionCommand, model: &str) -> Result<(), String> {
     match command {
         SessionCommand::Start { name } => {
-            let name = name.unwrap_or_else(|| "default".to_string());
+            let name = name.unwrap_or_else(|| DEFAULT_SESSION_NAME.to_string());
             let state = SessionState::new(PROVIDER, name, model.to_string());
             session::save(&state)?;
             ui::print_session_started(&state.name);

@@ -4,6 +4,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 
+use crate::provider::PROVIDER_STATE_DIR;
 use crate::safety::{atomic_write, cap_text};
 
 const MAX_TRANSCRIPT_CHARS: usize = 80_000;
@@ -50,7 +51,7 @@ pub(super) fn read_latest_transcript(
 }
 
 fn transcript_dir(root: &Path) -> PathBuf {
-    root.join(".deepseek/agent-transcripts")
+    root.join(PROVIDER_STATE_DIR).join("agent-transcripts")
 }
 
 fn unix_timestamp() -> u64 {

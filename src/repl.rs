@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use crate::agent;
 use crate::input::{DockedComposer, InlineInput, InputAction, RawModeSession};
 use crate::intent::{classify_intent, path_boundary_violation, recent_task_context, Intent};
-use crate::provider::{self, Message, PROVIDER};
+use crate::provider::{self, Message, DEFAULT_SESSION_NAME, PROVIDER};
 use crate::runtime::{self, RuntimeBackend};
 use crate::session::{self, SessionState};
 use crate::ui;
@@ -55,7 +55,7 @@ fn run_interactive_chat(model: &str, temperature: Option<f32>, stream: bool) -> 
     if session::load()?.is_none() {
         session::save(&SessionState::new(
             PROVIDER,
-            "default",
+            DEFAULT_SESSION_NAME,
             current_model.clone(),
         ))?;
     }
@@ -136,7 +136,7 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
     if session::load()?.is_none() {
         session::save(&SessionState::new(
             PROVIDER,
-            "default",
+            DEFAULT_SESSION_NAME,
             current_model.clone(),
         ))?;
     }
@@ -380,7 +380,7 @@ fn run_interactive_agent(model: &str, temperature: Option<f32>) -> Result<(), St
     if session::load()?.is_none() {
         session::save(&SessionState::new(
             PROVIDER,
-            "default",
+            DEFAULT_SESSION_NAME,
             current_model.clone(),
         ))?;
     }
