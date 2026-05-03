@@ -21,6 +21,25 @@ pub struct Message {
     pub content: String,
 }
 
+pub fn message(role: impl Into<String>, content: impl Into<String>) -> Message {
+    Message {
+        role: role.into(),
+        content: content.into(),
+    }
+}
+
+pub fn system_message(content: impl Into<String>) -> Message {
+    message("system", content)
+}
+
+pub fn user_message(content: impl Into<String>) -> Message {
+    message("user", content)
+}
+
+pub fn assistant_message(content: impl Into<String>) -> Message {
+    message("assistant", content)
+}
+
 #[derive(Debug, Serialize)]
 struct ChatRequest<'a> {
     model: &'a str,
@@ -41,10 +60,7 @@ pub fn api_key() -> Result<String, String> {
 }
 
 pub fn login_check(model: &str) -> Result<(), String> {
-    let messages = vec![Message {
-        role: "user".to_string(),
-        content: "Say exactly: OK".to_string(),
-    }];
+    let messages = vec![user_message("Say exactly: OK")];
     let _ = chat(&messages, model, Some(0.0), Some(LOGIN_MAX_TOKENS), false)?;
     Ok(())
 }

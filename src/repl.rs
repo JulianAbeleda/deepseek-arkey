@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use crate::agent;
 use crate::input::{DockedComposer, InlineInput, InputAction, RawModeSession};
 use crate::intent::{classify_intent, path_boundary_violation, recent_task_context, Intent};
-use crate::provider::{self, Message, DEFAULT_SESSION_NAME, PROVIDER};
+use crate::provider::{self, DEFAULT_SESSION_NAME, PROVIDER};
 use crate::runtime::{self, RuntimeBackend};
 use crate::session::{self, SessionState};
 use crate::ui;
@@ -540,10 +540,7 @@ fn run_prompt_streaming(
         .as_ref()
         .map(|state| state.messages.clone())
         .unwrap_or_default();
-    messages.push(Message {
-        role: "user".to_string(),
-        content: prompt.to_string(),
-    });
+    messages.push(provider::user_message(prompt));
     let response = if runtime_state.backend == RuntimeBackend::Debug {
         let response = runtime::debug_response(prompt, model);
         let delay = runtime::debug_stream_delay();

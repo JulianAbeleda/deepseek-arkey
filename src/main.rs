@@ -15,7 +15,7 @@ use std::process::ExitCode;
 use clap::Parser;
 
 use cli::{Args, Command, SessionCommand};
-use provider::{Message, DEFAULT_MODEL, DEFAULT_SESSION_NAME, PROVIDER};
+use provider::{DEFAULT_MODEL, DEFAULT_SESSION_NAME, PROVIDER};
 use runtime::RuntimeBackend;
 use session::SessionState;
 
@@ -164,10 +164,7 @@ pub(crate) fn run_prompt(
         .as_ref()
         .map(|state| state.messages.clone())
         .unwrap_or_default();
-    messages.push(Message {
-        role: "user".to_string(),
-        content: prompt.to_string(),
-    });
+    messages.push(provider::user_message(prompt));
     let response = if runtime_state.backend == RuntimeBackend::Debug {
         let response = runtime::debug_response(prompt, model);
         if stream {

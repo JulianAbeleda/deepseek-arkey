@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use crate::provider::{self, Message};
+use crate::provider::{self, assistant_message, system_message, user_message};
 use crate::safety::{cap_text, redact_text};
 
 mod decision;
@@ -70,14 +70,8 @@ pub fn run_agent_with_options(
 ) -> Result<AgentOutcome, String> {
     let workspace = Workspace::new(config.root)?;
     let mut messages = vec![
-        Message {
-            role: "system".to_string(),
-            content: system_prompt(&workspace.root),
-        },
-        Message {
-            role: "user".to_string(),
-            content: format!("Task: {}", redact_text(task)),
-        },
+        system_message(system_prompt(&workspace.root)),
+        user_message(format!("Task: {}", redact_text(task))),
     ];
     let mut transcript = vec![TranscriptEntry {
         role: "task".to_string(),
@@ -123,16 +117,10 @@ pub fn run_agent_with_options(
             role: format!("tool:{}", tool.name),
             content: result_text.clone(),
         });
-        messages.push(Message {
-            role: "assistant".to_string(),
-            content: redacted_raw,
-        });
-        messages.push(Message {
-            role: "user".to_string(),
-            content: format!(
-                "Tool result for step {step}:\n{result_text}\nContinue with JSON only."
-            ),
-        });
+        messages.push(assistant_message(redacted_raw));
+        messages.push(user_message(format!(
+            "Tool result for step {step}:\n{result_text}\nContinue with JSON only."
+        )));
     }
 
     let transcript_path = write_transcript(&workspace.root, &transcript)?;

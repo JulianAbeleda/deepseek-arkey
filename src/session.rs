@@ -4,7 +4,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
-use crate::provider::{Message, PROVIDER_DIR, PROVIDER_STATE_DIR};
+use crate::provider::{assistant_message, user_message, Message, PROVIDER_DIR, PROVIDER_STATE_DIR};
 use crate::safety::atomic_write;
 
 const MAX_TURNS: usize = 20;
@@ -31,14 +31,8 @@ impl SessionState {
     }
 
     pub fn push_turn(&mut self, user: String, assistant: String) {
-        self.messages.push(Message {
-            role: "user".to_string(),
-            content: user,
-        });
-        self.messages.push(Message {
-            role: "assistant".to_string(),
-            content: assistant,
-        });
+        self.messages.push(user_message(user));
+        self.messages.push(assistant_message(assistant));
         self.updated_at = unix_timestamp();
         self.cap_history();
     }
