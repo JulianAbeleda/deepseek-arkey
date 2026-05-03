@@ -52,9 +52,12 @@ struct ChatRequest<'a> {
 }
 
 pub fn api_key() -> Result<String, String> {
-    std::env::var(ENV_KEY)
+    parse_api_key(std::env::var(ENV_KEY).ok())
+}
+
+fn parse_api_key(value: Option<String>) -> Result<String, String> {
+    value
         .map(|key| key.trim().to_string())
-        .ok()
         .filter(|key| !key.is_empty())
         .ok_or_else(|| format!("{ENV_KEY} is not set"))
 }
@@ -327,7 +330,7 @@ fn print_cache_stats(raw: &str) {
 
 #[cfg(test)]
 mod tests {
-    use super::{curl_command, curl_config, curl_quote, extract_assistant_text};
+    use super::{curl_command, curl_config, curl_quote, extract_assistant_text, parse_api_key};
 
     #[test]
     fn extracts_assistant_text() {
@@ -341,6 +344,24 @@ mod tests {
         assert!(extract_assistant_text(raw)
             .unwrap_err()
             .contains("provider error"));
+    }
+
+    #[test]
+    fn api_key_rejects_missing_and_blank_values() {
+        assert!(parse_api_key(None)
+            .unwrap_err()
+            .contains("DEEPSEEK_API_KEY"));
+        assert!(parse_api_key(Some(" \t\n ".to_string()))
+            .unwrap_err()
+            .contains("DEEPSEEK_API_KEY"));
+    }
+
+    #[test]
+    fn api_key_trims_surrounding_whitespace() {
+        assert_eq!(
+            parse_api_key(Some("  secret-key\n".to_string())).unwrap(),
+            "secret-key"
+        );
     }
 
     #[test]

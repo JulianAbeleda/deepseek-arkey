@@ -1,5 +1,5 @@
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
@@ -61,22 +61,34 @@ pub fn session_path() -> PathBuf {
 
 pub fn load() -> Result<Option<SessionState>, String> {
     let path = session_path();
+    load_from_path(&path)
+}
+
+fn load_from_path(path: &Path) -> Result<Option<SessionState>, String> {
     if !path.exists() {
         return Ok(None);
     }
-    let raw = fs::read_to_string(&path).map_err(|err| err.to_string())?;
+    let raw = fs::read_to_string(path).map_err(|err| err.to_string())?;
     serde_json::from_str(&raw)
         .map(Some)
         .map_err(|err| err.to_string())
 }
 
 pub fn save(state: &SessionState) -> Result<(), String> {
+    save_to_path(&session_path(), state)
+}
+
+fn save_to_path(path: &Path, state: &SessionState) -> Result<(), String> {
     let bytes = serde_json::to_vec_pretty(state).map_err(|err| err.to_string())?;
-    atomic_write(&session_path(), &bytes).map_err(|err| err.to_string())
+    atomic_write(path, &bytes).map_err(|err| err.to_string())
 }
 
 pub fn delete() -> Result<bool, String> {
     let path = session_path();
+    delete_path(&path)
+}
+
+fn delete_path(path: &Path) -> Result<bool, String> {
     if !path.exists() {
         return Ok(false);
     }
@@ -100,7 +112,7 @@ fn unix_timestamp() -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::SessionState;
+    use super::{delete_path, load_from_path, save_to_path, SessionState};
     use crate::provider::{DEFAULT_SESSION_NAME, PROVIDER};
 
     #[test]
@@ -111,5 +123,34 @@ mod tests {
         }
         assert_eq!(state.messages.len(), 40);
         assert_eq!(state.messages[0].content, "u5");
+    }
+
+    #[test]
+    fn save_load_delete_round_trip() {
+        let root = std::env::temp_dir().join(format!(
+            "deepseek-session-roundtrip-test-{}",
+            std::process::id()
+        ));
+        let path = root.join("active-session.json");
+        let _ = std::fs::remove_dir_all(&root);
+
+        let mut state = SessionState::new(PROVIDER, DEFAULT_SESSION_NAME, "model-a");
+        state.push_turn("hello".to_string(), "world".to_string());
+        save_to_path(&path, &state).unwrap();
+
+        let loaded = load_from_path(&path).unwrap().unwrap();
+        assert_eq!(loaded.provider, PROVIDER);
+        assert_eq!(loaded.name, DEFAULT_SESSION_NAME);
+        assert_eq!(loaded.model, "model-a");
+        assert_eq!(loaded.messages.len(), 2);
+        assert_eq!(loaded.messages[0].role, "user");
+        assert_eq!(loaded.messages[0].content, "hello");
+        assert_eq!(loaded.messages[1].role, "assistant");
+        assert_eq!(loaded.messages[1].content, "world");
+
+        assert!(delete_path(&path).unwrap());
+        assert!(load_from_path(&path).unwrap().is_none());
+        assert!(!delete_path(&path).unwrap());
+        let _ = std::fs::remove_dir_all(root);
     }
 }
