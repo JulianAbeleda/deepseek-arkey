@@ -1,5 +1,5 @@
 use std::io::{BufRead, BufReader, Write};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Output, Stdio};
 
 use serde::{Deserialize, Serialize};
 
@@ -112,19 +112,7 @@ where
     if stream {
         return chat_streaming(&key, body, print_stream_trailing_newline, on_delta);
     }
-    let output = Command::new("curl")
-        .arg("-sS")
-        .arg("-X")
-        .arg("POST")
-        .arg(API_URL)
-        .arg("-H")
-        .arg(format!("Authorization: Bearer {key}"))
-        .arg("-H")
-        .arg("Content-Type: application/json")
-        .arg("-d")
-        .arg(body)
-        .output()
-        .map_err(|err| format!("failed to run curl: {err}"))?;
+    let output = run_curl(&key, &body, false)?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
         return Err(if stderr.is_empty() {
@@ -147,22 +135,7 @@ fn chat_streaming<F>(
 where
     F: FnMut(&str),
 {
-    let mut child = Command::new("curl")
-        .arg("-sS")
-        .arg("-N")
-        .arg("-X")
-        .arg("POST")
-        .arg(API_URL)
-        .arg("-H")
-        .arg(format!("Authorization: Bearer {key}"))
-        .arg("-H")
-        .arg("Content-Type: application/json")
-        .arg("-d")
-        .arg(body)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|err| format!("failed to run curl: {err}"))?;
+    let mut child = spawn_curl(&curl_config(key, &body, true))?;
     let stdout = child
         .stdout
         .take()
@@ -211,6 +184,70 @@ where
         println!();
     }
     Ok(cap_text(response.trim(), DEFAULT_TEXT_CAP))
+}
+
+fn run_curl(key: &str, body: &str, stream: bool) -> Result<Output, String> {
+    spawn_curl(&curl_config(key, body, stream))?
+        .wait_with_output()
+        .map_err(|err| err.to_string())
+}
+
+fn spawn_curl(config: &str) -> Result<Child, String> {
+    let mut child = curl_command()
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|err| format!("failed to run curl: {err}"))?;
+    child
+        .stdin
+        .take()
+        .ok_or_else(|| "failed to open curl stdin".to_string())?
+        .write_all(config.as_bytes())
+        .map_err(|err| format!("failed to write curl config: {err}"))?;
+    Ok(child)
+}
+
+fn curl_command() -> Command {
+    let mut command = Command::new("curl");
+    command.arg("-q").arg("-K").arg("-");
+    command
+}
+
+fn curl_config(key: &str, body: &str, stream: bool) -> String {
+    let mut config = String::new();
+    config.push_str("silent\n");
+    config.push_str("show-error\n");
+    if stream {
+        config.push_str("no-buffer\n");
+    }
+    config.push_str("request = \"POST\"\n");
+    config.push_str(&format!("url = \"{}\"\n", curl_quote(API_URL)));
+    config.push_str(&format!(
+        "header = \"{}\"\n",
+        curl_quote(&format!("Authorization: Bearer {key}"))
+    ));
+    config.push_str(&format!(
+        "header = \"{}\"\n",
+        curl_quote("Content-Type: application/json")
+    ));
+    config.push_str(&format!("data = \"{}\"\n", curl_quote(body)));
+    config
+}
+
+fn curl_quote(value: &str) -> String {
+    let mut quoted = String::new();
+    for ch in value.chars() {
+        match ch {
+            '\\' => quoted.push_str("\\\\"),
+            '"' => quoted.push_str("\\\""),
+            '\n' => quoted.push_str("\\n"),
+            '\r' => quoted.push_str("\\r"),
+            '\t' => quoted.push_str("\\t"),
+            ch => quoted.push(ch),
+        }
+    }
+    quoted
 }
 
 pub fn extract_assistant_text(raw: &str) -> Result<String, String> {
@@ -270,7 +307,7 @@ fn print_cache_stats(raw: &str) {
 
 #[cfg(test)]
 mod tests {
-    use super::extract_assistant_text;
+    use super::{curl_command, curl_config, curl_quote, extract_assistant_text};
 
     #[test]
     fn extracts_assistant_text() {
@@ -284,5 +321,30 @@ mod tests {
         assert!(extract_assistant_text(raw)
             .unwrap_err()
             .contains("provider error"));
+    }
+
+    #[test]
+    fn curl_process_args_do_not_include_api_key() {
+        let command = curl_command();
+        let args = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().to_string())
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(!args.contains("secret-key"));
+        assert_eq!(args, "-q -K -");
+    }
+
+    #[test]
+    fn curl_config_carries_auth_header_off_argv() {
+        let config = curl_config("secret-key", r#"{"messages":[]}"#, false);
+        assert!(config.contains("Authorization: Bearer secret-key"));
+        assert!(config.contains("Content-Type: application/json"));
+        assert!(config.contains("data = "));
+    }
+
+    #[test]
+    fn curl_quote_escapes_config_string_controls() {
+        assert_eq!(curl_quote("a\"b\\c\n\r\t"), "a\\\"b\\\\c\\n\\r\\t");
     }
 }
