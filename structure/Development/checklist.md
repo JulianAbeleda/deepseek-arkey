@@ -258,6 +258,35 @@ Validation notes:
   - `c95e7d3 [docs] Document Phase 12 approval flow`
 - 2026-05-03: Validation passed: `cargo fmt --check`, `cargo test --offline`, `cargo build --offline`, Phase 11 docked routing smoke, and Phase 12 dock approval smoke.
 
+## Post-Phase 12: Persistent Workspace Navigation
+
+- [x] Add session-level `selected_root` persistence separate from approval-scoped `agent_root`.
+- [x] Make natural navigation update the selected workspace root without approving shell/edit tools.
+- [x] Support Kimi-style navigation phrases:
+  - `go to my env folder`
+  - `navigate into my env folder`
+  - `cd into deepseek`
+  - `enter the deepseek repo`
+  - `open the minimax repo`
+  - `go inside ~/env/deepseek`
+- [x] Keep task phrases such as `go through downloads` routed as tasks, not root navigation.
+- [x] Keep casual chat such as `switch to main branch`, `stay in touch`, and `open a ticket` from changing roots.
+- [x] Print inline `root error:` messages for bad explicit navigation paths instead of exiting the TUI.
+- [x] Add `scripts/persistent-navigation-test.sh` as a focused debugger for this behavior.
+- [x] Expand `scripts/routing-debug.py` to cover persistent navigation and selected-root reuse.
+- [x] Port matching behavior and debugger coverage to MiniMax.
+
+Validation notes:
+
+- 2026-05-04: DeepSeek `./scripts/persistent-navigation-test.sh` passed:
+  - `cargo fmt --check`
+  - `cargo build --offline`
+  - `cargo test --offline` with 80/80 tests passing
+  - focused navigation unit test
+  - routing/debug PTY smoke with 35/35 cases passing
+- 2026-05-04: MiniMax `./scripts/persistent-navigation-test.sh` passed with 87/87 tests and 35/35 PTY cases.
+- 2026-05-04: External Kimi audit was attempted but failed with a connection error; external Claude print-mode audit was attempted but did not return output and was stopped. Local verification passed.
+
 Phase 8 smoke commands:
 
 ```bash
