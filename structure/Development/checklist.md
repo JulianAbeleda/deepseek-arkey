@@ -242,9 +242,9 @@ Validation notes:
 - [x] Add Phase 12 PTY smoke coverage for shell denial, shell approval, patch denial, and patch approval.
 - [x] Port the validated Phase 12 behavior to MiniMax.
 - [x] Push DeepSeek and MiniMax parity commits to `origin/main`.
-- [ ] Audit Phase 12 completion commits as a matched DeepSeek/MiniMax pair.
-- [ ] Decide whether to extract approval prompt formatting from `agent.rs` before adding more approval types.
-- [ ] If audit passes, tag or document Phase 12 as complete.
+- [x] Audit Phase 12 completion commits as a matched DeepSeek/MiniMax pair.
+- [x] Decide whether to extract approval prompt formatting from `agent.rs` before adding more approval types.
+- [x] If audit passes, tag or document Phase 12 as complete.
 
 Validation notes:
 
@@ -257,6 +257,7 @@ Validation notes:
   - `2401abe [cli] Align dock approval denial handling`
   - `c95e7d3 [docs] Document Phase 12 approval flow`
 - 2026-05-03: Validation passed: `cargo fmt --check`, `cargo test --offline`, `cargo build --offline`, Phase 11 docked routing smoke, and Phase 12 dock approval smoke.
+- 2026-05-04: Claude audit passed Phase 12 as a matched DeepSeek/MiniMax pair. Decision: defer approval prompt formatting extraction until a third approval type forces the issue.
 
 ## Post-Phase 12: Persistent Workspace Navigation
 
@@ -286,6 +287,11 @@ Validation notes:
   - routing/debug PTY smoke with 35/35 cases passing
 - 2026-05-04: MiniMax `./scripts/persistent-navigation-test.sh` passed with 87/87 tests and 35/35 PTY cases.
 - 2026-05-04: External Kimi audit was attempted but failed with a connection error; external Claude print-mode audit was attempted but did not return output and was stopped. Local verification passed.
+- 2026-05-04: Claude audit passed persistent workspace navigation in both repos and confirmed navigation commits were pushed.
+
+## Follow-Up Backlog
+
+- [ ] Port MiniMax patch failure-mode tests equivalent to DeepSeek `apply_patch_rejects_changed_file` and `rejects_ambiguous_replacement`.
 
 Phase 8 smoke commands:
 

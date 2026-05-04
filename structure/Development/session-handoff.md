@@ -3,8 +3,8 @@
 ## Current State
 
 Phase 11 model-decided docked routing, Phase 12 dock-native approvals, and the
-post-Phase-12 persistent workspace navigation slice are implemented and
-validated in DeepSeek and MiniMax.
+post-Phase-12 persistent workspace navigation slice are implemented, audited,
+validated, and pushed in DeepSeek and MiniMax.
 
 DeepSeek latest navigation/runtime commit:
 
@@ -57,13 +57,19 @@ External Kimi audit was attempted on 2026-05-04 but failed with a connection
 error. External Claude print-mode audit was attempted but produced no output and
 was stopped. Local deterministic validation passed in both repos.
 
+Claude audit later passed Phase 12 and persistent workspace navigation in both
+repos. Decision: defer extracting approval prompt formatting from `agent.rs`
+until a third approval type makes the duplication meaningful.
+
 ## Next Session Checklist
 
-- [ ] Audit the Phase 12 completion commits in both repos.
-- [ ] Decide whether to extract approval prompt formatting from `agent.rs` into
+- [x] Audit the Phase 12 completion commits in both repos.
+- [x] Decide whether to extract approval prompt formatting from `agent.rs` into
       a UI-facing layer before adding more approval types.
-- [ ] If the audit passes, tag or document Phase 12 as complete.
-- [ ] Push the persistent workspace navigation commits if they are not already
+- [x] If the audit passes, tag or document Phase 12 as complete.
+- [x] Push the persistent workspace navigation commits if they are not already
       on `origin/main`.
+- [ ] Port MiniMax patch failure-mode tests equivalent to DeepSeek
+      `apply_patch_rejects_changed_file` and `rejects_ambiguous_replacement`.
 - [ ] Keep DeepSeek and MiniMax parity unless a provider-specific behavior
       requires divergence.
