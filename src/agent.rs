@@ -292,6 +292,35 @@ mod tests {
     }
 
     #[test]
+    fn parses_openai_style_tool_call() {
+        let decision = parse_decision(
+            r#"{"content":null,"tool_calls":[{"id":"call_1","type":"function","function":{"name":"read_file","arguments":"{\"path\":\"src/main.rs\"}"}}]}"#,
+        )
+        .unwrap();
+        let tool = decision.tool.unwrap();
+        assert_eq!(tool.name, "read_file");
+        assert_eq!(tool.arguments["path"], "src/main.rs");
+    }
+
+    #[test]
+    fn parses_openai_style_final_content() {
+        let decision = parse_decision(r#"{"content":"done","tool_calls":null}"#).unwrap();
+        assert_eq!(decision.final_answer.as_deref(), Some("done"));
+    }
+
+    #[test]
+    fn parses_first_json_object_before_trailing_prose() {
+        let decision = parse_decision(
+            r#"{"content":null,"tool_calls":[{"id":"call_1","type":"function","function":{"name":"list_files","arguments":"{\"path\":\".\"}"}}]}
+I will list the files now."#,
+        )
+        .unwrap();
+        let tool = decision.tool.unwrap();
+        assert_eq!(tool.name, "list_files");
+        assert_eq!(tool.arguments["path"], ".");
+    }
+
+    #[test]
     fn default_max_steps_matches_long_running_agent_budget() {
         assert_eq!(DEFAULT_MAX_STEPS, 1000);
     }
