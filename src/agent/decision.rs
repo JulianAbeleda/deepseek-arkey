@@ -55,9 +55,35 @@ No raw writes, creates, deletes, network actions, or paths outside the workspace
 pub fn parse_decision(text: &str) -> Result<AgentDecision, String> {
     let json =
         extract_json_object(text).ok_or_else(|| "agent response was not JSON".to_string())?;
-    let value: serde_json::Value =
-        serde_json::from_str(json).map_err(|err| format!("invalid agent JSON: {err}"))?;
+    let value: serde_json::Value = match serde_json::from_str(json) {
+        Ok(v) => v,
+        Err(first_err) => {
+            if let Some(repaired) = insert_missing_comma(json, first_err.column()) {
+                serde_json::from_str(&repaired)
+                    .map_err(|_| format!("invalid agent JSON: {first_err}"))?
+            } else {
+                return Err(format!("invalid agent JSON: {first_err}"));
+            }
+        }
+    };
     normalize_decision(value)
+}
+
+fn insert_missing_comma(json: &str, col: usize) -> Option<String> {
+    let pos = col.checked_sub(1)?;
+    let bytes = json.as_bytes();
+    if bytes.get(pos) != Some(&b'"') {
+        return None;
+    }
+    let previous = json[..pos].trim_end().as_bytes().last().copied()?;
+    if !matches!(previous, b'"' | b'}' | b']' | b'e' | b'l' | b'0'..=b'9') {
+        return None;
+    }
+    let key_end = json[pos + 1..].find('"')? + pos + 1;
+    if json[key_end + 1..].trim_start().as_bytes().first() != Some(&b':') {
+        return None;
+    }
+    Some(format!("{},{}", &json[..pos], &json[pos..]))
 }
 
 fn extract_json_object(text: &str) -> Option<&str> {

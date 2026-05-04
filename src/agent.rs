@@ -122,7 +122,10 @@ pub fn run_agent_with_approval_handler(
             role: "assistant".to_string(),
             content: redacted_raw.clone(),
         });
-        let decision = parse_decision(&raw)?;
+        let decision = parse_decision(&raw).map_err(|err| {
+            let snippet = cap_text(&redact_text(&raw), 400);
+            format!("{err}\nraw snippet: {snippet}")
+        })?;
         if let Some(answer) = decision.final_answer {
             let transcript_path = write_transcript(&workspace.root, &transcript)?;
             return Ok(AgentOutcome {
@@ -318,6 +321,16 @@ I will list the files now."#,
         let tool = decision.tool.unwrap();
         assert_eq!(tool.name, "list_files");
         assert_eq!(tool.arguments["path"], ".");
+    }
+
+    #[test]
+    fn repairs_missing_comma_in_function_object() {
+        let missing_comma = r#"{"content":null,"tool_calls":[{"id":"call_1","type":"function","function":{"name":"inspect_tree" "arguments":"{\"path\":\".\",\"depth\":2}"}}]}"#;
+        let decision = parse_decision(missing_comma).unwrap();
+        let tool = decision.tool.unwrap();
+        assert_eq!(tool.name, "inspect_tree");
+        assert_eq!(tool.arguments["path"], ".");
+        assert_eq!(tool.arguments["depth"], 2);
     }
 
     #[test]
