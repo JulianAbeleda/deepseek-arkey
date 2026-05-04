@@ -1,5 +1,7 @@
 use clap::{Parser, Subcommand};
 
+use crate::agent::DEFAULT_MAX_STEPS;
+
 #[derive(Debug, Parser)]
 #[command(name = "deepseek")]
 #[command(about = "Standalone DeepSeek terminal CLI")]
@@ -54,7 +56,7 @@ pub enum Command {
         #[arg(long, default_value = ".")]
         root: String,
 
-        #[arg(long, default_value_t = 8)]
+        #[arg(long, default_value_t = DEFAULT_MAX_STEPS)]
         max_steps: usize,
     },
     Login,

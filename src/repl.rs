@@ -535,7 +535,7 @@ fn run_confirmed_agent_task(
         &task.prompt,
         model,
         temperature,
-        agent::AgentConfig::new(task.root.clone(), 8),
+        agent::AgentConfig::new(task.root.clone(), agent::DEFAULT_MAX_STEPS),
     ) {
         Ok(outcome) => outcome,
         Err(err) => {
@@ -628,7 +628,7 @@ fn run_interactive_agent(model: &str, temperature: Option<f32>) -> Result<(), St
             prompt,
             &current_model,
             temperature,
-            agent::AgentConfig::new(root.clone(), 8),
+            agent::AgentConfig::new(root.clone(), agent::DEFAULT_MAX_STEPS),
         )?;
         eprintln!(
             "agent: steps={} transcript={}",
@@ -723,7 +723,7 @@ fn run_agent_streaming(
         prompt,
         model,
         temperature,
-        agent::AgentConfig::new(root, 8),
+        agent::AgentConfig::new(root, agent::DEFAULT_MAX_STEPS),
         agent::ApprovalMode::External,
         |step, tool| {
             let _ = sender.send(TurnEvent::ToolStep(step, tool.to_string()));

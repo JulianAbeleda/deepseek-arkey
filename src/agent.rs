@@ -14,6 +14,7 @@ use transcript::{write_transcript, TranscriptEntry};
 use workspace::Workspace;
 
 const MAX_TOOL_CHARS: usize = 12_000;
+pub const DEFAULT_MAX_STEPS: usize = 1000;
 
 pub struct AgentConfig {
     pub root: PathBuf,
@@ -270,7 +271,10 @@ mod tests {
 
     use super::workspace::Workspace;
     use super::write_tools::{apply_prepared_patch, prepare_patch};
-    use super::{parse_decision, write_transcript, ApprovalMode, ToolCall, TranscriptEntry};
+    use super::{
+        parse_decision, write_transcript, ApprovalMode, ToolCall, TranscriptEntry,
+        DEFAULT_MAX_STEPS,
+    };
 
     fn execute_tool(workspace: &Workspace, call: &ToolCall) -> String {
         super::execute_tool(workspace, call, ApprovalMode::Interactive)
@@ -285,6 +289,11 @@ mod tests {
         let tool = decision.tool.unwrap();
         assert_eq!(tool.name, "read_file");
         assert_eq!(tool.arguments["path"], "src/main.rs");
+    }
+
+    #[test]
+    fn default_max_steps_matches_long_running_agent_budget() {
+        assert_eq!(DEFAULT_MAX_STEPS, 1000);
     }
 
     #[test]
