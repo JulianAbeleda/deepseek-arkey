@@ -13,8 +13,8 @@ use crate::runtime::{self, RuntimeBackend};
 use crate::session::{self, SessionState};
 use crate::ui;
 use crate::workspace::{
-    effective_workspace_root, infer_natural_root, parse_navigation_request, parse_root_command,
-    path_boundary_clarify_text, root_status, update_selected_root,
+    effective_workspace_root, infer_natural_root, parse_navigation_request_from,
+    parse_root_command, path_boundary_clarify_text, root_status, update_selected_root,
 };
 
 enum TurnEvent {
@@ -287,7 +287,7 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
             switch_to_agent = true;
             break;
         }
-        match parse_navigation_request(prompt) {
+        match parse_navigation_request_from(prompt, selected_root.as_deref()) {
             Ok(Some(root)) => {
                 selected_root = Some(root);
                 approved_agent_root = None;

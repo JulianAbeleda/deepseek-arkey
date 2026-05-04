@@ -40,7 +40,15 @@ pub(crate) fn infer_natural_root(prompt: &str) -> Option<PathBuf> {
     None
 }
 
+#[cfg(test)]
 pub(crate) fn parse_navigation_request(prompt: &str) -> Result<Option<PathBuf>, String> {
+    parse_navigation_request_from(prompt, None)
+}
+
+pub(crate) fn parse_navigation_request_from(
+    prompt: &str,
+    base_root: Option<&Path>,
+) -> Result<Option<PathBuf>, String> {
     let prompt = prompt.trim();
     let lowered = prompt.to_lowercase();
     let Some((target, explicit_path)) = navigation_target(prompt, &lowered) else {
@@ -53,7 +61,7 @@ pub(crate) fn parse_navigation_request(prompt: &str) -> Result<Option<PathBuf>, 
     if let Some(root) = navigation_alias_root(target) {
         return canonical_dir(root).map(Some);
     }
-    let path = expand_path(target);
+    let path = expand_path(target, base_root);
     if path.is_dir() {
         return canonical_dir(path).map(Some);
     }
@@ -143,7 +151,7 @@ fn clean_navigation_target(target: &str) -> &str {
     target
 }
 
-fn expand_path(path: &str) -> PathBuf {
+fn expand_path(path: &str, base_root: Option<&Path>) -> PathBuf {
     if path == "~" {
         return std::env::var_os("HOME")
             .map(PathBuf::from)
@@ -157,6 +165,8 @@ fn expand_path(path: &str) -> PathBuf {
     let path = PathBuf::from(path);
     if path.is_absolute() {
         path
+    } else if let Some(base_root) = base_root {
+        base_root.join(path)
     } else {
         std::env::current_dir()
             .unwrap_or_else(|_| PathBuf::from("."))
@@ -228,8 +238,10 @@ pub(crate) fn path_boundary_clarify_text(root: &Path, path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        parse_navigation_request, parse_root_command, path_boundary_clarify_text, root_status,
+        parse_navigation_request, parse_navigation_request_from, parse_root_command,
+        path_boundary_clarify_text, root_status,
     };
+    use std::fs;
     use std::path::Path;
 
     #[test]
@@ -358,6 +370,26 @@ mod tests {
         assert_eq!(parse_navigation_request("open a ticket").unwrap(), None);
         assert!(parse_navigation_request("go to /definitely/not/here").is_err());
         assert!(parse_navigation_request("cd into definitely-not-here").is_err());
+    }
+
+    #[test]
+    fn relative_navigation_uses_selected_root_as_base() {
+        let root = std::env::temp_dir().join(format!(
+            "deepseek-navigation-base-test-{}",
+            std::process::id()
+        ));
+        let child = root.join("v1_DNU");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&child).unwrap();
+
+        assert_eq!(
+            parse_navigation_request_from("cd into v1_DNU", Some(&root))
+                .unwrap()
+                .as_deref(),
+            Some(child.canonicalize().unwrap().as_path())
+        );
+
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
