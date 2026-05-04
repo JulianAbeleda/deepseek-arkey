@@ -58,7 +58,16 @@ pub fn parse_decision(text: &str) -> Result<AgentDecision, String> {
     let value: serde_json::Value = match serde_json::from_str(json) {
         Ok(v) => v,
         Err(first_err) => {
-            if let Some(repaired) = insert_missing_comma(json, first_err.column()) {
+            if let Some(repaired) = repair_malformed_arguments_string(json) {
+                if let Ok(value) = serde_json::from_str(&repaired) {
+                    value
+                } else if let Some(repaired) = insert_missing_comma(json, first_err.column()) {
+                    serde_json::from_str(&repaired)
+                        .map_err(|_| format!("invalid agent JSON: {first_err}"))?
+                } else {
+                    return Err(format!("invalid agent JSON: {first_err}"));
+                }
+            } else if let Some(repaired) = insert_missing_comma(json, first_err.column()) {
                 serde_json::from_str(&repaired)
                     .map_err(|_| format!("invalid agent JSON: {first_err}"))?
             } else {
@@ -67,6 +76,38 @@ pub fn parse_decision(text: &str) -> Result<AgentDecision, String> {
         }
     };
     normalize_decision(value)
+}
+
+fn repair_malformed_arguments_string(json: &str) -> Option<String> {
+    let marker = r#""arguments":"{"#;
+    let marker_start = json.find(marker)?;
+    let value_start = marker_start + r#""arguments":""#.len();
+    let (value_end, object) = find_repairable_arguments_object(json, value_start)?;
+
+    Some(
+        format!("{}{}{}", &json[..marker_start], r#""arguments":"#, object)
+            + &json[value_end + 2..],
+    )
+}
+
+fn find_repairable_arguments_object(text: &str, start: usize) -> Option<(usize, String)> {
+    if text.as_bytes().get(start) != Some(&b'{') {
+        return None;
+    }
+    for (offset, ch) in text[start..].char_indices() {
+        if ch != '}' {
+            continue;
+        }
+        let end = start + offset;
+        if text.as_bytes().get(end + 1) != Some(&b'"') {
+            continue;
+        }
+        let object = text[start..=end].replace("\\\"", "\"");
+        if serde_json::from_str::<serde_json::Value>(&object).is_ok() {
+            return Some((end, object));
+        }
+    }
+    None
 }
 
 fn insert_missing_comma(json: &str, col: usize) -> Option<String> {
@@ -114,7 +155,8 @@ fn extract_json_object(text: &str) -> Option<&str> {
             _ => {}
         }
     }
-    None
+    let end = text.rfind('}')?;
+    (start < end).then_some(&text[start..=end])
 }
 
 fn normalize_decision(value: serde_json::Value) -> Result<AgentDecision, String> {

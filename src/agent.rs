@@ -334,6 +334,27 @@ I will list the files now."#,
     }
 
     #[test]
+    fn repairs_malformed_arguments_string() {
+        let malformed = r#"{"content":null,"tool_calls":[{"id":"call_1","type":"function","function":{"name":"inspect_tree","arguments":"{\"path\":".","depth":3}"}}]}"#;
+        let decision = parse_decision(malformed).unwrap();
+        let tool = decision.tool.unwrap();
+        assert_eq!(tool.name, "inspect_tree");
+        assert_eq!(tool.arguments["path"], ".");
+        assert_eq!(tool.arguments["depth"], 3);
+    }
+
+    #[test]
+    fn repairs_malformed_arguments_string_with_braces_in_value() {
+        let malformed = r#"{"content":null,"tool_calls":[{"id":"call_1","type":"function","function":{"name":"read_file","arguments":"{\"path\":\"README.md","pattern":"{heading}","depth":1}"}}]}"#;
+        let decision = parse_decision(malformed).unwrap();
+        let tool = decision.tool.unwrap();
+        assert_eq!(tool.name, "read_file");
+        assert_eq!(tool.arguments["path"], "README.md");
+        assert_eq!(tool.arguments["pattern"], "{heading}");
+        assert_eq!(tool.arguments["depth"], 1);
+    }
+
+    #[test]
     fn default_max_steps_matches_long_running_agent_budget() {
         assert_eq!(DEFAULT_MAX_STEPS, 1000);
     }
