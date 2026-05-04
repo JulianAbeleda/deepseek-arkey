@@ -13,4 +13,8 @@ active-session.json
 .deepseek/
 
 # Local development planning and audit notes
-structure/
+structure/*
+!structure/Development/
+structure/Development/*
+!structure/Development/checklist.md
+!structure/Development/session-handoff.md

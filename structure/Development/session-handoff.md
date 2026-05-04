@@ -1,26 +1,21 @@
 # Session Handoff
 
-## Repos
-
-- DeepSeek: `/Users/julianabeleda/env/deepseek`
-- MiniMax: `/Users/julianabeleda/env/minimax`
-
 ## Current State
 
 Phase 11 model-decided docked routing and Phase 12 dock-native approvals are
-implemented, validated, and pushed to `origin/main`.
+implemented, validated, and pushed to `origin/main` in DeepSeek and MiniMax.
 
 DeepSeek current head:
 
+- `83db9d4 [docs] Save Phase 12 session handoff`
 - `afa796a [test] Cover patch dock approvals`
 - `59f83ed [cli] Align dock approval denial handling`
-- `3812582 [docs] Document Phase 12 approval flow`
 
 MiniMax matching head:
 
+- `9f412b0 [docs] Save Phase 12 session handoff`
 - `ea09fd0 [test] Cover patch dock approvals`
 - `2401abe [cli] Align dock approval denial handling`
-- `c95e7d3 [docs] Document Phase 12 approval flow`
 
 ## What Changed
 
@@ -37,8 +32,6 @@ MiniMax matching head:
 
 ## Last Validation
 
-DeepSeek:
-
 ```bash
 cargo fmt --check
 cargo test --offline
@@ -47,15 +40,7 @@ python3 scripts/phase11-docked-routing-smoke.py --binary target/debug/deepseek
 python3 scripts/phase12-dock-approval-smoke.py --binary target/debug/deepseek
 ```
 
-MiniMax:
-
-```bash
-cargo fmt --check
-cargo test --offline
-cargo build --offline
-python3 scripts/phase11-docked-routing-smoke.py --binary target/debug/minimax
-python3 scripts/phase12-dock-approval-smoke.py --binary target/debug/minimax
-```
+MiniMax passed the equivalent commands with `target/debug/minimax`.
 
 ## Next Session Checklist
 
