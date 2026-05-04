@@ -7,12 +7,16 @@ stealing stdin from the bottom composer or corrupting the terminal display.
 
 ## First Slice
 
-- Implement in DeepSeek first.
-- Keep MiniMax unchanged until DeepSeek passes focused tests and PTY smoke.
-- Preserve explicit agent mode `yes run` and `yes apply` prompts.
-- Add dock-native approval requests for `run_shell` and `propose_patch`.
-- Accept approval or denial through the docked composer.
-- Keep shell/edit tools denied unless the user types the exact approval phrase.
+- [x] Implement in DeepSeek first.
+- [x] Keep MiniMax unchanged until DeepSeek passes focused tests and PTY smoke.
+- [x] Preserve explicit agent mode `yes run` and `yes apply` prompts.
+- [x] Add dock-native approval requests for `run_shell` and `propose_patch`.
+- [x] Accept approval or denial through the docked composer.
+- [x] Keep shell/edit tools denied unless the user types the exact approval phrase.
+- [x] Port the validated behavior to MiniMax.
+- [x] Remove the stale configurable `deny_phrase` field and keep denial handling
+  explicit in the REPL.
+- [x] Cover patch denial and approval in the Phase 12 PTY smoke.
 
 ## Expected Behavior
 
@@ -43,6 +47,38 @@ Type yes apply to approve, n to deny.
 
 - Pretty approval dialogs.
 - Approve-for-session policies.
-- MiniMax implementation before DeepSeek proof.
 - Reasoning display.
 - Broadening tool capabilities.
+
+## Current Status
+
+Phase 12 first slice is complete and pushed in both repos.
+
+DeepSeek latest commits:
+
+- `afa796a [test] Cover patch dock approvals`
+- `59f83ed [cli] Align dock approval denial handling`
+- `3812582 [docs] Document Phase 12 approval flow`
+
+MiniMax parity commits:
+
+- `ea09fd0 [test] Cover patch dock approvals`
+- `2401abe [cli] Align dock approval denial handling`
+- `c95e7d3 [docs] Document Phase 12 approval flow`
+
+Validation last run:
+
+```bash
+cargo fmt --check
+cargo test --offline
+cargo build --offline
+python3 scripts/phase11-docked-routing-smoke.py --binary target/debug/deepseek
+python3 scripts/phase12-dock-approval-smoke.py --binary target/debug/deepseek
+```
+
+## Next Session
+
+- Audit the Phase 12 completion commits as a matched DeepSeek/MiniMax pair.
+- Decide whether to extract approval prompt formatting out of `agent.rs` before
+  adding more approval types.
+- If the audit passes, tag or document Phase 12 as complete.
