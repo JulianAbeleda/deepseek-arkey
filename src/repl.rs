@@ -629,7 +629,7 @@ fn run_agent_streaming(
         model,
         temperature,
         agent::AgentConfig::new(root, 8),
-        agent::ApprovalMode::Interactive,
+        agent::ApprovalMode::Deny,
         |step, tool| {
             let _ = sender.send(TurnEvent::ToolStep(step, tool.to_string()));
         },

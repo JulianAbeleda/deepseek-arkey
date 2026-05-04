@@ -191,8 +191,22 @@ def write_fake_curl(directory):
             import sys
 
             config = sys.stdin.read()
-            if "Tool result for step" in config:
+            if "try a shell command" in config and "Tool result for step" in config:
+                decision = {"final_answer": "shell denied as expected"}
+            elif "Tool result for step" in config:
                 decision = {"final_answer": "desktop scan complete"}
+            elif "try a shell command" in config:
+                decision = {
+                    "thought": "request shell to verify dock denies it",
+                    "tool": {
+                        "name": "run_shell",
+                        "arguments": {
+                            "command": "pwd",
+                            "cwd": ".",
+                            "reason": "approval gate smoke",
+                        },
+                    },
+                }
             elif "scan my desktop" in config:
                 decision = {
                     "thought": "inspect desktop entries",
@@ -314,6 +328,29 @@ def main():
                 screen,
                 "dock after scan",
             )
+            assert_not_legacy_handoff(screen)
+
+            os.write(master, b"try a shell command\r")
+            wait_for(
+                lambda: screen.contains("agent step 1: run_shell"),
+                master,
+                screen,
+                "shell tool step render",
+            )
+            wait_for(
+                lambda: screen.contains("shell denied as expected"),
+                master,
+                screen,
+                "shell denial final answer",
+            )
+            wait_for(
+                lambda: args.name in screen.bottom() and "›" in screen.bottom(),
+                master,
+                screen,
+                "dock after shell denial",
+            )
+            if screen.contains("agent requests shell execution"):
+                raise AssertionError(f"docked worker prompted for shell approval\n{screen.dump()}")
             assert_not_legacy_handoff(screen)
 
             os.write(master, b"/exit\r")
