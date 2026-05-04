@@ -253,18 +253,14 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
                 let _ = approval.reply.send(agent::ApprovalDecision::Approve);
                 composer.print_above(&format!("approval: approved {}\n", approval.request.tool))?;
                 context_scan_started = Some(start_context_scan(&mut composer)?);
-            } else if prompt == approval.request.deny_phrase
-                || matches!(prompt, "n" | "no" | "deny")
-            {
+            } else if is_approval_denial(prompt) {
                 let _ = approval.reply.send(agent::ApprovalDecision::Deny);
                 composer.print_above(&format!("approval: denied {}\n", approval.request.tool))?;
                 context_scan_started = Some(start_context_scan(&mut composer)?);
             } else {
                 composer.print_above(&format!(
-                    "approval pending: {}\nType {} to approve, {} to deny.\n",
-                    approval.request.tool,
-                    approval.request.approve_phrase,
-                    approval.request.deny_phrase
+                    "approval pending: {}\nType {} to approve, n to deny.\n",
+                    approval.request.tool, approval.request.approve_phrase
                 ))?;
                 pending_approval = Some(approval);
             }
@@ -611,6 +607,10 @@ fn spawn_prompt_turn(
         let _ = sender.send(TurnEvent::Complete(result));
     });
     receiver
+}
+
+fn is_approval_denial(prompt: &str) -> bool {
+    matches!(prompt, "n" | "no" | "deny")
 }
 
 fn spawn_docked_turn(

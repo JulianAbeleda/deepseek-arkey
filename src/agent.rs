@@ -56,7 +56,6 @@ pub struct ApprovalRequest {
     pub tool: String,
     pub summary: String,
     pub approve_phrase: String,
-    pub deny_phrase: String,
 }
 
 pub fn run_agent(
@@ -204,7 +203,6 @@ fn approval_request(step: usize, call: &ToolCall) -> Option<ApprovalRequest> {
                     "approval required: run_shell\ncwd: {cwd}\nreason: {reason}\ncommand: {command}\nType yes run to approve, n to deny.\n"
                 ),
                 approve_phrase: "yes run".to_string(),
-                deny_phrase: "n".to_string(),
             })
         }
         "propose_patch" => {
@@ -235,7 +233,6 @@ fn approval_request(step: usize, call: &ToolCall) -> Option<ApprovalRequest> {
                     "approval required: propose_patch\npath: {path}\nreason: {reason}\n--- find ---\n{find}\n--- replace ---\n{replace}\nType yes apply to approve, n to deny.\n"
                 ),
                 approve_phrase: "yes apply".to_string(),
-                deny_phrase: "n".to_string(),
             })
         }
         _ => None,
@@ -384,6 +381,58 @@ mod tests {
             ApprovalMode::Deny,
         );
         assert!(result.contains("requires explicit interactive approval"));
+    }
+
+    #[test]
+    fn builds_patch_approval_request() {
+        let request = super::approval_request(
+            2,
+            &ToolCall {
+                name: "propose_patch".to_string(),
+                arguments: json!({
+                    "path":"note.txt",
+                    "find":"old",
+                    "replace":"new",
+                    "reason":"test patch approval"
+                }),
+            },
+        )
+        .unwrap();
+        assert_eq!(request.step, 2);
+        assert_eq!(request.tool, "propose_patch");
+        assert_eq!(request.approve_phrase, "yes apply");
+        assert!(request.summary.contains("approval required: propose_patch"));
+        assert!(request.summary.contains("path: note.txt"));
+        assert!(request.summary.contains("reason: test patch approval"));
+        assert!(request.summary.contains("--- find ---\nold"));
+        assert!(request.summary.contains("--- replace ---\nnew"));
+    }
+
+    #[test]
+    fn approved_approval_mode_applies_patch_once() {
+        let root = std::env::temp_dir().join(format!(
+            "deepseek-agent-patch-approved-test-{}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("note.txt"), "old").unwrap();
+        let workspace = Workspace::new(root.clone()).unwrap();
+        let result = super::execute_tool(
+            &workspace,
+            &ToolCall {
+                name: "propose_patch".to_string(),
+                arguments: json!({
+                    "path":"note.txt",
+                    "find":"old",
+                    "replace":"new",
+                    "reason":"test approved patch"
+                }),
+            },
+            ApprovalMode::Approved,
+        );
+        assert!(result.contains("ok: patched note.txt"));
+        assert_eq!(fs::read_to_string(root.join("note.txt")).unwrap(), "new");
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
