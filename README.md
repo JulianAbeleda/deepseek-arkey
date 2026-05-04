@@ -92,3 +92,9 @@ python3 scripts/agent-startup-smoke.py --binary target/release/deepseek
 python3 scripts/phase10-scope-probe.py --binary target/release/deepseek --name deepseek --model deepseek-v4-flash
 python3 scripts/phase11-docked-routing-smoke.py --binary target/release/deepseek
 ```
+
+Live provider smoke requires `DEEPSEEK_API_KEY` and network access:
+
+```bash
+python3 scripts/live-docked-routing-smoke.py --binary target/release/deepseek
+```
