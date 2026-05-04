@@ -425,6 +425,41 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
             composer.print_above("session ended\n")?;
             break;
         }
+        if let Some(command) = parse_shell_read_command(prompt) {
+            match command {
+                ShellReadCommand::Pwd => {
+                    composer.print_above(&shell_pwd_text(
+                        effective_workspace_root(selected_root.as_deref()).as_deref(),
+                    ))?;
+                }
+                ShellReadCommand::Ls(task) => {
+                    if in_flight.is_some() {
+                        queued.push_back(prompt.to_string());
+                        composer.print_above(&format!("queued: {} prompt(s)\n", queued.len()))?;
+                        continue;
+                    }
+                    let Some(root) = effective_workspace_root(selected_root.as_deref()) else {
+                        composer.print_above(&clarify_route_text())?;
+                        pending_agent_task = None;
+                        continue;
+                    };
+                    if let Some(path) = path_boundary_violation(&task, &root) {
+                        composer.print_above(&path_boundary_clarify_text(&root, &path))?;
+                        pending_agent_task = None;
+                        continue;
+                    }
+                    pending_agent_task = None;
+                    context_scan_started = Some(start_context_scan(&mut composer)?);
+                    in_flight = Some(spawn_agent_turn(
+                        task,
+                        root,
+                        current_model.clone(),
+                        temperature,
+                    ));
+                }
+            }
+            continue;
+        }
         if in_flight.is_some() {
             queued.push_back(prompt.to_string());
             composer.print_above(&format!("queued: {} prompt(s)\n", queued.len()))?;
@@ -828,6 +863,33 @@ fn clarify_route_text() -> String {
     "route: unclear\nDo you want chat analysis or an agent task?\nType /chat to discuss, /root <path> to choose a workspace, or /agent <task> to execute.\n".to_string()
 }
 
+enum ShellReadCommand {
+    Pwd,
+    Ls(String),
+}
+
+fn parse_shell_read_command(prompt: &str) -> Option<ShellReadCommand> {
+    let prompt = prompt.trim();
+    if prompt == "pwd" {
+        return Some(ShellReadCommand::Pwd);
+    }
+    if prompt == "ls" {
+        return Some(ShellReadCommand::Ls("list files".to_string()));
+    }
+    prompt
+        .strip_prefix("ls ")
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+        .map(|path| ShellReadCommand::Ls(format!("list files in {path}")))
+}
+
+fn shell_pwd_text(root: Option<&Path>) -> String {
+    match root {
+        Some(root) => format!("{}\n", root.display()),
+        None => "root: unset\n".to_string(),
+    }
+}
+
 fn no_pending_agent_task_text() -> String {
     "route: unclear\nNo pending agent task to confirm.\nType /root <path> to choose a workspace, then repeat the task; or type /agent <task> with the leading slash to run one directly.\n".to_string()
 }
@@ -1213,8 +1275,9 @@ mod tests {
         agent_route_confirmation, cap_interactive_memory, context_scan_status,
         is_agent_task_cancel_choice, is_agent_task_choice, is_end_command, is_exit_command,
         is_workspace_agent_prompt, no_pending_agent_task_text, parse_agent_task_command,
-        parse_debug_command, parse_model_command, parse_runtime_command, task_root_for_prompt,
-        workspace_agent_root_for_prompt, RuntimeCommand,
+        parse_debug_command, parse_model_command, parse_runtime_command, parse_shell_read_command,
+        shell_pwd_text, task_root_for_prompt, workspace_agent_root_for_prompt, RuntimeCommand,
+        ShellReadCommand,
     };
     use crate::provider;
     use crate::runtime;
@@ -1377,6 +1440,33 @@ mod tests {
         );
         assert_eq!(parse_agent_task_command("/agent"), None);
         assert_eq!(parse_agent_task_command("agent task"), None);
+    }
+
+    #[test]
+    fn parses_shell_like_read_commands() {
+        assert!(matches!(
+            parse_shell_read_command("pwd"),
+            Some(ShellReadCommand::Pwd)
+        ));
+        assert!(matches!(
+            parse_shell_read_command("ls"),
+            Some(ShellReadCommand::Ls(task)) if task == "list files"
+        ));
+        assert!(matches!(
+            parse_shell_read_command("ls src"),
+            Some(ShellReadCommand::Ls(task)) if task == "list files in src"
+        ));
+        assert!(parse_shell_read_command("lsdir").is_none());
+        assert!(parse_shell_read_command("pwd src").is_none());
+    }
+
+    #[test]
+    fn shell_pwd_prints_current_root() {
+        assert_eq!(
+            shell_pwd_text(Some(Path::new("/tmp/workspace"))),
+            "/tmp/workspace\n"
+        );
+        assert_eq!(shell_pwd_text(None), "root: unset\n");
     }
 
     #[test]
