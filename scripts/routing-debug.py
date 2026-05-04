@@ -213,18 +213,18 @@ def run_prompt(binary, env, name, cwd, prompt, setup_commands=None):
             os.write(master, (command + "\r").encode())
             wait_for(master, screen, lambda: "root-source: explicit" in screen.text(), command)
         os.write(master, (prompt + "\r").encode())
+        route_markers = [
+            "debug/manual backend",
+            "debug/manual agent backend",
+            "route: agent task",
+            "route: unclear",
+        ]
+        if not setup_commands:
+            route_markers.append("root-source: explicit")
         wait_for(
             master,
             screen,
-            lambda: any(
-                marker in screen.text()
-                for marker in (
-                    "debug/manual backend",
-                    "route: agent task",
-                    "route: unclear",
-                    "root-source: explicit",
-                )
-            ),
+            lambda: any(marker in screen.text() for marker in route_markers),
             f"route for {prompt!r}",
             timeout=15.0,
         )
@@ -240,6 +240,8 @@ def run_prompt(binary, env, name, cwd, prompt, setup_commands=None):
 
 
 def classify_output(text):
+    if "debug/manual agent backend" in text:
+        return "agent"
     if "route: agent task" in text:
         return "agent"
     if "route: unclear" in text:
@@ -341,6 +343,45 @@ def check_persistent_navigation(binary, env, name, home, env_root, provider_repo
     return ok
 
 
+def check_direct_agent_stays_in_chat_memory(binary, env, name, home, workspace):
+    commands = [
+        (
+            "/runtime legacy-routing on",
+            lambda text: "Routing: legacy-deterministic" in text,
+            "legacy routing enabled",
+        ),
+        (
+            f"/root {workspace}",
+            lambda text: "root-source: explicit" in text and path_visible(text, workspace),
+            "root set",
+        ),
+        (
+            "/agent analyze this repo structure",
+            lambda text: "debug/manual agent backend" in text and path_visible(text, workspace),
+            "direct agent runs in dock",
+        ),
+        (
+            "/status",
+            lambda text: "chat-turns: 1" in text and "mode: chat" in text,
+            "agent result enters chat memory",
+        ),
+        (
+            "does that make sense",
+            lambda text: "debug/manual backend" in text,
+            "follow-up stays chat",
+        ),
+    ]
+    text = run_sequence(binary, env, name, home, commands)
+    ok = all(predicate(text) for _, predicate, _ in commands) and "returning to chat" not in text
+    status = "PASS" if ok else "FAIL"
+    print(f"{status:4} direct /agent result stays in docked chat memory")
+    if not ok:
+        print("---- screen ----")
+        print(text)
+        print("---------------")
+    return ok
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--name", default="deepseek")
@@ -404,6 +445,16 @@ def main():
             (workspace, "the app is not working", "agent", workspace, None),
             (home, "go through downloads", "agent", downloads, [f"/root {workspace}"]),
             (home, "fix this repo", "agent", workspace, [f"/root {workspace}"]),
+            (home, "analyze this repo structure", "agent", workspace, [f"/root {workspace}"]),
+            (home, "tell me the main modules", "agent", workspace, [f"/root {workspace}"]),
+            (home, "list files", "agent", workspace, [f"/root {workspace}"]),
+            (home, "scan src", "agent", workspace, [f"/root {workspace}"]),
+            (home, "read Cargo.toml", "agent", workspace, [f"/root {workspace}"]),
+            (home, "what is this repo trying to do", "agent", workspace, [f"/root {workspace}"]),
+            (home, "does that make sense", "chat", None, [f"/root {workspace}"]),
+            (home, "does that align with Kimi", "chat", None, [f"/root {workspace}"]),
+            (home, "switch to main branch", "chat", None, [f"/root {workspace}"]),
+            (home, "stay in touch", "chat", None, [f"/root {workspace}"]),
         ]
 
         for cwd, prompt, expected, root, setup in cases:
@@ -414,6 +465,10 @@ def main():
 
         provider_repo = deepseek_repo if args.name == "deepseek" else minimax_repo
         if check_persistent_navigation(binary, env, args.name, home, env_root, provider_repo):
+            passed += 1
+        else:
+            failed += 1
+        if check_direct_agent_stays_in_chat_memory(binary, env, args.name, home, workspace):
             passed += 1
         else:
             failed += 1

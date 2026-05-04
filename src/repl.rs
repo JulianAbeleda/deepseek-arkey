@@ -192,7 +192,6 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
     let mut memory = Vec::<Message>::new();
     let mut pending_agent_task: Option<PendingAgentTask> = None;
     let mut pending_approval: Option<PendingDockApproval> = None;
-    let mut confirmed_agent_task: Option<PendingAgentTask> = None;
     let mut selected_root: Option<PathBuf> =
         persisted_selected_root.or_else(|| approved_agent_root.clone());
     let mut switch_to_agent = false;
@@ -305,6 +304,11 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
             }
         }
         if let Some(task) = parse_agent_task_command(prompt) {
+            if in_flight.is_some() {
+                queued.push_back(prompt.to_string());
+                composer.print_above(&format!("queued: {} prompt(s)\n", queued.len()))?;
+                continue;
+            }
             let Some(root) = task_root_for_prompt(task, selected_root.as_deref()) else {
                 composer.print_above(&clarify_route_text())?;
                 pending_agent_task = None;
@@ -315,11 +319,14 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
                 pending_agent_task = None;
                 continue;
             }
-            confirmed_agent_task = Some(PendingAgentTask {
-                prompt: task.to_string(),
+            context_scan_started = Some(start_context_scan(&mut composer)?);
+            in_flight = Some(spawn_agent_turn(
+                task.to_string(),
                 root,
-            });
-            break;
+                current_model.clone(),
+                temperature,
+            ));
+            continue;
         }
         if is_agent_task_choice(prompt) {
             if let Some(task) = pending_agent_task.take() {
@@ -329,8 +336,14 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
                     task.root.display(),
                     task.prompt
                 ))?;
-                confirmed_agent_task = Some(task);
-                break;
+                context_scan_started = Some(start_context_scan(&mut composer)?);
+                in_flight = Some(spawn_agent_turn(
+                    task.prompt,
+                    task.root,
+                    current_model.clone(),
+                    temperature,
+                ));
+                continue;
             }
             composer.print_above(&no_pending_agent_task_text())?;
             continue;
@@ -418,7 +431,7 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
             continue;
         }
         if !runtime_state.legacy_routing {
-            if let Some(root) = task_root_for_prompt(prompt, selected_root.as_deref()) {
+            if let Some(root) = workspace_agent_root_for_prompt(prompt, selected_root.as_deref()) {
                 if let Some(path) = path_boundary_violation(prompt, &root) {
                     composer.print_above(&path_boundary_clarify_text(&root, &path))?;
                     pending_agent_task = None;
@@ -433,6 +446,23 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
                 current_model.clone(),
                 temperature,
                 false,
+            ));
+            continue;
+        }
+
+        if let Some(root) = workspace_agent_root_for_prompt(prompt, selected_root.as_deref()) {
+            if let Some(path) = path_boundary_violation(prompt, &root) {
+                composer.print_above(&path_boundary_clarify_text(&root, &path))?;
+                pending_agent_task = None;
+                continue;
+            }
+            pending_agent_task = None;
+            context_scan_started = Some(start_context_scan(&mut composer)?);
+            in_flight = Some(spawn_agent_turn(
+                prompt.to_string(),
+                root,
+                current_model.clone(),
+                temperature,
             ));
             continue;
         }
@@ -456,11 +486,15 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
                     continue;
                 }
                 if agent_root_matches(approved_agent_root.as_deref(), &root) {
-                    confirmed_agent_task = Some(PendingAgentTask {
-                        prompt: prompt.to_string(),
-                        root: root.clone(),
-                    });
-                    break;
+                    pending_agent_task = None;
+                    context_scan_started = Some(start_context_scan(&mut composer)?);
+                    in_flight = Some(spawn_agent_turn(
+                        prompt.to_string(),
+                        root.clone(),
+                        current_model.clone(),
+                        temperature,
+                    ));
+                    continue;
                 }
                 pending_agent_task = Some(PendingAgentTask {
                     prompt: prompt.to_string(),
@@ -484,10 +518,6 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
         ));
     }
     drop(raw_mode);
-    if let Some(task) = confirmed_agent_task {
-        run_confirmed_agent_task(&task, &current_model, temperature)?;
-        return run_interactive_chat(&current_model, temperature, false);
-    }
     if switch_to_agent {
         run_interactive_agent(&current_model, temperature)?;
     }
@@ -643,8 +673,15 @@ fn spawn_docked_turn(
     temperature: Option<f32>,
     legacy_routing: bool,
 ) -> Receiver<TurnEvent> {
+    if let Some(task) = parse_agent_task_command(&prompt) {
+        if let Some(root) = task_root_for_prompt(task, selected_root) {
+            if path_boundary_violation(task, &root).is_none() {
+                return spawn_agent_turn(task.to_string(), root, model, temperature);
+            }
+        }
+    }
     if !legacy_routing {
-        if let Some(root) = task_root_for_prompt(&prompt, selected_root) {
+        if let Some(root) = workspace_agent_root_for_prompt(&prompt, selected_root) {
             if path_boundary_violation(&prompt, &root).is_none() {
                 return spawn_agent_turn(prompt, root, model, temperature);
             }
@@ -675,7 +712,10 @@ fn run_agent_streaming(
     sender: Sender<TurnEvent>,
 ) -> Result<(String, String), String> {
     if runtime::load(model)?.backend == RuntimeBackend::Debug {
-        let response = runtime::debug_response(prompt, model);
+        let response = format!(
+            "debug/manual agent backend root: {}\nmodel: {model}\nprompt: {prompt}\n",
+            root.display()
+        );
         let _ = sender.send(TurnEvent::Delta(response.clone()));
         return Ok((prompt.to_string(), response));
     }
@@ -811,6 +851,74 @@ fn task_root_for_prompt(prompt: &str, selected_root: Option<&Path>) -> Option<Pa
     infer_natural_root(prompt)
         .or_else(|| selected_root.map(Path::to_path_buf))
         .or_else(|| effective_workspace_root(None))
+}
+
+fn workspace_agent_root_for_prompt(prompt: &str, selected_root: Option<&Path>) -> Option<PathBuf> {
+    if is_workspace_chat_followup(&normalize_workspace_prompt(prompt)) {
+        return None;
+    }
+    infer_natural_root(prompt).or_else(|| {
+        selected_root
+            .filter(|_| is_workspace_agent_prompt(prompt))
+            .map(Path::to_path_buf)
+    })
+}
+
+fn is_workspace_agent_prompt(prompt: &str) -> bool {
+    let normalized = normalize_workspace_prompt(prompt);
+    if normalized.is_empty() || is_workspace_chat_followup(&normalized) {
+        return false;
+    }
+    if normalized.contains("main branch") {
+        return false;
+    }
+    let first = normalized.split_whitespace().next().unwrap_or("");
+    if matches!(
+        first,
+        "analyze" | "audit" | "inspect" | "list" | "read" | "review" | "scan" | "summarize"
+    ) {
+        return true;
+    }
+    [
+        "repo structure",
+        "repository structure",
+        "project structure",
+        "codebase structure",
+        "main modules",
+        "list files",
+        "what is this repo trying to do",
+        "what is this repository trying to do",
+        "what is this project trying to do",
+        "tell me what this repo is trying to do",
+        "tell me what this project is trying to do",
+    ]
+    .iter()
+    .any(|phrase| normalized.contains(phrase))
+}
+
+fn is_workspace_chat_followup(prompt: &str) -> bool {
+    prompt == "hi"
+        || prompt == "hello"
+        || prompt.starts_with("does that ")
+        || prompt.starts_with("does this ")
+        || prompt.starts_with("what is a ")
+        || prompt.starts_with("what are ")
+        || prompt.starts_with("why ")
+        || prompt.starts_with("how ")
+        || prompt.starts_with("should ")
+        || prompt.starts_with("stay in touch")
+}
+
+fn normalize_workspace_prompt(prompt: &str) -> String {
+    prompt
+        .trim()
+        .to_lowercase()
+        .chars()
+        .map(|ch| if ch.is_ascii_punctuation() { ' ' } else { ch })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn run_prompt_streaming(
@@ -1104,8 +1212,9 @@ mod tests {
     use super::{
         agent_route_confirmation, cap_interactive_memory, context_scan_status,
         is_agent_task_cancel_choice, is_agent_task_choice, is_end_command, is_exit_command,
-        no_pending_agent_task_text, parse_agent_task_command, parse_debug_command,
-        parse_model_command, parse_runtime_command, task_root_for_prompt, RuntimeCommand,
+        is_workspace_agent_prompt, no_pending_agent_task_text, parse_agent_task_command,
+        parse_debug_command, parse_model_command, parse_runtime_command, task_root_for_prompt,
+        workspace_agent_root_for_prompt, RuntimeCommand,
     };
     use crate::provider;
     use crate::runtime;
@@ -1187,6 +1296,45 @@ mod tests {
             task_root_for_prompt("fix this repo", Some(selected)),
             Some(selected.to_path_buf())
         );
+    }
+
+    #[test]
+    fn selected_root_routes_workspace_prompts_to_agent() {
+        let selected = Path::new("/tmp/selected-workspace");
+        for prompt in [
+            "analyze this repo structure",
+            "tell me the main modules",
+            "list files",
+            "scan src",
+            "read Cargo.toml",
+            "what is this repo trying to do",
+        ] {
+            assert_eq!(
+                workspace_agent_root_for_prompt(prompt, Some(selected)),
+                Some(selected.to_path_buf()),
+                "{prompt}"
+            );
+        }
+    }
+
+    #[test]
+    fn selected_root_keeps_casual_followups_in_chat() {
+        let selected = Path::new("/tmp/selected-workspace");
+        for prompt in [
+            "hi",
+            "what is a repo",
+            "does that make sense",
+            "does that align with Kimi",
+            "switch to main branch",
+            "stay in touch",
+        ] {
+            assert_eq!(
+                workspace_agent_root_for_prompt(prompt, Some(selected)),
+                None,
+                "{prompt}"
+            );
+            assert!(!is_workspace_agent_prompt(prompt), "{prompt}");
+        }
     }
 
     #[test]
