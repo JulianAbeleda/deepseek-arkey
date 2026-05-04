@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
-"""Phase 11 docked routing smoke.
+"""Phase 12 dock-native approval smoke.
 
 This validates the Kimi-style baseline path without a live provider:
 
-- natural-language prompts in a safe workspace go through the agent loop
-- final answers render above the existing dock
-- tool steps render above the existing dock
-- no Phase 10 `agent task:` stdout handoff or route-confirmation block appears
+- approval-gated tools request approval above the dock
+- denial and approval are submitted through the bottom composer
+- no raw stdin approval prompt appears
 """
 
 import argparse
@@ -191,29 +190,38 @@ def write_fake_curl(directory):
             import sys
 
             config = sys.stdin.read()
-            if "try a shell command" in config and "Tool result for step" in config:
-                decision = {"final_answer": "shell denied as expected"}
+            if "deny shell command" in config and "Tool result for step" in config:
+                decision = {"final_answer": "shell denied through dock"}
+            elif "approve shell command" in config and "Tool result for step" in config:
+                decision = {"final_answer": "shell approved through dock"}
             elif "Tool result for step" in config:
-                decision = {"final_answer": "desktop scan complete"}
-            elif "try a shell command" in config:
+                decision = {"final_answer": "unexpected tool result"}
+            elif "deny shell command" in config:
                 decision = {
-                    "thought": "request shell to verify dock denies it",
+                    "thought": "request shell and expect user denial",
                     "tool": {
                         "name": "run_shell",
                         "arguments": {
-                            "command": "pwd",
+                            "command": "printf DENIED_SHOULD_NOT_RUN",
                             "cwd": ".",
-                            "reason": "approval gate smoke",
+                            "reason": "phase12 denial smoke",
                         },
                     },
                 }
-            elif "scan my desktop" in config:
+            elif "approve shell command" in config:
                 decision = {
-                    "thought": "inspect desktop entries",
-                    "tool": {"name": "list_files", "arguments": {"path": "."}},
+                    "thought": "request shell and expect user approval",
+                    "tool": {
+                        "name": "run_shell",
+                        "arguments": {
+                            "command": "printf PHASE12_APPROVED",
+                            "cwd": ".",
+                            "reason": "phase12 approval smoke",
+                        },
+                    },
                 }
             else:
-                decision = {"final_answer": "hi docked agent ok"}
+                decision = {"final_answer": "phase12 ready"}
 
             print(json.dumps({
                 "choices": [{"message": {"content": json.dumps(decision)}}]
@@ -263,7 +271,7 @@ def main():
         raise SystemExit(f"binary not found: {binary}")
     binary = os.path.abspath(binary)
 
-    with tempfile.TemporaryDirectory(prefix=f"{args.name}-phase11-") as tmp:
+    with tempfile.TemporaryDirectory(prefix=f"{args.name}-phase12-") as tmp:
         tmp_path = Path(tmp)
         home = tmp_path / "home"
         workspace = tmp_path / "workspace"
@@ -293,44 +301,7 @@ def main():
                 "initial dock",
             )
 
-            os.write(master, b"hi\r")
-            wait_for(lambda: screen.contains("context: scanning"), master, screen, "hi scan row")
-            wait_for(
-                lambda: screen.contains("hi docked agent ok"),
-                master,
-                screen,
-                "hi final answer",
-            )
-            wait_for(
-                lambda: args.name in screen.bottom() and "›" in screen.bottom(),
-                master,
-                screen,
-                "dock after hi",
-            )
-            assert_not_legacy_handoff(screen)
-
-            os.write(master, b"scan my desktop\r")
-            wait_for(
-                lambda: screen.contains("agent step 1: list_files"),
-                master,
-                screen,
-                "tool step render",
-            )
-            wait_for(
-                lambda: screen.contains("desktop scan complete"),
-                master,
-                screen,
-                "scan final answer",
-            )
-            wait_for(
-                lambda: args.name in screen.bottom() and "›" in screen.bottom(),
-                master,
-                screen,
-                "dock after scan",
-            )
-            assert_not_legacy_handoff(screen)
-
-            os.write(master, b"try a shell command\r")
+            os.write(master, b"deny shell command\r")
             wait_for(
                 lambda: screen.contains("agent step 1: run_shell"),
                 master,
@@ -345,7 +316,13 @@ def main():
             )
             os.write(master, b"n\r")
             wait_for(
-                lambda: screen.contains("shell denied as expected"),
+                lambda: screen.contains("approval: denied run_shell"),
+                master,
+                screen,
+                "shell denial accepted",
+            )
+            wait_for(
+                lambda: screen.contains("shell denied through dock"),
                 master,
                 screen,
                 "shell denial final answer",
@@ -360,6 +337,28 @@ def main():
                 raise AssertionError(f"docked worker prompted for shell approval\n{screen.dump()}")
             assert_not_legacy_handoff(screen)
 
+            os.write(master, b"approve shell command\r")
+            wait_for(
+                lambda: screen.contains("reason: phase12 approval smoke"),
+                master,
+                screen,
+                "shell approval request",
+            )
+            os.write(master, b"yes run\r")
+            wait_for(
+                lambda: screen.contains("approval: approved run_shell"),
+                master,
+                screen,
+                "shell approval accepted",
+            )
+            wait_for(
+                lambda: screen.contains("shell approved through dock"),
+                master,
+                screen,
+                "shell approval final answer",
+            )
+            assert_not_legacy_handoff(screen)
+
             os.write(master, b"/exit\r")
             proc.wait(timeout=2)
         finally:
@@ -367,7 +366,7 @@ def main():
                 proc.terminate()
             os.close(master)
 
-    print(f"{args.name} phase11 docked routing smoke: ok")
+    print(f"{args.name} phase12 dock approval smoke: ok")
 
 
 if __name__ == "__main__":
