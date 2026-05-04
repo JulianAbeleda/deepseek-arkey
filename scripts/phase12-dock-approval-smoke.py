@@ -194,6 +194,10 @@ def write_fake_curl(directory):
                 decision = {"final_answer": "shell denied through dock"}
             elif "approve shell command" in config and "Tool result for step" in config:
                 decision = {"final_answer": "shell approved through dock"}
+            elif "deny patch edit" in config and "Tool result for step" in config:
+                decision = {"final_answer": "patch denied through dock"}
+            elif "approve patch edit" in config and "Tool result for step" in config:
+                decision = {"final_answer": "patch approved through dock"}
             elif "Tool result for step" in config:
                 decision = {"final_answer": "unexpected tool result"}
             elif "deny shell command" in config:
@@ -217,6 +221,32 @@ def write_fake_curl(directory):
                             "command": "printf PHASE12_APPROVED",
                             "cwd": ".",
                             "reason": "phase12 approval smoke",
+                        },
+                    },
+                }
+            elif "deny patch edit" in config:
+                decision = {
+                    "thought": "request patch and expect user denial",
+                    "tool": {
+                        "name": "propose_patch",
+                        "arguments": {
+                            "path": "README.md",
+                            "find": "workspace smoke",
+                            "replace": "workspace smoke denied",
+                            "reason": "phase12 patch denial smoke",
+                        },
+                    },
+                }
+            elif "approve patch edit" in config:
+                decision = {
+                    "thought": "request patch and expect user approval",
+                    "tool": {
+                        "name": "propose_patch",
+                        "arguments": {
+                            "path": "README.md",
+                            "find": "workspace smoke",
+                            "replace": "workspace smoke approved",
+                            "reason": "phase12 patch approval smoke",
                         },
                     },
                 }
@@ -258,6 +288,10 @@ def assert_not_legacy_handoff(screen):
         raise AssertionError(f"legacy handoff rendered: {found}\n{screen.dump()}")
 
 
+def prompt_visible(screen, name):
+    return name in screen.all_text() and "›" in screen.all_text()
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--binary", default=None)
@@ -295,7 +329,7 @@ def main():
         screen = Screen()
         try:
             wait_for(
-                lambda: args.name in screen.bottom() and "›" in screen.bottom(),
+                lambda: prompt_visible(screen, args.name),
                 master,
                 screen,
                 "initial dock",
@@ -328,7 +362,7 @@ def main():
                 "shell denial final answer",
             )
             wait_for(
-                lambda: args.name in screen.bottom() and "›" in screen.bottom(),
+                lambda: prompt_visible(screen, args.name),
                 master,
                 screen,
                 "dock after shell denial",
@@ -357,6 +391,62 @@ def main():
                 screen,
                 "shell approval final answer",
             )
+            assert_not_legacy_handoff(screen)
+
+            os.write(master, b"deny patch edit\r")
+            wait_for(
+                lambda: screen.contains("agent step 1: propose_patch"),
+                master,
+                screen,
+                "patch tool step render",
+            )
+            wait_for(
+                lambda: screen.contains("reason: phase12 patch denial smoke"),
+                master,
+                screen,
+                "patch denial request",
+            )
+            os.write(master, b"n\r")
+            wait_for(
+                lambda: screen.contains("approval: denied propose_patch"),
+                master,
+                screen,
+                "patch denial accepted",
+            )
+            wait_for(
+                lambda: screen.contains("patch denied through dock"),
+                master,
+                screen,
+                "patch denial final answer",
+            )
+            readme = (workspace / "README.md").read_text(encoding="utf-8")
+            if readme != "workspace smoke\n":
+                raise AssertionError(f"denied patch modified README.md: {readme!r}")
+            assert_not_legacy_handoff(screen)
+
+            os.write(master, b"approve patch edit\r")
+            wait_for(
+                lambda: screen.contains("reason: phase12 patch approval smoke"),
+                master,
+                screen,
+                "patch approval request",
+            )
+            os.write(master, b"yes apply\r")
+            wait_for(
+                lambda: screen.contains("approval: approved propose_patch"),
+                master,
+                screen,
+                "patch approval accepted",
+            )
+            wait_for(
+                lambda: screen.contains("patch approved through dock"),
+                master,
+                screen,
+                "patch approval final answer",
+            )
+            readme = (workspace / "README.md").read_text(encoding="utf-8")
+            if readme != "workspace smoke approved\n":
+                raise AssertionError(f"approved patch did not update README.md: {readme!r}")
             assert_not_legacy_handoff(screen)
 
             os.write(master, b"/exit\r")
