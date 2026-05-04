@@ -141,6 +141,9 @@ pub(super) fn apply_prepared_patch(patch: &PreparedPatch) -> io::Result<()> {
 }
 
 fn approve_patch(patch: &PreparedPatch, approval_mode: ApprovalMode) -> bool {
+    if approval_mode == ApprovalMode::Approved {
+        return true;
+    }
     if approval_mode == ApprovalMode::Deny {
         return false;
     }
@@ -170,6 +173,9 @@ fn approve_shell_command(
     reason: &str,
     approval_mode: ApprovalMode,
 ) -> bool {
+    if approval_mode == ApprovalMode::Approved {
+        return true;
+    }
     if approval_mode == ApprovalMode::Deny {
         return false;
     }

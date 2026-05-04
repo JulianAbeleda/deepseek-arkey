@@ -40,6 +40,23 @@ pub struct AgentOutcome {
 pub enum ApprovalMode {
     Interactive,
     Deny,
+    Approved,
+    External,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApprovalDecision {
+    Approve,
+    Deny,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ApprovalRequest {
+    pub step: usize,
+    pub tool: String,
+    pub summary: String,
+    pub approve_phrase: String,
+    pub deny_phrase: String,
 }
 
 pub fn run_agent(
@@ -66,7 +83,27 @@ pub fn run_agent_with_options(
     temperature: Option<f32>,
     config: AgentConfig,
     approval_mode: ApprovalMode,
+    on_step: impl FnMut(usize, &str),
+) -> Result<AgentOutcome, String> {
+    run_agent_with_approval_handler(
+        task,
+        model,
+        temperature,
+        config,
+        approval_mode,
+        on_step,
+        |_| ApprovalDecision::Deny,
+    )
+}
+
+pub fn run_agent_with_approval_handler(
+    task: &str,
+    model: &str,
+    temperature: Option<f32>,
+    config: AgentConfig,
+    approval_mode: ApprovalMode,
     mut on_step: impl FnMut(usize, &str),
+    mut on_approval: impl FnMut(ApprovalRequest) -> ApprovalDecision,
 ) -> Result<AgentOutcome, String> {
     let workspace = Workspace::new(config.root)?;
     let mut messages = vec![
@@ -111,7 +148,18 @@ pub fn run_agent_with_options(
             );
         };
         on_step(step, &tool.name);
-        let result = execute_tool(&workspace, &tool, approval_mode);
+        let tool_approval_mode = if approval_mode == ApprovalMode::External {
+            match approval_request(step, &tool) {
+                Some(request) => match on_approval(request) {
+                    ApprovalDecision::Approve => ApprovalMode::Approved,
+                    ApprovalDecision::Deny => ApprovalMode::Deny,
+                },
+                None => ApprovalMode::Deny,
+            }
+        } else {
+            approval_mode
+        };
+        let result = execute_tool(&workspace, &tool, tool_approval_mode);
         let result_text = cap_text(&redact_text(&result), MAX_TOOL_CHARS);
         transcript.push(TranscriptEntry {
             role: format!("tool:{}", tool.name),
@@ -129,6 +177,69 @@ pub fn run_agent_with_options(
         steps: config.max_steps,
         transcript_path,
     })
+}
+
+fn approval_request(step: usize, call: &ToolCall) -> Option<ApprovalRequest> {
+    match call.name.as_str() {
+        "run_shell" => {
+            let command = call
+                .arguments
+                .get("command")
+                .and_then(|value| value.as_str())
+                .unwrap_or("<missing command>");
+            let cwd = call
+                .arguments
+                .get("cwd")
+                .and_then(|value| value.as_str())
+                .unwrap_or(".");
+            let reason = call
+                .arguments
+                .get("reason")
+                .and_then(|value| value.as_str())
+                .unwrap_or("no reason provided");
+            Some(ApprovalRequest {
+                step,
+                tool: call.name.clone(),
+                summary: format!(
+                    "approval required: run_shell\ncwd: {cwd}\nreason: {reason}\ncommand: {command}\nType yes run to approve, n to deny.\n"
+                ),
+                approve_phrase: "yes run".to_string(),
+                deny_phrase: "n".to_string(),
+            })
+        }
+        "propose_patch" => {
+            let path = call
+                .arguments
+                .get("path")
+                .and_then(|value| value.as_str())
+                .unwrap_or("<missing path>");
+            let reason = call
+                .arguments
+                .get("reason")
+                .and_then(|value| value.as_str())
+                .unwrap_or("no reason provided");
+            let find = call
+                .arguments
+                .get("find")
+                .and_then(|value| value.as_str())
+                .unwrap_or("<missing find>");
+            let replace = call
+                .arguments
+                .get("replace")
+                .and_then(|value| value.as_str())
+                .unwrap_or("<missing replace>");
+            Some(ApprovalRequest {
+                step,
+                tool: call.name.clone(),
+                summary: format!(
+                    "approval required: propose_patch\npath: {path}\nreason: {reason}\n--- find ---\n{find}\n--- replace ---\n{replace}\nType yes apply to approve, n to deny.\n"
+                ),
+                approve_phrase: "yes apply".to_string(),
+                deny_phrase: "n".to_string(),
+            })
+        }
+        _ => None,
+    }
 }
 
 pub fn read_latest_transcript(
@@ -177,6 +288,45 @@ mod tests {
         let tool = decision.tool.unwrap();
         assert_eq!(tool.name, "read_file");
         assert_eq!(tool.arguments["path"], "src/main.rs");
+    }
+
+    #[test]
+    fn builds_shell_approval_request() {
+        let call = ToolCall {
+            name: "run_shell".to_string(),
+            arguments: json!({
+                "command": "pwd",
+                "cwd": ".",
+                "reason": "check location"
+            }),
+        };
+        let request = super::approval_request(2, &call).unwrap();
+        assert_eq!(request.step, 2);
+        assert_eq!(request.tool, "run_shell");
+        assert_eq!(request.approve_phrase, "yes run");
+        assert!(request.summary.contains("command: pwd"));
+    }
+
+    #[test]
+    fn external_approval_can_approve_shell_once() {
+        let root = std::env::temp_dir().join(format!(
+            "deepseek-agent-external-approval-test-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let call = ToolCall {
+            name: "run_shell".to_string(),
+            arguments: json!({
+                "command": "printf APPROVED",
+                "cwd": ".",
+                "reason": "test"
+            }),
+        };
+        let workspace = Workspace::new(root.clone()).unwrap();
+        let result = super::execute_tool(&workspace, &call, ApprovalMode::Approved);
+        assert!(result.contains("APPROVED"));
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]

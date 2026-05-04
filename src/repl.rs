@@ -20,6 +20,7 @@ use crate::workspace::{
 enum TurnEvent {
     Delta(String),
     ToolStep(usize, String),
+    ApprovalRequest(agent::ApprovalRequest, Sender<agent::ApprovalDecision>),
     Complete(Result<(String, String), String>),
 }
 
@@ -32,6 +33,11 @@ pub(crate) enum InteractiveMode {
 struct PendingAgentTask {
     prompt: String,
     root: PathBuf,
+}
+
+struct PendingDockApproval {
+    request: agent::ApprovalRequest,
+    reply: Sender<agent::ApprovalDecision>,
 }
 
 pub(crate) fn run_interactive(
@@ -181,6 +187,7 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
     let mut queued = VecDeque::<String>::new();
     let mut memory = Vec::<Message>::new();
     let mut pending_agent_task: Option<PendingAgentTask> = None;
+    let mut pending_approval: Option<PendingDockApproval> = None;
     let mut confirmed_agent_task: Option<PendingAgentTask> = None;
     let mut selected_root: Option<PathBuf> = approved_agent_root.clone();
     let mut switch_to_agent = false;
@@ -188,10 +195,14 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
         let context_scan_ready = context_scan_started
             .map(|started| started.elapsed() >= Duration::from_secs(1))
             .unwrap_or(true);
-        if context_scan_ready {
+        if context_scan_ready && pending_approval.is_none() {
             if let Some(receiver) = &in_flight {
-                let (result, streamed) =
+                let (result, streamed, approval) =
                     drain_turn_events(receiver, &mut composer, "response worker disconnected")?;
+                if let Some(approval) = approval {
+                    pending_approval = Some(approval);
+                    context_scan_started = None;
+                }
                 if streamed {
                     context_scan_started = None;
                 }
@@ -221,7 +232,7 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
                 }
             }
         }
-        if in_flight.is_some() {
+        if in_flight.is_some() && pending_approval.is_none() {
             if let Some(started) = context_scan_started {
                 composer.status_above(&context_scan_status(started))?;
             }
@@ -235,6 +246,28 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
         };
         let prompt = line.trim();
         if prompt.is_empty() {
+            continue;
+        }
+        if let Some(approval) = pending_approval.take() {
+            if prompt == approval.request.approve_phrase {
+                let _ = approval.reply.send(agent::ApprovalDecision::Approve);
+                composer.print_above(&format!("approval: approved {}\n", approval.request.tool))?;
+                context_scan_started = Some(start_context_scan(&mut composer)?);
+            } else if prompt == approval.request.deny_phrase
+                || matches!(prompt, "n" | "no" | "deny")
+            {
+                let _ = approval.reply.send(agent::ApprovalDecision::Deny);
+                composer.print_above(&format!("approval: denied {}\n", approval.request.tool))?;
+                context_scan_started = Some(start_context_scan(&mut composer)?);
+            } else {
+                composer.print_above(&format!(
+                    "approval pending: {}\nType {} to approve, {} to deny.\n",
+                    approval.request.tool,
+                    approval.request.approve_phrase,
+                    approval.request.deny_phrase
+                ))?;
+                pending_approval = Some(approval);
+            }
             continue;
         }
         if is_exit_command(prompt) {
@@ -624,14 +657,21 @@ fn run_agent_streaming(
         let _ = sender.send(TurnEvent::Delta(response.clone()));
         return Ok((prompt.to_string(), response));
     }
-    let outcome = agent::run_agent_with_options(
+    let outcome = agent::run_agent_with_approval_handler(
         prompt,
         model,
         temperature,
         agent::AgentConfig::new(root, 8),
-        agent::ApprovalMode::Deny,
+        agent::ApprovalMode::External,
         |step, tool| {
             let _ = sender.send(TurnEvent::ToolStep(step, tool.to_string()));
+        },
+        |request| {
+            let (reply_sender, reply_receiver) = mpsc::channel();
+            let _ = sender.send(TurnEvent::ApprovalRequest(request, reply_sender));
+            reply_receiver
+                .recv()
+                .unwrap_or(agent::ApprovalDecision::Deny)
         },
     )?;
     let response = outcome.answer;
@@ -643,10 +683,18 @@ fn drain_turn_events(
     receiver: &Receiver<TurnEvent>,
     composer: &mut DockedComposer,
     disconnected_message: &str,
-) -> Result<(Option<Result<(String, String), String>>, bool), String> {
+) -> Result<
+    (
+        Option<Result<(String, String), String>>,
+        bool,
+        Option<PendingDockApproval>,
+    ),
+    String,
+> {
     let mut chunk = String::new();
     let mut complete = None;
     let mut activity = false;
+    let mut approval = None;
     loop {
         match receiver.try_recv() {
             Ok(TurnEvent::Delta(delta)) => {
@@ -660,6 +708,16 @@ fn drain_turn_events(
                     chunk.clear();
                 }
                 composer.print_above(&format!("agent step {step}: {tool}\n"))?;
+            }
+            Ok(TurnEvent::ApprovalRequest(request, reply)) => {
+                activity = true;
+                if !chunk.is_empty() {
+                    composer.stream_above(&chunk)?;
+                    chunk.clear();
+                }
+                composer.print_above(&request.summary)?;
+                approval = Some(PendingDockApproval { request, reply });
+                break;
             }
             Ok(TurnEvent::Complete(result)) => {
                 complete = Some(result);
@@ -675,7 +733,7 @@ fn drain_turn_events(
     if !chunk.is_empty() {
         composer.stream_above(&chunk)?;
     }
-    Ok((complete, activity))
+    Ok((complete, activity, approval))
 }
 
 fn start_context_scan(composer: &mut DockedComposer) -> Result<Instant, String> {
