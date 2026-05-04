@@ -19,6 +19,7 @@ use crate::workspace::{
 
 enum TurnEvent {
     Delta(String),
+    ToolStep(usize, String),
     Complete(Result<(String, String), String>),
 }
 
@@ -102,8 +103,8 @@ fn run_interactive_chat(model: &str, temperature: Option<f32>, stream: bool) -> 
             ui::print_status(&current_model)?;
             continue;
         }
-        if prompt == "/runtime" {
-            println!("{}", runtime::runtime_result(&current_model, false)?);
+        if let Some(command) = parse_runtime_command(prompt) {
+            println!("{}", execute_runtime_command(&current_model, command)?);
             continue;
         }
         if let Some(mode) = parse_debug_command(prompt) {
@@ -208,11 +209,13 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
                     }
                     if let Some(next) = queued.pop_front() {
                         context_scan_started = Some(start_context_scan(&mut composer)?);
-                        in_flight = Some(spawn_prompt_turn(
+                        in_flight = Some(spawn_docked_turn(
                             &memory,
                             next,
+                            selected_root.as_deref(),
                             current_model.clone(),
                             temperature,
+                            runtime_state.legacy_routing,
                         ));
                     }
                 }
@@ -323,8 +326,10 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
             composer.print_above(&output)?;
             continue;
         }
-        if prompt == "/runtime" {
-            composer.print_above(&runtime::runtime_result(&current_model, false)?)?;
+        if let Some(command) = parse_runtime_command(prompt) {
+            let output = execute_runtime_command(&current_model, command)?;
+            runtime_state = runtime::load(&current_model)?;
+            composer.print_above(&output)?;
             continue;
         }
         if let Some(mode) = parse_debug_command(prompt) {
@@ -361,6 +366,26 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
             composer.print_above(&format!("queued: {} prompt(s)\n", queued.len()))?;
             continue;
         }
+        if !runtime_state.legacy_routing {
+            if let Some(root) = task_root_for_prompt(prompt, selected_root.as_deref()) {
+                if let Some(path) = path_boundary_violation(prompt, &root) {
+                    composer.print_above(&path_boundary_clarify_text(&root, &path))?;
+                    pending_agent_task = None;
+                    continue;
+                }
+            }
+            context_scan_started = Some(start_context_scan(&mut composer)?);
+            in_flight = Some(spawn_docked_turn(
+                &memory,
+                prompt.to_string(),
+                selected_root.as_deref(),
+                current_model.clone(),
+                temperature,
+                false,
+            ));
+            continue;
+        }
+
         match classify_intent(
             prompt,
             recent_task_context(&queued),
@@ -488,8 +513,8 @@ fn run_interactive_agent(model: &str, temperature: Option<f32>) -> Result<(), St
             print!("{}", interactive_agent_status(&current_model, &root)?);
             continue;
         }
-        if prompt == "/runtime" {
-            println!("{}", runtime::runtime_result(&current_model, false)?);
+        if let Some(command) = parse_runtime_command(prompt) {
+            println!("{}", execute_runtime_command(&current_model, command)?);
             continue;
         }
         if let Some(mode) = parse_debug_command(prompt) {
@@ -555,6 +580,65 @@ fn spawn_prompt_turn(
     receiver
 }
 
+fn spawn_docked_turn(
+    prior_messages: &[Message],
+    prompt: String,
+    selected_root: Option<&Path>,
+    model: String,
+    temperature: Option<f32>,
+    legacy_routing: bool,
+) -> Receiver<TurnEvent> {
+    if !legacy_routing {
+        if let Some(root) = task_root_for_prompt(&prompt, selected_root) {
+            if path_boundary_violation(&prompt, &root).is_none() {
+                return spawn_agent_turn(prompt, root, model, temperature);
+            }
+        }
+    }
+    spawn_prompt_turn(prior_messages, prompt, model, temperature)
+}
+
+fn spawn_agent_turn(
+    prompt: String,
+    root: PathBuf,
+    model: String,
+    temperature: Option<f32>,
+) -> Receiver<TurnEvent> {
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || {
+        let result = run_agent_streaming(&prompt, root, &model, temperature, sender.clone());
+        let _ = sender.send(TurnEvent::Complete(result));
+    });
+    receiver
+}
+
+fn run_agent_streaming(
+    prompt: &str,
+    root: PathBuf,
+    model: &str,
+    temperature: Option<f32>,
+    sender: Sender<TurnEvent>,
+) -> Result<(String, String), String> {
+    if runtime::load(model)?.backend == RuntimeBackend::Debug {
+        let response = runtime::debug_response(prompt, model);
+        let _ = sender.send(TurnEvent::Delta(response.clone()));
+        return Ok((prompt.to_string(), response));
+    }
+    let outcome = agent::run_agent_with_options(
+        prompt,
+        model,
+        temperature,
+        agent::AgentConfig::new(root, 8),
+        agent::ApprovalMode::Interactive,
+        |step, tool| {
+            let _ = sender.send(TurnEvent::ToolStep(step, tool.to_string()));
+        },
+    )?;
+    let response = outcome.answer;
+    let _ = sender.send(TurnEvent::Delta(response.clone()));
+    Ok((prompt.to_string(), response))
+}
+
 fn drain_turn_events(
     receiver: &Receiver<TurnEvent>,
     composer: &mut DockedComposer,
@@ -562,9 +646,21 @@ fn drain_turn_events(
 ) -> Result<(Option<Result<(String, String), String>>, bool), String> {
     let mut chunk = String::new();
     let mut complete = None;
+    let mut activity = false;
     loop {
         match receiver.try_recv() {
-            Ok(TurnEvent::Delta(delta)) => chunk.push_str(&delta),
+            Ok(TurnEvent::Delta(delta)) => {
+                activity = true;
+                chunk.push_str(&delta);
+            }
+            Ok(TurnEvent::ToolStep(step, tool)) => {
+                activity = true;
+                if !chunk.is_empty() {
+                    composer.stream_above(&chunk)?;
+                    chunk.clear();
+                }
+                composer.print_above(&format!("agent step {step}: {tool}\n"))?;
+            }
             Ok(TurnEvent::Complete(result)) => {
                 complete = Some(result);
                 break;
@@ -579,7 +675,7 @@ fn drain_turn_events(
     if !chunk.is_empty() {
         composer.stream_above(&chunk)?;
     }
-    Ok((complete, !chunk.is_empty()))
+    Ok((complete, activity))
 }
 
 fn start_context_scan(composer: &mut DockedComposer) -> Result<Instant, String> {
@@ -810,6 +906,34 @@ fn parse_debug_command(prompt: &str) -> Option<Option<&str>> {
     })
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RuntimeCommand {
+    Status,
+    LegacyRouting(bool),
+}
+
+fn parse_runtime_command(prompt: &str) -> Option<RuntimeCommand> {
+    if prompt == "/runtime" {
+        return Some(RuntimeCommand::Status);
+    }
+    let args = prompt.strip_prefix("/runtime ")?.trim();
+    match args {
+        "legacy-routing on" => Some(RuntimeCommand::LegacyRouting(true)),
+        "legacy-routing off" => Some(RuntimeCommand::LegacyRouting(false)),
+        _ => Some(RuntimeCommand::Status),
+    }
+}
+
+fn execute_runtime_command(model: &str, command: RuntimeCommand) -> Result<String, String> {
+    match command {
+        RuntimeCommand::Status => runtime::runtime_result(model, false),
+        RuntimeCommand::LegacyRouting(enabled) => {
+            let state = runtime::set_legacy_routing(model, enabled)?;
+            Ok(runtime::format_runtime_state(&state, model))
+        }
+    }
+}
+
 fn parse_model_command(prompt: &str) -> Option<Option<&str>> {
     if prompt == "/model" {
         return Some(None);
@@ -890,7 +1014,7 @@ mod tests {
         agent_route_confirmation, cap_interactive_memory, context_scan_status,
         is_agent_task_cancel_choice, is_agent_task_choice, is_end_command, is_exit_command,
         no_pending_agent_task_text, parse_agent_task_command, parse_debug_command,
-        parse_model_command, task_root_for_prompt,
+        parse_model_command, parse_runtime_command, task_root_for_prompt, RuntimeCommand,
     };
     use crate::provider;
     use crate::runtime;
@@ -930,6 +1054,27 @@ mod tests {
         assert_eq!(parse_debug_command("/debug off"), Some(Some("off")));
         assert_eq!(parse_debug_command("/debug manual"), Some(Some("manual")));
         assert_eq!(parse_debug_command("debug"), None);
+    }
+
+    #[test]
+    fn parses_runtime_legacy_routing_command() {
+        assert_eq!(
+            parse_runtime_command("/runtime"),
+            Some(RuntimeCommand::Status)
+        );
+        assert_eq!(
+            parse_runtime_command("/runtime legacy-routing on"),
+            Some(RuntimeCommand::LegacyRouting(true))
+        );
+        assert_eq!(
+            parse_runtime_command("/runtime legacy-routing off"),
+            Some(RuntimeCommand::LegacyRouting(false))
+        );
+        assert_eq!(
+            parse_runtime_command("/runtime unknown"),
+            Some(RuntimeCommand::Status)
+        );
+        assert_eq!(parse_runtime_command("runtime"), None);
     }
 
     #[test]

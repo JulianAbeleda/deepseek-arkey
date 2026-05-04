@@ -22,6 +22,8 @@ pub struct RuntimeState {
     pub backend: RuntimeBackend,
     pub runtime: String,
     pub model: Option<String>,
+    #[serde(default)]
+    pub legacy_routing: bool,
     pub updated_at: u64,
 }
 
@@ -31,6 +33,7 @@ impl RuntimeState {
             backend: RuntimeBackend::Provider,
             runtime: "terminal".to_string(),
             model,
+            legacy_routing: false,
             updated_at: unix_timestamp(),
         }
     }
@@ -43,6 +46,12 @@ impl RuntimeState {
 
     pub fn with_model(mut self, model: impl Into<String>) -> Self {
         self.model = Some(model.into());
+        self.updated_at = unix_timestamp();
+        self
+    }
+
+    pub fn with_legacy_routing(mut self, enabled: bool) -> Self {
+        self.legacy_routing = enabled;
         self.updated_at = unix_timestamp();
         self
     }
@@ -97,6 +106,12 @@ pub fn set_backend(default_model: &str, backend: RuntimeBackend) -> Result<Runti
     Ok(state)
 }
 
+pub fn set_legacy_routing(default_model: &str, enabled: bool) -> Result<RuntimeState, String> {
+    let state = load(default_model)?.with_legacy_routing(enabled);
+    save(&state)?;
+    Ok(state)
+}
+
 pub fn debug_result(model: &str, mode: Option<&str>, json: bool) -> Result<String, String> {
     let state = match mode {
         Some(mode) => {
@@ -133,9 +148,14 @@ pub fn format_runtime_state(state: &RuntimeState, fallback_model: &str) -> Strin
         RuntimeBackend::Debug => "debug",
     };
     format!(
-        "LLM: {backend}\nRuntime: {}\nModel: {}\nUpdated: {}\n",
+        "LLM: {backend}\nRuntime: {}\nModel: {}\nRouting: {}\nUpdated: {}\n",
         state.runtime,
         state.model.as_deref().unwrap_or(fallback_model),
+        if state.legacy_routing {
+            "legacy-deterministic"
+        } else {
+            "model-decided"
+        },
         state.updated_at
     )
 }
@@ -183,5 +203,12 @@ mod tests {
         let state = RuntimeState::provider(Some("deepseek-v4-flash".to_string()))
             .with_backend(RuntimeBackend::Debug);
         assert_eq!(state.label("fallback"), "debug:deepseek-v4-flash");
+    }
+
+    #[test]
+    fn legacy_routing_defaults_off_and_can_be_enabled() {
+        let state = RuntimeState::provider(Some("deepseek-v4-flash".to_string()));
+        assert!(!state.legacy_routing);
+        assert!(state.with_legacy_routing(true).legacy_routing);
     }
 }
