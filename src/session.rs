@@ -18,6 +18,8 @@ pub struct SessionState {
     pub updated_at: u64,
     pub messages: Vec<Message>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selected_root: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_root: Option<String>,
 }
 
@@ -29,6 +31,7 @@ impl SessionState {
             model: model.into(),
             updated_at: unix_timestamp(),
             messages: Vec::new(),
+            selected_root: None,
             agent_root: None,
         }
     }
@@ -50,9 +53,23 @@ impl SessionState {
         self.updated_at = unix_timestamp();
     }
 
+    pub fn select_root(&mut self, root: &Path) {
+        self.selected_root = Some(root.display().to_string());
+        self.updated_at = unix_timestamp();
+    }
+
+    pub fn clear_selected_root(&mut self) {
+        self.selected_root = None;
+        self.updated_at = unix_timestamp();
+    }
+
     pub fn clear_messages(&mut self) {
         self.messages.clear();
         self.updated_at = unix_timestamp();
+    }
+
+    pub fn selected_root_path(&self) -> Option<PathBuf> {
+        self.selected_root.as_ref().map(PathBuf::from)
     }
 
     pub fn agent_root_path(&self) -> Option<PathBuf> {

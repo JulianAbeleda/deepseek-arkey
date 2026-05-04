@@ -16,6 +16,12 @@ pub(crate) fn effective_workspace_root(selected_root: Option<&Path>) -> Option<P
 pub(crate) fn infer_natural_root(prompt: &str) -> Option<PathBuf> {
     let home = std::env::var_os("HOME").map(PathBuf::from)?;
     let lowered = prompt.to_lowercase();
+    if lowered.contains("deepseek repo") || lowered.contains("deepseek repository") {
+        return Some(home.join("env/deepseek"));
+    }
+    if lowered.contains("minimax repo") || lowered.contains("minimax repository") {
+        return Some(home.join("env/minimax"));
+    }
     if lowered.contains("desktop") {
         return Some(home.join("Desktop"));
     }
@@ -32,6 +38,29 @@ pub(crate) fn infer_natural_root(prompt: &str) -> Option<PathBuf> {
         return Some(home.join("env"));
     }
     None
+}
+
+pub(crate) fn parse_navigation_request(prompt: &str) -> Result<Option<PathBuf>, String> {
+    let prompt = prompt.trim();
+    let lowered = prompt.to_lowercase();
+    let Some((target, explicit_path)) = navigation_target(prompt, &lowered) else {
+        return Ok(None);
+    };
+    let target = clean_navigation_target(target);
+    if target.is_empty() {
+        return Ok(None);
+    }
+    if let Some(root) = navigation_alias_root(target) {
+        return canonical_dir(root).map(Some);
+    }
+    let path = expand_path(target);
+    if path.is_dir() {
+        return canonical_dir(path).map(Some);
+    }
+    if explicit_path || looks_like_path_target(target) {
+        return Err(format!("{} is not a directory", path.display()));
+    }
+    Ok(None)
 }
 
 pub(crate) fn parse_root_command(prompt: &str) -> Option<Option<&str>> {
@@ -66,6 +95,107 @@ pub(crate) fn update_selected_root(root_arg: &str) -> Result<Option<PathBuf>, St
     Ok(Some(root))
 }
 
+fn navigation_target<'a>(prompt: &'a str, lowered: &str) -> Option<(&'a str, bool)> {
+    for verb in [
+        "cd", "go", "navigate", "switch", "move", "change", "enter", "open",
+    ] {
+        if lowered == verb {
+            return None;
+        }
+        if let Some(rest) = lowered
+            .strip_prefix(verb)
+            .and_then(|rest| rest.strip_prefix(' '))
+        {
+            let offset = prompt.len() - rest.len();
+            return Some((&prompt[offset..], verb == "cd"));
+        }
+    }
+    None
+}
+
+fn clean_navigation_target(target: &str) -> &str {
+    let mut target = target.trim();
+    for separator in [" and ", " then "] {
+        if let Some(index) = target.to_lowercase().find(separator) {
+            target = &target[..index];
+        }
+    }
+    target = target
+        .trim()
+        .trim_matches(|ch: char| matches!(ch, '.' | ',' | ';' | ':' | '"' | '\''));
+    for prep in ["into ", "inside ", "from ", "to ", "in "] {
+        if target.to_lowercase().starts_with(prep) {
+            target = &target[prep.len()..];
+            break;
+        }
+    }
+    target = target
+        .trim()
+        .trim_matches(|ch: char| matches!(ch, '.' | ',' | ';' | ':' | '"' | '\''));
+    if target.to_lowercase().starts_with("the ") {
+        target = &target[4..];
+    }
+    for suffix in [" folder", " directory", " repo", " repository"] {
+        if let Some(stripped) = target.strip_suffix(suffix) {
+            return stripped.trim();
+        }
+    }
+    target
+}
+
+fn expand_path(path: &str) -> PathBuf {
+    if path == "~" {
+        return std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_default();
+    }
+    if let Some(rest) = path.strip_prefix("~/") {
+        if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
+            return home.join(rest);
+        }
+    }
+    let path = PathBuf::from(path);
+    if path.is_absolute() {
+        path
+    } else {
+        std::env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .join(path)
+    }
+}
+
+fn navigation_alias_root(target: &str) -> Option<PathBuf> {
+    let home = std::env::var_os("HOME").map(PathBuf::from)?;
+    match target.to_lowercase().as_str() {
+        "desktop" => Some(home.join("Desktop")),
+        "downloads" => Some(home.join("Downloads")),
+        "documents" => Some(home.join("Documents")),
+        "env" | "my env" => Some(home.join("env")),
+        "deepseek" => Some(home.join("env/deepseek")),
+        "minimax" => Some(home.join("env/minimax")),
+        _ => None,
+    }
+}
+
+fn looks_like_path_target(target: &str) -> bool {
+    target == "~"
+        || target.starts_with("~/")
+        || target.starts_with('/')
+        || target.starts_with("./")
+        || target.starts_with("../")
+        || target.contains('/')
+}
+
+fn canonical_dir(path: PathBuf) -> Result<PathBuf, String> {
+    let root = path
+        .canonicalize()
+        .map_err(|err| format!("{}: {err}", path.display()))?;
+    if !root.is_dir() {
+        return Err(format!("{} is not a directory", root.display()));
+    }
+    Ok(root)
+}
+
 pub(crate) fn root_status(root: Option<&Path>, explicit: bool) -> String {
     match root {
         Some(root) => format!(
@@ -97,7 +227,9 @@ pub(crate) fn path_boundary_clarify_text(root: &Path, path: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_root_command, path_boundary_clarify_text, root_status};
+    use super::{
+        parse_navigation_request, parse_root_command, path_boundary_clarify_text, root_status,
+    };
     use std::path::Path;
 
     #[test]
@@ -138,7 +270,94 @@ mod tests {
             infer_natural_root("go to my env folder"),
             Some(home.join("env"))
         );
+        assert_eq!(
+            infer_natural_root("switch to the deepseek repo"),
+            Some(home.join("env/deepseek"))
+        );
         assert_eq!(infer_natural_root("fix main.rs"), None);
+    }
+
+    #[test]
+    fn parses_navigation_requests_as_persistent_roots() {
+        let home = std::env::var_os("HOME")
+            .map(std::path::PathBuf::from)
+            .unwrap();
+        let env_root = home.join("env");
+        if env_root.is_dir() {
+            assert_eq!(
+                parse_navigation_request("go to my env folder and stay there")
+                    .unwrap()
+                    .as_deref(),
+                Some(env_root.canonicalize().unwrap().as_path())
+            );
+            assert_eq!(
+                parse_navigation_request("navigate into my env folder")
+                    .unwrap()
+                    .as_deref(),
+                Some(env_root.canonicalize().unwrap().as_path())
+            );
+            assert_eq!(
+                parse_navigation_request("cd into my env folder")
+                    .unwrap()
+                    .as_deref(),
+                Some(env_root.canonicalize().unwrap().as_path())
+            );
+            assert_eq!(
+                parse_navigation_request("go into the env folder")
+                    .unwrap()
+                    .as_deref(),
+                Some(env_root.canonicalize().unwrap().as_path())
+            );
+            let deepseek_root = env_root.join("deepseek");
+            if deepseek_root.is_dir() {
+                assert_eq!(
+                    parse_navigation_request("enter the deepseek repo")
+                        .unwrap()
+                        .as_deref(),
+                    Some(deepseek_root.canonicalize().unwrap().as_path())
+                );
+                assert_eq!(
+                    parse_navigation_request("navigate into deepseek")
+                        .unwrap()
+                        .as_deref(),
+                    Some(deepseek_root.canonicalize().unwrap().as_path())
+                );
+                assert_eq!(
+                    parse_navigation_request("go inside ~/env/deepseek")
+                        .unwrap()
+                        .as_deref(),
+                    Some(deepseek_root.canonicalize().unwrap().as_path())
+                );
+            }
+            let minimax_root = env_root.join("minimax");
+            if minimax_root.is_dir() {
+                assert_eq!(
+                    parse_navigation_request("open the minimax repo")
+                        .unwrap()
+                        .as_deref(),
+                    Some(minimax_root.canonicalize().unwrap().as_path())
+                );
+                assert_eq!(
+                    parse_navigation_request("cd into minimax")
+                        .unwrap()
+                        .as_deref(),
+                    Some(minimax_root.canonicalize().unwrap().as_path())
+                );
+            }
+        }
+        assert_eq!(
+            parse_navigation_request("go through downloads").unwrap(),
+            None
+        );
+        assert_eq!(parse_navigation_request("fix this repo").unwrap(), None);
+        assert_eq!(
+            parse_navigation_request("switch to main branch").unwrap(),
+            None
+        );
+        assert_eq!(parse_navigation_request("stay in touch").unwrap(), None);
+        assert_eq!(parse_navigation_request("open a ticket").unwrap(), None);
+        assert!(parse_navigation_request("go to /definitely/not/here").is_err());
+        assert!(parse_navigation_request("cd into definitely-not-here").is_err());
     }
 
     #[test]

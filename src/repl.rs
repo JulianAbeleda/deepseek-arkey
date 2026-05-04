@@ -13,8 +13,8 @@ use crate::runtime::{self, RuntimeBackend};
 use crate::session::{self, SessionState};
 use crate::ui;
 use crate::workspace::{
-    effective_workspace_root, infer_natural_root, parse_root_command, path_boundary_clarify_text,
-    root_status, update_selected_root,
+    effective_workspace_root, infer_natural_root, parse_navigation_request, parse_root_command,
+    path_boundary_clarify_text, root_status, update_selected_root,
 };
 
 enum TurnEvent {
@@ -175,6 +175,10 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
         .as_ref()
         .and_then(SessionState::agent_root_path)
         .filter(|root| root.is_dir());
+    let persisted_selected_root = active_session
+        .as_ref()
+        .and_then(SessionState::selected_root_path)
+        .filter(|root| root.is_dir());
     let raw_mode = RawModeSession::enable()?;
     let transcript_start_row = ui::print_banner(&current_model);
     raw_mode.set_output_scroll_region()?;
@@ -189,7 +193,8 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
     let mut pending_agent_task: Option<PendingAgentTask> = None;
     let mut pending_approval: Option<PendingDockApproval> = None;
     let mut confirmed_agent_task: Option<PendingAgentTask> = None;
-    let mut selected_root: Option<PathBuf> = approved_agent_root.clone();
+    let mut selected_root: Option<PathBuf> =
+        persisted_selected_root.or_else(|| approved_agent_root.clone());
     let mut switch_to_agent = false;
     loop {
         let context_scan_ready = context_scan_started
@@ -283,6 +288,22 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
             switch_to_agent = true;
             break;
         }
+        match parse_navigation_request(prompt) {
+            Ok(Some(root)) => {
+                selected_root = Some(root);
+                approved_agent_root = None;
+                clear_session_agent_root()?;
+                save_selected_root(selected_root.as_deref())?;
+                pending_agent_task = None;
+                composer.print_above(&root_status(selected_root.as_deref(), true))?;
+                continue;
+            }
+            Ok(None) => {}
+            Err(err) => {
+                composer.print_above(&format!("root error: {err}\n"))?;
+                continue;
+            }
+        }
         if let Some(task) = parse_agent_task_command(prompt) {
             let Some(root) = task_root_for_prompt(task, selected_root.as_deref()) else {
                 composer.print_above(&clarify_route_text())?;
@@ -339,6 +360,7 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
                         selected_root = next_root;
                         approved_agent_root = None;
                         clear_session_agent_root()?;
+                        save_selected_root(selected_root.as_deref())?;
                         pending_agent_task = None;
                         root_status(
                             effective_workspace_root(selected_root.as_deref()).as_deref(),
@@ -1049,6 +1071,17 @@ fn clear_session_agent_root() -> Result<(), String> {
         return Ok(());
     };
     state.clear_agent_root();
+    session::save(&state)
+}
+
+fn save_selected_root(root: Option<&Path>) -> Result<(), String> {
+    let Some(mut state) = session::load()? else {
+        return Ok(());
+    };
+    match root {
+        Some(root) => state.select_root(root),
+        None => state.clear_selected_root(),
+    }
     session::save(&state)
 }
 

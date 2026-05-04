@@ -205,9 +205,13 @@ def run_prompt(binary, env, name, cwd, prompt, setup_commands=None):
     master, proc, screen = spawn_chat(binary, env, cwd)
     try:
         wait_for(master, screen, lambda: name in screen.text() and "›" in screen.text(), "initial prompt")
+        os.write(master, b"/runtime legacy-routing on\r")
+        wait_for(master, screen, lambda: "Routing: legacy-deterministic" in screen.text(), "legacy routing")
+        os.write(master, b"/root clear\r")
+        wait_for(master, screen, lambda: "root:" in screen.text(), "root clear")
         for command in setup_commands or []:
             os.write(master, (command + "\r").encode())
-            wait_for(master, screen, lambda: command.split()[0] in screen.text(), command)
+            wait_for(master, screen, lambda: "root-source: explicit" in screen.text(), command)
         os.write(master, (prompt + "\r").encode())
         wait_for(
             master,
@@ -218,6 +222,7 @@ def run_prompt(binary, env, name, cwd, prompt, setup_commands=None):
                     "debug/manual backend",
                     "route: agent task",
                     "route: unclear",
+                    "root-source: explicit",
                 )
             ),
             f"route for {prompt!r}",
@@ -241,7 +246,14 @@ def classify_output(text):
         return "clarify"
     if "debug/manual backend" in text:
         return "chat"
+    if "root:" in text and "root-source: explicit" in text:
+        return "root"
     return "unknown"
+
+
+def path_visible(text, path):
+    compact_text = "".join(text.split())
+    return any(candidate in compact_text for candidate in {str(path), os.path.realpath(path)})
 
 
 def check_case(binary, env, name, cwd, prompt, expected, root=None, setup_commands=None):
@@ -249,11 +261,7 @@ def check_case(binary, env, name, cwd, prompt, expected, root=None, setup_comman
     actual = classify_output(text)
     ok = actual == expected
     if root is not None:
-        compact_text = "".join(text.split())
-        root_candidates = {str(root), os.path.realpath(root)}
-        ok = ok and any(
-            f"root:{candidate}" in compact_text for candidate in root_candidates
-        )
+        ok = ok and path_visible(text, root)
     status = "PASS" if ok else "FAIL"
     detail = f"{prompt!r} -> {actual}"
     if root is not None:
@@ -266,10 +274,78 @@ def check_case(binary, env, name, cwd, prompt, expected, root=None, setup_comman
     return ok
 
 
+def run_sequence(binary, env, name, cwd, commands):
+    master, proc, screen = spawn_chat(binary, env, cwd)
+    try:
+        wait_for(master, screen, lambda: name in screen.text() and "›" in screen.text(), "initial prompt")
+        for command, predicate, label in commands:
+            os.write(master, (command + "\r").encode())
+            wait_for(master, screen, lambda: predicate(screen.text()), label, timeout=8.0)
+        return screen.text()
+    finally:
+        if proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+        os.close(master)
+
+
+def check_persistent_navigation(binary, env, name, home, env_root, provider_repo):
+    commands = [
+        (
+            "/runtime legacy-routing on",
+            lambda text: "Routing: legacy-deterministic" in text,
+            "legacy routing enabled",
+        ),
+        (
+            "navigate into my env folder",
+            lambda text: "root-source: explicit" in text and path_visible(text, env_root),
+            "navigate into env",
+        ),
+        (
+            "/status",
+            lambda text: "mode: chat" in text and "root-source: explicit" in text and path_visible(text, env_root),
+            "status keeps env root",
+        ),
+        (
+            "fix this repo",
+            lambda text: "route: agent task" in text and path_visible(text, env_root),
+            "follow-up task uses env root",
+        ),
+        (
+            f"cd into {name}",
+            lambda text: "root-source: explicit" in text and path_visible(text, provider_repo),
+            "cd into repo alias",
+        ),
+        (
+            f"go inside ~/{provider_repo.relative_to(home)}",
+            lambda text: "root-source: explicit" in text and path_visible(text, provider_repo),
+            "go inside repo path",
+        ),
+        (
+            "/root clear",
+            lambda text: "root: unset" in text,
+            "root clear",
+        ),
+    ]
+    text = run_sequence(binary, env, name, home, commands)
+    ok = all(predicate(text) for _, predicate, _ in commands)
+    status = "PASS" if ok else "FAIL"
+    print(f"{status:4} persistent natural navigation keeps selected root")
+    if not ok:
+        print("---- screen ----")
+        print(text)
+        print("---------------")
+    return ok
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--name", default="deepseek")
     parser.add_argument("--binary")
+    parser.add_argument("--model", help="Accepted for parity with smoke wrappers; routing-debug uses the binary default.")
     args = parser.parse_args()
 
     binary = resolve_binary(args.name, args.binary)
@@ -283,8 +359,10 @@ def main():
         downloads = home / "Downloads"
         documents = home / "Documents"
         env_root = home / "env"
+        deepseek_repo = env_root / "deepseek"
+        minimax_repo = env_root / "minimax"
         workspace = home / "workspace"
-        for path in (desktop, downloads, documents, env_root, workspace):
+        for path in (desktop, downloads, documents, env_root, deepseek_repo, minimax_repo, workspace):
             path.mkdir()
         (workspace / "README.md").write_text("routing debug workspace\n", encoding="utf-8")
 
@@ -301,7 +379,8 @@ def main():
             (home, "why is my code broken?", "chat", None, None),
             (home, "read my files on my desktop", "agent", desktop, None),
             (home, "go through downloads", "agent", downloads, None),
-            (home, "go to my env folder and tell me what you find there", "agent", env_root, None),
+            (home, "go through my env folder and tell me what you find there", "agent", env_root, None),
+            (home, "go to my env folder", "root", env_root, None),
             (home, "scan desktop", "agent", desktop, None),
             (home, "scan the downloads", "agent", downloads, None),
             (home, "my desktop files are a mess", "agent", desktop, None),
@@ -332,6 +411,12 @@ def main():
                 passed += 1
             else:
                 failed += 1
+
+        provider_repo = deepseek_repo if args.name == "deepseek" else minimax_repo
+        if check_persistent_navigation(binary, env, args.name, home, env_root, provider_repo):
+            passed += 1
+        else:
+            failed += 1
 
     print(f"\nsummary: {passed} passed, {failed} failed")
     raise SystemExit(1 if failed else 0)
