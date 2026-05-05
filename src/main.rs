@@ -78,7 +78,7 @@ fn run(args: Args) -> Result<(), String> {
                 outcome.steps,
                 outcome.transcript_path.display()
             );
-            println!("{}", outcome.answer);
+            println!("{}", repl::format_agent_answer(&outcome.answer));
         }
         Some(Command::Login) => {
             provider::login_check(&model)?;

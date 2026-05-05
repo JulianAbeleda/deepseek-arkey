@@ -894,20 +894,130 @@ fn no_pending_agent_task_text() -> String {
     "route: unclear\nNo pending agent task to confirm.\nType /root <path> to choose a workspace, then repeat the task; or type /agent <task> with the leading slash to run one directly.\n".to_string()
 }
 
-fn format_agent_answer(answer: &str) -> String {
+pub(crate) fn format_agent_answer(answer: &str) -> String {
     let trimmed = answer.trim();
     if trimmed.is_empty() {
         return String::new();
     }
     let mut text = trimmed.replace("\r\n", "\n").replace('\r', "\n");
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) {
+        text = json_answer_to_markdown(&value);
+    }
     text = insert_markdown_boundaries(&text);
-    text = text.replace("--- ", "---\n\n");
+    text = split_horizontal_rule_lines(&text);
     text = split_known_heading_bodies(&text);
     text = collapse_excess_blank_lines(&text);
     if !text.ends_with('\n') {
         text.push('\n');
     }
     text
+}
+
+fn json_answer_to_markdown(value: &serde_json::Value) -> String {
+    let mut output = String::new();
+    match value {
+        serde_json::Value::Object(map) => render_json_object(map, 2, &mut output),
+        serde_json::Value::Array(items) => render_json_array(items, 0, &mut output),
+        _ => {
+            output.push_str(&json_scalar_text(value));
+            output.push('\n');
+        }
+    }
+    output
+}
+
+fn render_json_object(
+    map: &serde_json::Map<String, serde_json::Value>,
+    level: usize,
+    output: &mut String,
+) {
+    for (key, value) in map {
+        if value.is_null() {
+            continue;
+        }
+        if value_is_scalar(value) {
+            output.push_str("- ");
+            output.push_str(&humanize_json_key(key));
+            output.push_str(": ");
+            output.push_str(&json_scalar_text(value));
+            output.push('\n');
+            continue;
+        }
+        push_json_heading(output, level, key);
+        match value {
+            serde_json::Value::Object(child) => {
+                render_json_object(child, (level + 1).min(6), output)
+            }
+            serde_json::Value::Array(items) => render_json_array(items, level + 1, output),
+            _ => {}
+        }
+        output.push('\n');
+    }
+}
+
+fn render_json_array(items: &[serde_json::Value], level: usize, output: &mut String) {
+    for (index, item) in items.iter().filter(|item| !item.is_null()).enumerate() {
+        match item {
+            serde_json::Value::Object(map) => {
+                output.push_str(&format!("{}. Item {}\n", index + 1, index + 1));
+                render_json_object(map, (level + 1).clamp(3, 6), output);
+            }
+            serde_json::Value::Array(items) => render_json_array(items, level + 1, output),
+            _ => {
+                output.push_str("- ");
+                output.push_str(&json_scalar_text(item));
+                output.push('\n');
+            }
+        }
+    }
+}
+
+fn push_json_heading(output: &mut String, level: usize, key: &str) {
+    if !output.is_empty() && !output.ends_with("\n\n") {
+        if output.ends_with('\n') {
+            output.push('\n');
+        } else {
+            output.push_str("\n\n");
+        }
+    }
+    output.push_str(&"#".repeat(level.clamp(2, 6)));
+    output.push(' ');
+    output.push_str(&humanize_json_key(key));
+    output.push_str("\n\n");
+}
+
+fn value_is_scalar(value: &serde_json::Value) -> bool {
+    matches!(
+        value,
+        serde_json::Value::String(_) | serde_json::Value::Number(_) | serde_json::Value::Bool(_)
+    )
+}
+
+fn json_scalar_text(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::String(text) => text.replace('\n', " "),
+        serde_json::Value::Number(number) => number.to_string(),
+        serde_json::Value::Bool(value) => value.to_string(),
+        serde_json::Value::Null => String::new(),
+        _ => value.to_string(),
+    }
+}
+
+fn humanize_json_key(key: &str) -> String {
+    let mut output = String::new();
+    let mut capitalize_next = true;
+    for ch in key.chars() {
+        if ch == '_' || ch == '-' {
+            output.push(' ');
+            capitalize_next = true;
+        } else if capitalize_next {
+            output.push(ch.to_ascii_uppercase());
+            capitalize_next = false;
+        } else {
+            output.push(ch);
+        }
+    }
+    output
 }
 
 fn insert_markdown_boundaries(text: &str) -> String {
@@ -932,23 +1042,47 @@ fn should_break_before(text: &str, index: usize, rest: &str) -> bool {
     let heading_marker = !text[..index].ends_with('#')
         && (rest.starts_with("### ") || rest.starts_with("## ") || rest.starts_with("# "));
     heading_marker
-        || rest.starts_with("---")
+        || horizontal_rule_marker(rest)
         || (!text[..index].ends_with('-') && rest.starts_with("- "))
-        || numbered_list_marker(rest)
+        || (!previous_char_is_digit(text, index) && numbered_list_marker(rest))
+}
+
+fn horizontal_rule_marker(text: &str) -> bool {
+    text.starts_with("--- ### ") || text.starts_with("--- ## ") || text.starts_with("--- # ")
+}
+
+fn previous_char_is_digit(text: &str, index: usize) -> bool {
+    matches!(text[..index].chars().last(), Some(ch) if ch.is_ascii_digit())
 }
 
 fn numbered_list_marker(text: &str) -> bool {
     let mut chars = text.chars();
-    let Some(first) = chars.next() else {
-        return false;
-    };
-    if !first.is_ascii_digit() {
-        return false;
+    let mut saw_digit = false;
+    for ch in chars.by_ref() {
+        if ch.is_ascii_digit() {
+            saw_digit = true;
+            continue;
+        }
+        if ch != '.' {
+            return false;
+        }
+        return saw_digit && chars.next() == Some(' ');
     }
-    let Some(second) = chars.next() else {
-        return false;
-    };
-    second == '.' && chars.next() == Some(' ')
+    false
+}
+
+fn split_horizontal_rule_lines(text: &str) -> String {
+    let mut output = String::new();
+    for line in text.lines() {
+        if let Some(rest) = line.strip_prefix("--- ") {
+            output.push_str("---\n\n");
+            output.push_str(rest);
+        } else {
+            output.push_str(line);
+        }
+        output.push('\n');
+    }
+    output.trim_end().to_string()
 }
 
 fn push_boundary(output: &mut String) {
@@ -1548,6 +1682,44 @@ mod tests {
         assert!(formatted.contains("\n- `arkey-core/`"));
         assert!(formatted.contains("\n1. Incremental migration"));
         assert!(formatted.ends_with('\n'));
+    }
+
+    #[test]
+    fn formats_json_agent_answer_into_readable_markdown() {
+        let raw = r#"{"repository":{"name":"arkey","version":"v2","workspace_structure":{"crates":["arkey-core","arkey-rs"],"ready":true}}}"#;
+        let formatted = format_agent_answer(raw);
+        assert!(formatted.contains("## Repository\n"));
+        assert!(formatted.contains("- Name: arkey"));
+        assert!(formatted.contains("- Version: v2"));
+        assert!(formatted.contains("### Workspace Structure\n"));
+        assert!(formatted.contains("- arkey-core"));
+        assert!(formatted.contains("- arkey-rs"));
+        assert!(formatted.contains("- Ready: true"));
+        assert!(formatted.ends_with('\n'));
+    }
+
+    #[test]
+    fn formats_json_array_agent_answer_into_readable_markdown() {
+        let raw = r#"[{"name":"deepseek","passed":true},{"name":"minimax","passed":true}]"#;
+        let formatted = format_agent_answer(raw);
+        assert!(formatted.contains("1. Item 1"));
+        assert!(formatted.contains("- Name: deepseek"));
+        assert!(formatted.contains("2. Item 2"));
+        assert!(formatted.contains("- Name: minimax"));
+    }
+
+    #[test]
+    fn leaves_inline_horizontal_rule_text_alone() {
+        let raw = "Use --- as a separator inside prose.";
+        let formatted = format_agent_answer(raw);
+        assert_eq!(formatted, "Use --- as a separator inside prose.\n");
+    }
+
+    #[test]
+    fn splits_multi_digit_numbered_lists() {
+        let raw = "9. item 10. next item";
+        let formatted = format_agent_answer(raw);
+        assert!(formatted.contains("9. item\n\n10. next item"));
     }
 
     #[test]
