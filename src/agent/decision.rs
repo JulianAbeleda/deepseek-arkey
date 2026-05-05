@@ -23,6 +23,12 @@ pub struct AgentDecision {
     pub blocked: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct ParsedDecision {
+    pub decision: AgentDecision,
+    pub repairs: Vec<&'static str>,
+}
+
 const PLACEHOLDER_FINAL_CONTENT: &str = "answer with concrete findings";
 
 pub(super) fn system_prompt(root: &Path) -> String {
@@ -56,40 +62,53 @@ No raw writes, creates, deletes, network actions, or paths outside the workspace
     )
 }
 
+#[allow(dead_code)]
 pub fn parse_decision(text: &str) -> Result<AgentDecision, String> {
+    parse_decision_with_metadata(text).map(|parsed| parsed.decision)
+}
+
+pub(super) fn parse_decision_with_metadata(text: &str) -> Result<ParsedDecision, String> {
     let json =
         extract_json_object(text).ok_or_else(|| "agent response was not JSON".to_string())?;
+    let mut repairs = Vec::new();
     let value: serde_json::Value = match serde_json::from_str(json) {
         Ok(v) => v,
         Err(first_err) => match parse_repaired_decision_value(json, first_err.column()) {
-            Some(value) => value,
+            Some((value, repair)) => {
+                repairs.push(repair);
+                value
+            }
             None => {
                 return Err(format!("invalid agent JSON: {first_err}"));
             }
         },
     };
-    normalize_decision(value)
+    let decision = normalize_decision(value, &mut repairs)?;
+    Ok(ParsedDecision { decision, repairs })
 }
 
-fn parse_repaired_decision_value(json: &str, column: usize) -> Option<serde_json::Value> {
+fn parse_repaired_decision_value(
+    json: &str,
+    column: usize,
+) -> Option<(serde_json::Value, &'static str)> {
     if let Some(repaired) = repair_malformed_arguments_string(json) {
         if let Ok(value) = serde_json::from_str(&repaired) {
-            return Some(value);
+            return Some((value, "malformed_arguments_string"));
         }
     }
     if let Some(repaired) = insert_missing_comma(json, column) {
         if let Ok(value) = serde_json::from_str(&repaired) {
-            return Some(value);
+            return Some((value, "missing_comma"));
         }
     }
     if let Some(repaired) = remove_extra_brace_at(json, column) {
         if let Ok(value) = serde_json::from_str(&repaired) {
-            return Some(value);
+            return Some((value, "extra_brace"));
         }
     }
     if let Some(repaired) = repair_unescaped_final_content_string(json) {
         if let Ok(value) = serde_json::from_str(&repaired) {
-            return Some(value);
+            return Some((value, "unescaped_final_content"));
         }
     }
     None
@@ -222,8 +241,11 @@ fn extract_json_object(text: &str) -> Option<&str> {
     (start < end).then_some(&text[start..=end])
 }
 
-fn normalize_decision(value: serde_json::Value) -> Result<AgentDecision, String> {
-    let tools = openai_tool_calls(&value)?;
+fn normalize_decision(
+    value: serde_json::Value,
+    repairs: &mut Vec<&'static str>,
+) -> Result<AgentDecision, String> {
+    let tools = openai_tool_calls(&value, repairs)?;
     if !tools.is_empty() {
         return Ok(AgentDecision {
             thought: None,
@@ -265,7 +287,10 @@ fn first_string_field<'a>(value: &'a serde_json::Value, keys: &[&str]) -> Option
         .find_map(|key| value.get(*key).and_then(|field| field.as_str()))
 }
 
-fn openai_tool_calls(value: &serde_json::Value) -> Result<Vec<ToolCall>, String> {
+fn openai_tool_calls(
+    value: &serde_json::Value,
+    repairs: &mut Vec<&'static str>,
+) -> Result<Vec<ToolCall>, String> {
     let Some(calls) = value.get("tool_calls").and_then(|calls| calls.as_array()) else {
         return Ok(Vec::new());
     };
@@ -278,7 +303,13 @@ fn openai_tool_calls(value: &serde_json::Value) -> Result<Vec<ToolCall>, String>
             continue;
         };
         let arguments = match function.get("arguments") {
-            Some(value) if value.is_string() => parse_arguments_string(value.as_str().unwrap())?,
+            Some(value) if value.is_string() => {
+                let parsed = parse_arguments_string(value.as_str().unwrap())?;
+                if let Some(repair) = parsed.repair {
+                    repairs.push(repair);
+                }
+                parsed.value
+            }
             Some(value) => value.clone(),
             None => serde_json::json!({}),
         };
@@ -290,18 +321,32 @@ fn openai_tool_calls(value: &serde_json::Value) -> Result<Vec<ToolCall>, String>
     Ok(parsed)
 }
 
-fn parse_arguments_string(text: &str) -> Result<serde_json::Value, String> {
+struct ParsedArguments {
+    value: serde_json::Value,
+    repair: Option<&'static str>,
+}
+
+fn parse_arguments_string(text: &str) -> Result<ParsedArguments, String> {
     match serde_json::from_str(text) {
-        Ok(value) => Ok(value),
+        Ok(value) => Ok(ParsedArguments {
+            value,
+            repair: None,
+        }),
         Err(first_err) => {
             if let Some(object) = extract_json_object(text) {
                 if let Ok(value) = serde_json::from_str(object) {
-                    return Ok(value);
+                    return Ok(ParsedArguments {
+                        value,
+                        repair: Some("arguments_trailing_json"),
+                    });
                 }
             }
             if let Some(repaired) = repair_unclosed_terminal_string_value(text) {
                 if let Ok(value) = serde_json::from_str(&repaired) {
-                    return Ok(value);
+                    return Ok(ParsedArguments {
+                        value,
+                        repair: Some("arguments_unclosed_terminal_string"),
+                    });
                 }
             }
             Err(format!("invalid tool arguments JSON: {first_err}"))

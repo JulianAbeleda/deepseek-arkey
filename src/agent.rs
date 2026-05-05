@@ -8,8 +8,9 @@ mod read_tools;
 mod transcript;
 mod workspace;
 mod write_tools;
-use decision::system_prompt;
+#[allow(unused_imports)]
 pub use decision::{parse_decision, AgentDecision, ToolCall};
+use decision::{parse_decision_with_metadata, system_prompt};
 use transcript::{write_transcript, TranscriptEntry};
 use workspace::Workspace;
 
@@ -122,11 +123,14 @@ pub fn run_agent_with_approval_handler(
             role: "assistant".to_string(),
             content: redacted_raw.clone(),
         });
-        let mut decision = parse_decision(&raw).map_err(|err| {
+        let mut parsed = parse_decision_with_metadata(&raw).map_err(|err| {
             let snippet = cap_text(&redact_text(&raw), 400);
             format!("{err}\nraw snippet: {snippet}")
         })?;
+        append_parser_repair_notes(&mut transcript, &parsed.repairs);
+        let mut decision = parsed.decision;
         if !decision_has_action(&decision) {
+            append_no_action_retry_note(&mut transcript);
             messages.push(assistant_message(redacted_raw.clone()));
             messages.push(user_message(no_decision_retry_prompt()));
             raw = provider::chat(&messages, model, temperature, None, false)?;
@@ -135,10 +139,12 @@ pub fn run_agent_with_approval_handler(
                 role: "assistant_retry".to_string(),
                 content: redacted_raw.clone(),
             });
-            decision = parse_decision(&raw).map_err(|err| {
+            parsed = parse_decision_with_metadata(&raw).map_err(|err| {
                 let snippet = cap_text(&redact_text(&raw), 400);
                 format!("{err}\nraw snippet: {snippet}")
             })?;
+            append_parser_repair_notes(&mut transcript, &parsed.repairs);
+            decision = parsed.decision;
         }
         if let Some(answer) = decision.final_answer {
             let transcript_path = write_transcript(&workspace.root, &transcript)?;
@@ -216,6 +222,22 @@ fn decision_has_action(decision: &AgentDecision) -> bool {
         || decision.blocked.is_some()
         || decision.tool.is_some()
         || !decision.tools.is_empty()
+}
+
+fn append_parser_repair_notes(transcript: &mut Vec<TranscriptEntry>, repairs: &[&'static str]) {
+    for repair in repairs {
+        transcript.push(TranscriptEntry {
+            role: "parser".to_string(),
+            content: format!("repaired decision JSON via {repair}"),
+        });
+    }
+}
+
+fn append_no_action_retry_note(transcript: &mut Vec<TranscriptEntry>) {
+    transcript.push(TranscriptEntry {
+        role: "parser".to_string(),
+        content: "retried no-action decision".to_string(),
+    });
 }
 
 fn no_decision_retry_prompt() -> String {
@@ -315,7 +337,8 @@ mod tests {
     use super::workspace::Workspace;
     use super::write_tools::{apply_prepared_patch, prepare_patch};
     use super::{
-        parse_decision, write_transcript, ApprovalMode, ToolCall, TranscriptEntry,
+        append_no_action_retry_note, append_parser_repair_notes, parse_decision,
+        parse_decision_with_metadata, write_transcript, ApprovalMode, ToolCall, TranscriptEntry,
         DEFAULT_MAX_STEPS,
     };
 
@@ -360,6 +383,16 @@ mod tests {
     }
 
     #[test]
+    fn clean_openai_parse_has_no_repair_metadata() {
+        let parsed = parse_decision_with_metadata(
+            r#"{"content":null,"tool_calls":[{"id":"call_1","type":"function","function":{"name":"list_files","arguments":"{\"path\":\".\"}"}}]}"#,
+        )
+        .unwrap();
+        assert!(parsed.repairs.is_empty());
+        assert_eq!(parsed.decision.tool.unwrap().name, "list_files");
+    }
+
+    #[test]
     fn skips_malformed_openai_tool_call_after_repairing_extra_brace() {
         let decision = parse_decision(
             r#"{"content":null,"tool_calls":[{"id":"call_19","type":"function","function":{"name":"read_file","arguments":"{\"path\":\"docs/framework-port.md\"}"}},{"id":"call_20","type":"function","function":"{\"path\":\"docs/mind-qa-scope.md\"}"}}]}"#,
@@ -369,6 +402,15 @@ mod tests {
         let tool = decision.tool.unwrap();
         assert_eq!(tool.name, "read_file");
         assert_eq!(tool.arguments["path"], "docs/framework-port.md");
+    }
+
+    #[test]
+    fn records_extra_brace_repair_metadata() {
+        let parsed = parse_decision_with_metadata(
+            r#"{"content":null,"tool_calls":[{"id":"call_19","type":"function","function":{"name":"read_file","arguments":"{\"path\":\"docs/framework-port.md\"}"}},{"id":"call_20","type":"function","function":"{\"path\":\"docs/mind-qa-scope.md\"}"}}]}"#,
+        )
+        .unwrap();
+        assert_eq!(parsed.repairs, vec!["extra_brace"]);
     }
 
     #[test]
@@ -384,6 +426,15 @@ mod tests {
     }
 
     #[test]
+    fn records_trailing_arguments_repair_metadata() {
+        let parsed = parse_decision_with_metadata(
+            r#"{"content":null,"tool_calls":[{"id":"call_1","type":"function","function":{"name":"inspect_tree","arguments":"{\"depth\":2,\"path\":\"pkos_v0.2\"}}"}}]}"#,
+        )
+        .unwrap();
+        assert_eq!(parsed.repairs, vec!["arguments_trailing_json"]);
+    }
+
+    #[test]
     fn repairs_unclosed_terminal_string_in_openai_tool_arguments_string() {
         let decision = parse_decision(
             r#"{"content":null,"tool_calls":[{"id":"call_read_runtime","type":"function","function":{"name":"read_file","arguments":"{\"path\":\"arkey-core/src/runtime.rs}"}}]}"#,
@@ -392,6 +443,15 @@ mod tests {
         let tool = decision.tool.unwrap();
         assert_eq!(tool.name, "read_file");
         assert_eq!(tool.arguments["path"], "arkey-core/src/runtime.rs");
+    }
+
+    #[test]
+    fn records_unclosed_arguments_repair_metadata() {
+        let parsed = parse_decision_with_metadata(
+            r#"{"content":null,"tool_calls":[{"id":"call_read_runtime","type":"function","function":{"name":"read_file","arguments":"{\"path\":\"arkey-core/src/runtime.rs}"}}]}"#,
+        )
+        .unwrap();
+        assert_eq!(parsed.repairs, vec!["arguments_unclosed_terminal_string"]);
     }
 
     #[test]
@@ -422,6 +482,15 @@ mod tests {
             decision.final_answer.as_deref(),
             Some("Repo says \"knowledge as code\" works\nDone")
         );
+    }
+
+    #[test]
+    fn records_unescaped_final_content_repair_metadata() {
+        let parsed = parse_decision_with_metadata(
+            r#"{"content":"Repo says "knowledge as code" works\nDone","tool_calls":null}"#,
+        )
+        .unwrap();
+        assert_eq!(parsed.repairs, vec!["unescaped_final_content"]);
     }
 
     #[test]
@@ -461,6 +530,13 @@ I will list the files now."#,
     }
 
     #[test]
+    fn records_missing_comma_repair_metadata() {
+        let missing_comma = r#"{"content":null,"tool_calls":[{"id":"call_1","type":"function","function":{"name":"inspect_tree" "arguments":"{\"path\":\".\",\"depth\":2}"}}]}"#;
+        let parsed = parse_decision_with_metadata(missing_comma).unwrap();
+        assert_eq!(parsed.repairs, vec!["missing_comma"]);
+    }
+
+    #[test]
     fn repairs_malformed_arguments_string() {
         let malformed = r#"{"content":null,"tool_calls":[{"id":"call_1","type":"function","function":{"name":"inspect_tree","arguments":"{\"path\":".","depth":3}"}}]}"#;
         assert!(serde_json::from_str::<serde_json::Value>(malformed).is_err());
@@ -469,6 +545,40 @@ I will list the files now."#,
         assert_eq!(tool.name, "inspect_tree");
         assert_eq!(tool.arguments["path"], ".");
         assert_eq!(tool.arguments["depth"], 3);
+    }
+
+    #[test]
+    fn records_malformed_arguments_repair_metadata() {
+        let malformed = r#"{"content":null,"tool_calls":[{"id":"call_1","type":"function","function":{"name":"inspect_tree","arguments":"{\"path\":".","depth":3}"}}]}"#;
+        let parsed = parse_decision_with_metadata(malformed).unwrap();
+        assert_eq!(parsed.repairs, vec!["malformed_arguments_string"]);
+    }
+
+    #[test]
+    fn parser_repair_notes_are_sanitized_transcript_entries() {
+        let mut transcript = Vec::new();
+        append_parser_repair_notes(&mut transcript, &["extra_brace", "arguments_trailing_json"]);
+        assert_eq!(transcript.len(), 2);
+        assert_eq!(transcript[0].role, "parser");
+        assert_eq!(
+            transcript[0].content,
+            "repaired decision JSON via extra_brace"
+        );
+        assert_eq!(
+            transcript[1].content,
+            "repaired decision JSON via arguments_trailing_json"
+        );
+        assert!(!transcript[0].content.contains('{'));
+    }
+
+    #[test]
+    fn no_action_retry_note_is_sanitized_transcript_entry() {
+        let mut transcript = Vec::new();
+        append_no_action_retry_note(&mut transcript);
+        assert_eq!(transcript.len(), 1);
+        assert_eq!(transcript[0].role, "parser");
+        assert_eq!(transcript[0].content, "retried no-action decision");
+        assert!(!transcript[0].content.contains('{'));
     }
 
     #[test]
