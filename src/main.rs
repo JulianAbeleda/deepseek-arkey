@@ -81,7 +81,7 @@ fn run(args: Args) -> Result<(), String> {
                     outcome.transcript_path.display()
                 );
             }
-            println!("{}", repl::format_agent_answer(&outcome.answer));
+            println!("{}", repl::terminal_agent_answer(&outcome.answer));
         }
         Some(Command::Login) => {
             provider::login_check(&model)?;

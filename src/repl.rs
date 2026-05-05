@@ -591,7 +591,7 @@ fn run_confirmed_agent_task(
         outcome.steps,
         outcome.transcript_path.display()
     );
-    println!("{}", format_agent_answer(&outcome.answer));
+    println!("{}", terminal_agent_answer(&outcome.answer));
     println!("returning to chat");
     Ok(())
 }
@@ -677,7 +677,7 @@ fn run_interactive_agent(model: &str, temperature: Option<f32>) -> Result<(), St
             outcome.steps,
             outcome.transcript_path.display()
         );
-        println!("{}", format_agent_answer(&outcome.answer));
+        println!("{}", terminal_agent_answer(&outcome.answer));
     }
     Ok(())
 }
@@ -787,7 +787,7 @@ fn run_agent_streaming(
         },
     )?;
     let response = format_agent_answer(&outcome.answer);
-    let _ = sender.send(TurnEvent::Delta(response.clone()));
+    let _ = sender.send(TurnEvent::Delta(render_markdown_for_terminal(&response)));
     Ok((prompt.to_string(), response))
 }
 
@@ -926,6 +926,177 @@ pub(crate) fn format_agent_answer(answer: &str) -> String {
         text.push('\n');
     }
     text
+}
+
+pub(crate) fn terminal_agent_answer(answer: &str) -> String {
+    render_markdown_for_terminal(&format_agent_answer(answer))
+}
+
+fn render_markdown_for_terminal(text: &str) -> String {
+    let mut output = String::new();
+    let mut in_code_block = false;
+    for line in text.lines() {
+        let stripped = line.trim();
+        if stripped.starts_with("```") {
+            in_code_block = !in_code_block;
+            output.push_str(line);
+            output.push('\n');
+            continue;
+        }
+        if in_code_block {
+            output.push_str(line);
+            output.push('\n');
+            continue;
+        }
+        if let Some((level, body)) = markdown_heading(stripped) {
+            output.push_str(&tokyo_heading(level, body));
+            output.push('\n');
+            continue;
+        }
+        if stripped == "---" {
+            output.push_str(&tokyo_muted(&"-".repeat(40)));
+            output.push('\n');
+            continue;
+        }
+        if let Some(body) = stripped
+            .strip_prefix("- ")
+            .or_else(|| stripped.strip_prefix("* "))
+            .or_else(|| stripped.strip_prefix("+ "))
+        {
+            output.push_str(&tokyo_list_marker("-"));
+            output.push(' ');
+            output.push_str(&render_inline_markdown(body));
+            output.push('\n');
+            continue;
+        }
+        if let Some((marker, body)) = markdown_numbered_item(stripped) {
+            output.push_str(&tokyo_list_marker(marker));
+            output.push(' ');
+            output.push_str(&render_inline_markdown(body));
+            output.push('\n');
+            continue;
+        }
+        output.push_str(&render_inline_markdown(line));
+        output.push('\n');
+    }
+    output
+}
+
+fn markdown_heading(line: &str) -> Option<(usize, &str)> {
+    for (level, prefix) in [(3, "### "), (2, "## "), (1, "# ")] {
+        if let Some(body) = line.strip_prefix(prefix) {
+            return Some((level, body));
+        }
+    }
+    None
+}
+
+fn markdown_numbered_item(line: &str) -> Option<(&str, &str)> {
+    let (marker, body) = line.split_once(' ')?;
+    let number = marker.strip_suffix('.')?;
+    (!number.is_empty() && number.chars().all(|ch| ch.is_ascii_digit())).then_some((marker, body))
+}
+
+fn render_inline_markdown(text: &str) -> String {
+    let mut output = String::new();
+    let mut remaining = text;
+    let mut bold = false;
+    while let Some(index) = remaining.find("**") {
+        output.push_str(&render_inline_code_and_urls(&remaining[..index], bold));
+        if bold {
+            output.push_str("\x1b[0m");
+        } else {
+            output.push_str("\x1b[1m");
+        }
+        bold = !bold;
+        remaining = &remaining[index + 2..];
+    }
+    output.push_str(&render_inline_code_and_urls(remaining, bold));
+    if bold {
+        output.push_str("\x1b[0m");
+    }
+    output
+}
+
+fn render_inline_code_and_urls(text: &str, bold_active: bool) -> String {
+    let mut output = String::new();
+    let mut remaining = text;
+    let mut code = false;
+    while let Some(index) = remaining.find('`') {
+        output.push_str(&color_urls(&remaining[..index]));
+        if code {
+            output.push_str("\x1b[0m");
+            if bold_active {
+                output.push_str("\x1b[1m");
+            }
+        } else {
+            output.push_str("\x1b[38;2;125;207;255m");
+        }
+        code = !code;
+        remaining = &remaining[index + 1..];
+    }
+    output.push_str(&color_urls(remaining));
+    if code {
+        output.push_str("\x1b[0m");
+        if bold_active {
+            output.push_str("\x1b[1m");
+        }
+    }
+    output
+}
+
+fn color_urls(text: &str) -> String {
+    let mut output = String::new();
+    let mut token = String::new();
+    for ch in text.chars() {
+        if ch.is_whitespace() {
+            output.push_str(&color_url_token(&token));
+            token.clear();
+            output.push(ch);
+        } else {
+            token.push(ch);
+        }
+    }
+    output.push_str(&color_url_token(&token));
+    output
+}
+
+fn color_url_token(token: &str) -> String {
+    let trimmed = token.trim_end_matches(|ch| matches!(ch, '.' | ',' | ';' | ':' | '!' | '?'));
+    let suffix = &token[trimmed.len()..];
+    if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+        format!("{}{}", tokyo_url(trimmed), suffix)
+    } else {
+        token.to_string()
+    }
+}
+
+fn tokyo_heading(level: usize, text: &str) -> String {
+    let text = render_inline_markdown(text);
+    let code = if level <= 2 { "36;1" } else { "94;1" };
+    ansi(code, &reapply_ansi_after_resets(&text, code))
+}
+
+fn reapply_ansi_after_resets(text: &str, code: &str) -> String {
+    let reset = "\x1b[0m";
+    let resume = format!("{reset}\x1b[{code}m");
+    text.replace(reset, &resume)
+}
+
+fn tokyo_list_marker(text: &str) -> String {
+    ansi("38;2;187;154;247", text)
+}
+
+fn tokyo_url(text: &str) -> String {
+    ansi("38;2;125;207;255", text)
+}
+
+fn tokyo_muted(text: &str) -> String {
+    ansi("90", text)
+}
+
+fn ansi(code: &str, text: &str) -> String {
+    format!("\x1b[{code}m{text}\x1b[0m")
 }
 
 fn json_answer_to_markdown(value: &serde_json::Value) -> String {
@@ -1580,8 +1751,8 @@ mod tests {
         is_agent_task_choice, is_approval_accept, is_end_command, is_exit_command,
         is_workspace_agent_prompt, no_pending_agent_task_text, parse_agent_task_command,
         parse_debug_command, parse_model_command, parse_runtime_command, parse_shell_read_command,
-        shell_pwd_text, task_root_for_prompt, workspace_agent_root_for_prompt, RuntimeCommand,
-        ShellReadCommand,
+        shell_pwd_text, task_root_for_prompt, terminal_agent_answer,
+        workspace_agent_root_for_prompt, RuntimeCommand, ShellReadCommand,
     };
     use crate::provider;
     use crate::runtime;
@@ -1796,6 +1967,40 @@ mod tests {
     }
 
     #[test]
+    fn terminal_agent_answer_renders_tokyo_markdown_styles() {
+        let raw = "## Result\n\n**text here** and `code`\n\n- item\n\n1. next\n\n---\n\n```text\n**raw**\n```";
+        let rendered = terminal_agent_answer(raw);
+        assert!(rendered.contains("\x1b[36;1mResult\x1b[0m"));
+        assert!(rendered.contains("\x1b[1mtext here\x1b[0m"));
+        assert!(rendered.contains("\x1b[38;2;125;207;255mcode\x1b[0m"));
+        assert!(rendered.contains("\x1b[38;2;187;154;247m-\x1b[0m item"));
+        assert!(rendered.contains("\x1b[38;2;187;154;247m1.\x1b[0m next"));
+        assert!(rendered.contains("\x1b[90m----------------------------------------\x1b[0m"));
+        assert!(rendered.contains("**raw**"));
+        assert_eq!(
+            strip_ansi_for_test(&rendered),
+            "Result\n\ntext here and code\n\n- item\n\n1. next\n\n----------------------------------------\n\n```text\n**raw**\n```\n"
+        );
+    }
+
+    #[test]
+    fn terminal_agent_answer_handles_nested_inline_styles() {
+        let rendered = terminal_agent_answer(
+            "## **Important** Result\n\n**use the `run_shell` tool**\n\nSee https://example.com.",
+        );
+
+        assert!(!rendered.contains("**Important**"));
+        assert!(rendered.contains("\x1b[36;1m\x1b[1mImportant\x1b[0m\x1b[36;1m Result\x1b[0m"));
+        assert!(rendered.contains("\x1b[1muse the "));
+        assert!(rendered.contains("\x1b[38;2;125;207;255mrun_shell\x1b[0m\x1b[1m tool\x1b[0m"));
+        assert!(rendered.contains("\x1b[38;2;125;207;255mhttps://example.com\x1b[0m."));
+        assert_eq!(
+            strip_ansi_for_test(&rendered),
+            "Important Result\n\nuse the run_shell tool\n\nSee https://example.com.\n"
+        );
+    }
+
+    #[test]
     fn agent_task_choice_accepts_natural_confirmation_words() {
         assert!(is_agent_task_choice("y"));
         assert!(is_agent_task_choice("yes"));
@@ -1805,6 +2010,24 @@ mod tests {
         assert!(!is_agent_task_choice("n"));
         assert!(!is_agent_task_choice("/agent"));
         assert!(!is_agent_task_choice("agent task please"));
+    }
+
+    fn strip_ansi_for_test(text: &str) -> String {
+        let mut output = String::new();
+        let mut chars = text.chars().peekable();
+        while let Some(ch) = chars.next() {
+            if ch == '\x1b' && chars.peek() == Some(&'[') {
+                chars.next();
+                for next in chars.by_ref() {
+                    if next.is_ascii_alphabetic() {
+                        break;
+                    }
+                }
+                continue;
+            }
+            output.push(ch);
+        }
+        output
     }
 
     #[test]

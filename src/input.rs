@@ -579,7 +579,11 @@ impl DockedComposer {
         let mut column = self.transcript_cursor_column;
         let width = terminal_width().max(1);
         let bottom = output_row();
-        for ch in text.chars() {
+        let mut chars = text.chars().peekable();
+        while let Some(ch) = chars.next() {
+            if ch == '\x1b' && take_ansi_sequence(ch, &mut chars).is_some() {
+                continue;
+            }
             match ch {
                 '\r' => column = 0,
                 '\n' => {
@@ -1282,6 +1286,16 @@ mod tests {
         composer.advance_transcript_text("\ndef");
         assert_eq!(composer.transcript_cursor_row, Some(1));
         assert_eq!(composer.transcript_cursor_column, 3);
+    }
+
+    #[test]
+    fn transcript_cursor_ignores_ansi_sequences() {
+        let mut composer = DockedComposer::new("prompt › ".to_string());
+        composer.set_transcript_start_row(Some(0));
+        composer.advance_transcript_text("\x1b[36;1ma\x1b[0m\x1b[38;2;125;207;255mb\x1b[0m");
+
+        assert_eq!(composer.transcript_cursor_row, Some(0));
+        assert_eq!(composer.transcript_cursor_column, 2);
     }
 
     #[test]
