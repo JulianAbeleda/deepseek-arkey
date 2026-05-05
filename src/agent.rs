@@ -313,6 +313,153 @@ pub fn read_latest_transcript(
     })
 }
 
+pub fn read_latest_transcript_summary(
+    root: impl Into<PathBuf>,
+) -> Result<Option<(PathBuf, String)>, String> {
+    let Some((path, content)) = read_latest_transcript(root)? else {
+        return Ok(None);
+    };
+    Ok(Some((path, summarize_transcript(&content)?)))
+}
+
+fn summarize_transcript(content: &str) -> Result<String, String> {
+    let (entries, partial) = parse_transcript_entries(content)?;
+    let task = entries
+        .iter()
+        .find(|entry| entry.role == "task")
+        .map(|entry| one_line(&entry.content, 240))
+        .unwrap_or_else(|| "unavailable".to_string());
+    let parser_notes = entries
+        .iter()
+        .filter(|entry| entry.role == "parser")
+        .map(|entry| one_line(&entry.content, 240))
+        .collect::<Vec<_>>();
+    let tools = entries
+        .iter()
+        .filter_map(|entry| entry.role.strip_prefix("tool:"))
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    let assistant_turns = entries
+        .iter()
+        .filter(|entry| matches!(entry.role.as_str(), "assistant" | "assistant_retry"))
+        .count();
+    let final_outcome = entries
+        .iter()
+        .rev()
+        .filter(|entry| matches!(entry.role.as_str(), "assistant" | "assistant_retry"))
+        .find_map(|entry| parse_decision(&entry.content).ok())
+        .and_then(|decision| {
+            decision
+                .final_answer
+                .map(|answer| format!("final_answer: {}", one_line(&answer, 500)))
+                .or_else(|| {
+                    decision
+                        .blocked
+                        .map(|blocked| format!("blocked: {}", one_line(&blocked, 500)))
+                })
+        })
+        .unwrap_or_else(|| "unavailable".to_string());
+
+    let mut lines = vec![
+        format!("task: {task}"),
+        format!("entries: {}", entries.len()),
+        format!("assistant turns: {assistant_turns}"),
+    ];
+    if partial {
+        lines.push(
+            "warning: transcript JSON is incomplete; summarized complete entries only".to_string(),
+        );
+    }
+    lines.push(String::new());
+    lines.push("parser:".to_string());
+    if parser_notes.is_empty() {
+        lines.push("- none".to_string());
+    } else {
+        lines.extend(parser_notes.into_iter().map(|note| format!("- {note}")));
+    }
+    lines.push(String::new());
+    lines.push("tools:".to_string());
+    if tools.is_empty() {
+        lines.push("- none".to_string());
+    } else {
+        lines.extend(
+            tools
+                .into_iter()
+                .enumerate()
+                .map(|(index, tool)| format!("{}. {tool}", index + 1)),
+        );
+    }
+    lines.push(String::new());
+    lines.push(format!("final: {final_outcome}"));
+    Ok(lines.join("\n"))
+}
+
+fn parse_transcript_entries(content: &str) -> Result<(Vec<TranscriptEntry>, bool), String> {
+    match serde_json::from_str(content) {
+        Ok(entries) => Ok((entries, false)),
+        Err(err) => {
+            let entries = salvage_complete_transcript_entries(content);
+            if entries.is_empty() {
+                Err(format!("invalid agent transcript JSON: {err}"))
+            } else {
+                Ok((entries, true))
+            }
+        }
+    }
+}
+
+fn salvage_complete_transcript_entries(content: &str) -> Vec<TranscriptEntry> {
+    let mut entries = Vec::new();
+    let mut object_start = None;
+    let mut brace_depth = 0usize;
+    let mut in_string = false;
+    let mut escaped = false;
+
+    for (index, ch) in content.char_indices() {
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+        match ch {
+            '"' => in_string = true,
+            '{' => {
+                if brace_depth == 0 {
+                    object_start = Some(index);
+                }
+                brace_depth += 1;
+            }
+            '}' => {
+                brace_depth = brace_depth.saturating_sub(1);
+                if brace_depth == 0 {
+                    if let Some(start) = object_start.take() {
+                        if let Ok(entry) =
+                            serde_json::from_str::<TranscriptEntry>(&content[start..=index])
+                        {
+                            entries.push(entry);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    entries
+}
+
+fn one_line(text: &str, max_chars: usize) -> String {
+    cap_text(
+        &text.split_whitespace().collect::<Vec<_>>().join(" "),
+        max_chars,
+    )
+}
+
 fn execute_tool(workspace: &Workspace, call: &ToolCall, approval_mode: ApprovalMode) -> String {
     match call.name.as_str() {
         "list_files" => read_tools::list_files(workspace, call),
@@ -958,6 +1105,90 @@ I will list the files now."#,
         assert!(result.contains("README.md"));
         assert!(!result.contains("node_modules"));
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn summarizes_transcript_without_raw_payloads() {
+        let content = serde_json::to_string(&vec![
+            TranscriptEntry {
+                role: "task".to_string(),
+                content: "analyze this repo".to_string(),
+            },
+            TranscriptEntry {
+                role: "assistant".to_string(),
+                content: r#"{"content":null,"tool_calls":[{"id":"call_1","type":"function","function":{"name":"inspect_tree","arguments":"{\"path\":\".\",\"depth\":2}"}}]}"#.to_string(),
+            },
+            TranscriptEntry {
+                role: "parser".to_string(),
+                content: "repaired decision JSON via extra_brace".to_string(),
+            },
+            TranscriptEntry {
+                role: "tool:inspect_tree".to_string(),
+                content: "README.md".to_string(),
+            },
+            TranscriptEntry {
+                role: "assistant_retry".to_string(),
+                content: r#"{"content":"done with findings","tool_calls":null}"#.to_string(),
+            },
+        ])
+        .unwrap();
+        let summary = super::summarize_transcript(&content).unwrap();
+        assert!(summary.contains("task: analyze this repo"));
+        assert!(summary.contains("entries: 5"));
+        assert!(summary.contains("assistant turns: 2"));
+        assert!(summary.contains("- repaired decision JSON via extra_brace"));
+        assert!(summary.contains("1. inspect_tree"));
+        assert!(summary.contains("final: final_answer: done with findings"));
+        assert!(!summary.contains(r#""tool_calls""#));
+    }
+
+    #[test]
+    fn summarizes_blocked_transcript() {
+        let content = serde_json::to_string(&vec![
+            TranscriptEntry {
+                role: "task".to_string(),
+                content: "dangerous task".to_string(),
+            },
+            TranscriptEntry {
+                role: "assistant".to_string(),
+                content: r#"{"blocked":"needs approval"}"#.to_string(),
+            },
+        ])
+        .unwrap();
+        let summary = super::summarize_transcript(&content).unwrap();
+        assert!(summary.contains("final: blocked: needs approval"));
+    }
+
+    #[test]
+    fn summarizes_malformed_assistant_content() {
+        let content = serde_json::to_string(&vec![
+            TranscriptEntry {
+                role: "task".to_string(),
+                content: "weird task".to_string(),
+            },
+            TranscriptEntry {
+                role: "assistant".to_string(),
+                content: "plain text".to_string(),
+            },
+        ])
+        .unwrap();
+        let summary = super::summarize_transcript(&content).unwrap();
+        assert!(summary.contains("assistant turns: 1"));
+        assert!(summary.contains("final: unavailable"));
+    }
+
+    #[test]
+    fn summarizes_complete_entries_from_truncated_transcript() {
+        let content = r#"[
+  {"role":"task","content":"analyze this repo"},
+  {"role":"tool:read_file","content":"ok"},
+  {"role":"assistant","content":"unfinished"#;
+        let summary = super::summarize_transcript(content).unwrap();
+        assert!(summary.contains("task: analyze this repo"));
+        assert!(summary.contains("entries: 2"));
+        assert!(summary
+            .contains("warning: transcript JSON is incomplete; summarized complete entries only"));
+        assert!(summary.contains("1. read_file"));
     }
 
     #[test]

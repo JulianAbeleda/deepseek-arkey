@@ -62,8 +62,8 @@ fn run(args: Args) -> Result<(), String> {
             root,
             max_steps,
         }) => {
-            if is_agent_transcript_latest(&task) {
-                print_latest_agent_transcript(root)?;
+            if let Some(command) = parse_agent_transcript_command(&task) {
+                print_latest_agent_transcript(root, command)?;
                 return Ok(());
             }
             let task = task.join(" ");
@@ -114,12 +114,35 @@ fn run(args: Args) -> Result<(), String> {
     Ok(())
 }
 
-fn is_agent_transcript_latest(task: &[String]) -> bool {
-    matches!(task, [first, second] if first == "transcript" && second == "latest")
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AgentTranscriptCommand {
+    LatestRaw,
+    LatestSummary,
 }
 
-fn print_latest_agent_transcript(root: String) -> Result<(), String> {
-    match agent::read_latest_transcript(root)? {
+fn parse_agent_transcript_command(task: &[String]) -> Option<AgentTranscriptCommand> {
+    match task {
+        [first, second] if first == "transcript" && second == "latest" => {
+            Some(AgentTranscriptCommand::LatestRaw)
+        }
+        [first, second, third]
+            if first == "transcript" && second == "latest" && third == "--summary" =>
+        {
+            Some(AgentTranscriptCommand::LatestSummary)
+        }
+        _ => None,
+    }
+}
+
+fn print_latest_agent_transcript(
+    root: String,
+    command: AgentTranscriptCommand,
+) -> Result<(), String> {
+    let transcript = match command {
+        AgentTranscriptCommand::LatestRaw => agent::read_latest_transcript(root)?,
+        AgentTranscriptCommand::LatestSummary => agent::read_latest_transcript_summary(root)?,
+    };
+    match transcript {
         Some((path, content)) => {
             eprintln!("agent transcript: {}", path.display());
             println!("{content}");
@@ -183,14 +206,25 @@ pub(crate) fn run_prompt(
 
 #[cfg(test)]
 mod tests {
-    use super::is_agent_transcript_latest;
+    use super::{parse_agent_transcript_command, AgentTranscriptCommand};
 
     #[test]
     fn recognizes_agent_transcript_command() {
-        assert!(is_agent_transcript_latest(&[
-            "transcript".to_string(),
-            "latest".to_string()
-        ]));
-        assert!(!is_agent_transcript_latest(&["inspect".to_string()]));
+        assert_eq!(
+            parse_agent_transcript_command(&["transcript".to_string(), "latest".to_string()]),
+            Some(AgentTranscriptCommand::LatestRaw)
+        );
+        assert_eq!(
+            parse_agent_transcript_command(&[
+                "transcript".to_string(),
+                "latest".to_string(),
+                "--summary".to_string()
+            ]),
+            Some(AgentTranscriptCommand::LatestSummary)
+        );
+        assert_eq!(
+            parse_agent_transcript_command(&["inspect".to_string()]),
+            None
+        );
     }
 }

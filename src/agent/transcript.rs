@@ -2,14 +2,14 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::provider::PROVIDER_STATE_DIR;
 use crate::safety::{atomic_write, cap_text};
 
 const MAX_TRANSCRIPT_CHARS: usize = 80_000;
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub(super) struct TranscriptEntry {
     pub(super) role: String,
     pub(super) content: String,
