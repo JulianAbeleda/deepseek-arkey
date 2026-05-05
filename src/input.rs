@@ -2,7 +2,7 @@ use std::io::{self, IsTerminal, Write};
 use std::iter::Peekable;
 use std::time::Duration;
 
-use crossterm::cursor::{MoveTo, MoveToColumn, RestorePosition, SavePosition};
+use crossterm::cursor::{MoveTo, MoveToColumn};
 use crossterm::event::{
     self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode, KeyModifiers,
 };
@@ -222,12 +222,17 @@ impl DockedComposer {
     }
 
     fn render_preserving_cursor(&mut self) -> Result<(), String> {
-        self.rendered_dock_rows = render_dock_lines_preserving_cursor(
+        let row = self.transcript_row();
+        let column = self
+            .transcript_cursor_column
+            .min(terminal_width().saturating_sub(1)) as u16;
+        self.rendered_dock_rows = render_dock_lines(
             &self.prompt,
             &self.buffer,
             self.cursor,
             self.rendered_dock_rows,
         )?;
+        execute!(io::stdout(), MoveTo(column, row)).map_err(|err| err.to_string())?;
         Ok(())
     }
 
@@ -563,6 +568,7 @@ impl DockedComposer {
     }
 
     fn move_to_transcript_cursor(&mut self, stdout: &mut io::Stdout) -> Result<(), String> {
+        set_output_scroll_region(DOCK_RESERVED_ROWS)?;
         let row = self.transcript_row();
         self.transcript_cursor_row = Some(row);
         execute!(stdout, MoveTo(0, row)).map_err(|err| err.to_string())
@@ -674,25 +680,6 @@ fn render_dock_lines(
     cursor: usize,
     previous_rows: usize,
 ) -> Result<usize, String> {
-    render_dock_lines_inner(prompt, buffer, cursor, previous_rows, false)
-}
-
-fn render_dock_lines_preserving_cursor(
-    prompt: &str,
-    buffer: &str,
-    cursor: usize,
-    previous_rows: usize,
-) -> Result<usize, String> {
-    render_dock_lines_inner(prompt, buffer, cursor, previous_rows, true)
-}
-
-fn render_dock_lines_inner(
-    prompt: &str,
-    buffer: &str,
-    cursor: usize,
-    previous_rows: usize,
-    preserve_cursor: bool,
-) -> Result<usize, String> {
     let rows = compose_dock_rows(prompt, buffer, cursor, terminal_width());
     let visible_rows = rows
         .lines
@@ -711,9 +698,6 @@ fn render_dock_lines_inner(
         .min(display_lines.len().saturating_sub(1));
     let cursor_col = rows.cursor_col.min(terminal_width().saturating_sub(1));
     let mut stdout = io::stdout();
-    if preserve_cursor {
-        execute!(stdout, SavePosition).map_err(|err| err.to_string())?;
-    }
     clear_dock_rows(&mut stdout, display_lines.len().max(previous_rows))?;
     for (index, line) in display_lines.iter().enumerate() {
         execute!(
@@ -729,9 +713,6 @@ fn render_dock_lines_inner(
         MoveTo(cursor_col as u16, first_row + cursor_row as u16)
     )
     .map_err(|err| err.to_string())?;
-    if preserve_cursor {
-        execute!(stdout, RestorePosition).map_err(|err| err.to_string())?;
-    }
     stdout.flush().map_err(|err| err.to_string())?;
     Ok(display_lines.len().min(DOCK_RESERVED_ROWS))
 }

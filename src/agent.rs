@@ -231,6 +231,9 @@ fn run_agent_with_chat_handler(
             }
         }
         if tools.is_empty() {
+            if transcript_has_tool_results(&transcript) {
+                return no_action_fallback_outcome(&workspace.root, &mut transcript, step);
+            }
             return Err(fail_no_action_with_transcript(&workspace.root, &transcript));
         }
         let mut result_sections = Vec::new();
@@ -310,6 +313,17 @@ fn append_no_action_retry_note(transcript: &mut Vec<TranscriptEntry>) {
     });
 }
 
+fn append_no_action_fallback_note(transcript: &mut Vec<TranscriptEntry>, reason: &str) {
+    transcript.push(TranscriptEntry {
+        role: "parser".to_string(),
+        content: "used no-action fallback after tool observations".to_string(),
+    });
+    transcript.push(TranscriptEntry {
+        role: "assistant_retry".to_string(),
+        content: format!(r#"{{"blocked":"{reason}"}}"#),
+    });
+}
+
 fn append_parse_failure_retry_note(transcript: &mut Vec<TranscriptEntry>, err: &str) {
     transcript.push(TranscriptEntry {
         role: "parser".to_string(),
@@ -351,6 +365,28 @@ fn fail_no_action_with_transcript(
         Ok(path) => format!("{err}\ntranscript: {}", path.display()),
         Err(write_err) => format!("{err}\ntranscript write failed: {write_err}"),
     }
+}
+
+fn transcript_has_tool_results(transcript: &[TranscriptEntry]) -> bool {
+    transcript
+        .iter()
+        .any(|entry| entry.role.starts_with("tool:"))
+}
+
+fn no_action_fallback_outcome(
+    root: &std::path::Path,
+    transcript: &mut Vec<TranscriptEntry>,
+    steps: usize,
+) -> Result<AgentOutcome, String> {
+    let reason =
+        "model returned no actionable decision after retry; see transcript tool observations";
+    append_no_action_fallback_note(transcript, reason);
+    let transcript_path = write_transcript(root, transcript)?;
+    Ok(AgentOutcome {
+        answer: format!("blocked: {reason}"),
+        steps,
+        transcript_path,
+    })
 }
 
 fn approval_request(step: usize, call: &ToolCall) -> Option<ApprovalRequest> {
@@ -964,6 +1000,44 @@ I will list the files now."#,
             .unwrap()
             .unwrap();
         assert!(latest.1.contains("retried no-action decision"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn no_action_after_tool_results_returns_blocked_fallback() {
+        let root = std::env::temp_dir().join(format!(
+            "deepseek-agent-no-action-after-tools-test-{}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("README.md"), "fixture").unwrap();
+        let mut responses = VecDeque::from([
+            r#"{"tool":{"name":"list_files","arguments":{"path":"."}}}"#.to_string(),
+            r#"{"thought":"I have enough context"}"#.to_string(),
+            r#"{"thought":"still no final"}"#.to_string(),
+        ]);
+        let outcome = super::run_agent_with_chat_handler(
+            "test",
+            "model",
+            None,
+            AgentConfig::new(root.clone(), 3),
+            ApprovalMode::Deny,
+            |_, _| {},
+            |_| ApprovalDecision::Deny,
+            |_, _, _| Ok(responses.pop_front().unwrap()),
+        )
+        .unwrap();
+        assert!(outcome
+            .answer
+            .contains("blocked: model returned no actionable decision"));
+        let transcript = fs::read_to_string(&outcome.transcript_path).unwrap();
+        assert!(transcript.contains("tool:list_files"));
+        assert!(transcript.contains("used no-action fallback after tool observations"));
+        let summary = super::read_latest_transcript_summary(root.clone())
+            .unwrap()
+            .unwrap()
+            .1;
+        assert!(summary.contains("final: blocked: model returned no actionable decision"));
         let _ = fs::remove_dir_all(root);
     }
 
