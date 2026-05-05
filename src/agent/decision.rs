@@ -44,6 +44,16 @@ To request a tool:
 To finish:
 {{"content":"answer with concrete findings","tool_calls":null}}
 
+Final answer style:
+- Put polished Markdown inside the `content` string.
+- Start substantial answers with a `##` heading that names the result.
+- Use short paragraphs, bullets, numbered lists, and compact Markdown tables when they make scanning easier.
+- Use fenced code blocks only for commands, code, logs, or exact file snippets.
+- Cite concrete files, paths, commands, or tool observations when available.
+- Keep answers direct and avoid filler, apologies, or process narration.
+- For reviews, lead with findings before summary.
+- For repo analysis, include purpose, architecture, notable files, risks, and next steps when relevant.
+
 To stop when the task cannot continue safely:
 {{"blocked":"short reason"}}
 

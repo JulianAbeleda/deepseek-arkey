@@ -648,8 +648,8 @@ mod tests {
     use super::write_tools::{apply_prepared_patch, prepare_patch};
     use super::{
         append_no_action_retry_note, append_parser_repair_notes, parse_decision,
-        parse_decision_with_metadata, write_transcript, AgentConfig, ApprovalDecision,
-        ApprovalMode, ToolCall, TranscriptEntry, DEFAULT_MAX_STEPS,
+        parse_decision_with_metadata, system_prompt, write_transcript, AgentConfig,
+        ApprovalDecision, ApprovalMode, ToolCall, TranscriptEntry, DEFAULT_MAX_STEPS,
     };
 
     fn execute_tool(workspace: &Workspace, call: &ToolCall) -> String {
@@ -665,6 +665,16 @@ mod tests {
         let tool = decision.tool.unwrap();
         assert_eq!(tool.name, "read_file");
         assert_eq!(tool.arguments["path"], "src/main.rs");
+    }
+
+    #[test]
+    fn system_prompt_includes_markdown_final_answer_style() {
+        let prompt = system_prompt(std::path::Path::new("/tmp/workspace"));
+        assert!(prompt.contains("Final answer style:"));
+        assert!(prompt.contains("Put polished Markdown inside the `content` string."));
+        assert!(prompt.contains("Start substantial answers with a `##` heading"));
+        assert!(prompt.contains("compact Markdown tables"));
+        assert!(prompt.contains("For reviews, lead with findings before summary."));
     }
 
     #[test]
