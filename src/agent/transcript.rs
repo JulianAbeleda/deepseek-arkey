@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use crate::provider::PROVIDER_STATE_DIR;
 use crate::safety::{atomic_write, cap_text};
 
-const MAX_TRANSCRIPT_CHARS: usize = 80_000;
+const MAX_TRANSCRIPT_ENTRY_CHARS: usize = 12_000;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub(super) struct TranscriptEntry {
@@ -21,10 +21,20 @@ pub(super) fn write_transcript(
 ) -> Result<PathBuf, String> {
     let dir = transcript_dir(root);
     let path = dir.join(format!("{}.json", unix_timestamp()));
-    let bytes = serde_json::to_vec_pretty(entries).map_err(|err| err.to_string())?;
-    let text = cap_text(&String::from_utf8_lossy(&bytes), MAX_TRANSCRIPT_CHARS);
-    atomic_write(&path, text.as_bytes()).map_err(|err| err.to_string())?;
+    let entries = capped_entries(entries);
+    let bytes = serde_json::to_vec_pretty(&entries).map_err(|err| err.to_string())?;
+    atomic_write(&path, &bytes).map_err(|err| err.to_string())?;
     Ok(path)
+}
+
+fn capped_entries(entries: &[TranscriptEntry]) -> Vec<TranscriptEntry> {
+    entries
+        .iter()
+        .map(|entry| TranscriptEntry {
+            role: entry.role.clone(),
+            content: cap_text(&entry.content, MAX_TRANSCRIPT_ENTRY_CHARS),
+        })
+        .collect()
 }
 
 pub(super) fn read_latest_transcript(

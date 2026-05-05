@@ -1423,6 +1423,40 @@ I will list the files now."#,
     }
 
     #[test]
+    fn writes_valid_transcript_json_with_large_entries() {
+        let root = std::env::temp_dir().join(format!(
+            "deepseek-agent-large-transcript-test-{}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let path = write_transcript(
+            &root,
+            &[
+                TranscriptEntry {
+                    role: "task".to_string(),
+                    content: "large transcript".to_string(),
+                },
+                TranscriptEntry {
+                    role: "tool:read_file".to_string(),
+                    content: "x".repeat(100_000),
+                },
+                TranscriptEntry {
+                    role: "assistant".to_string(),
+                    content: r#"{"content":"done","tool_calls":null}"#.to_string(),
+                },
+            ],
+        )
+        .unwrap();
+        let content = fs::read_to_string(path).unwrap();
+        serde_json::from_str::<Vec<TranscriptEntry>>(&content).unwrap();
+        assert!(content.contains("[truncated]"));
+        let summary = super::summarize_transcript(&content).unwrap();
+        assert!(!summary.contains("warning: transcript JSON is incomplete"));
+        assert!(summary.contains("final: final_answer: done"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn reads_latest_transcript() {
         let root = std::env::temp_dir().join(format!(
             "deepseek-agent-latest-transcript-test-{}",
