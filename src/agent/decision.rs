@@ -68,10 +68,16 @@ pub fn parse_decision(text: &str) -> Result<AgentDecision, String> {
                 } else if let Some(repaired) = insert_missing_comma(json, first_err.column()) {
                     serde_json::from_str(&repaired)
                         .map_err(|_| format!("invalid agent JSON: {first_err}"))?
+                } else if let Some(repaired) = remove_extra_brace_at(json, first_err.column()) {
+                    serde_json::from_str(&repaired)
+                        .map_err(|_| format!("invalid agent JSON: {first_err}"))?
                 } else {
                     return Err(format!("invalid agent JSON: {first_err}"));
                 }
             } else if let Some(repaired) = insert_missing_comma(json, first_err.column()) {
+                serde_json::from_str(&repaired)
+                    .map_err(|_| format!("invalid agent JSON: {first_err}"))?
+            } else if let Some(repaired) = remove_extra_brace_at(json, first_err.column()) {
                 serde_json::from_str(&repaired)
                     .map_err(|_| format!("invalid agent JSON: {first_err}"))?
             } else {
@@ -131,9 +137,22 @@ fn insert_missing_comma(json: &str, col: usize) -> Option<String> {
     Some(format!("{},{}", &json[..pos], &json[pos..]))
 }
 
+fn remove_extra_brace_at(json: &str, col: usize) -> Option<String> {
+    let pos = col.checked_sub(1)?;
+    if json.as_bytes().get(pos) != Some(&b'}') {
+        return None;
+    }
+    let next = json[pos + 1..].trim_start().as_bytes().first().copied();
+    if !matches!(next, Some(b']' | b',' | b'}')) {
+        return None;
+    }
+    Some(format!("{}{}", &json[..pos], &json[pos + 1..]))
+}
+
 fn extract_json_object(text: &str) -> Option<&str> {
     let start = text.find('{')?;
-    let mut depth = 0usize;
+    let mut brace_depth = 0usize;
+    let mut bracket_depth = 0usize;
     let mut in_string = false;
     let mut escaped = false;
     for (offset, ch) in text[start..].char_indices() {
@@ -149,10 +168,12 @@ fn extract_json_object(text: &str) -> Option<&str> {
         }
         match ch {
             '"' => in_string = true,
-            '{' => depth += 1,
+            '{' => brace_depth += 1,
+            '[' => bracket_depth += 1,
+            ']' => bracket_depth = bracket_depth.saturating_sub(1),
             '}' => {
-                depth = depth.saturating_sub(1);
-                if depth == 0 {
+                brace_depth = brace_depth.saturating_sub(1);
+                if brace_depth == 0 && bracket_depth == 0 {
                     return Some(&text[start..=start + offset]);
                 }
             }
@@ -195,21 +216,32 @@ fn openai_tool_calls(value: &serde_json::Value) -> Result<Vec<ToolCall>, String>
     };
     let mut parsed = Vec::new();
     for call in calls {
-        let Some(function) = call.get("function") else {
+        let Some(function) = call.get("function").and_then(normalize_function_call) else {
             continue;
         };
-        let name = function
-            .get("name")
-            .and_then(|name| name.as_str())
-            .ok_or_else(|| "invalid agent JSON: missing tool function name".to_string())?
-            .to_string();
+        let Some(name) = function.get("name").and_then(|name| name.as_str()) else {
+            continue;
+        };
         let arguments = match function.get("arguments") {
             Some(value) if value.is_string() => serde_json::from_str(value.as_str().unwrap())
                 .map_err(|err| format!("invalid tool arguments JSON: {err}"))?,
             Some(value) => value.clone(),
             None => serde_json::json!({}),
         };
-        parsed.push(ToolCall { name, arguments });
+        parsed.push(ToolCall {
+            name: name.to_string(),
+            arguments,
+        });
     }
     Ok(parsed)
+}
+
+fn normalize_function_call(value: &serde_json::Value) -> Option<serde_json::Value> {
+    if value.is_object() {
+        return Some(value.clone());
+    }
+    value
+        .as_str()
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(text).ok())
+        .filter(|value| value.is_object())
 }

@@ -335,6 +335,18 @@ mod tests {
     }
 
     #[test]
+    fn skips_malformed_openai_tool_call_after_repairing_extra_brace() {
+        let decision = parse_decision(
+            r#"{"content":null,"tool_calls":[{"id":"call_19","type":"function","function":{"name":"read_file","arguments":"{\"path\":\"docs/framework-port.md\"}"}},{"id":"call_20","type":"function","function":"{\"path\":\"docs/mind-qa-scope.md\"}"}}]}"#,
+        )
+        .unwrap();
+        assert_eq!(decision.tools.len(), 1);
+        let tool = decision.tool.unwrap();
+        assert_eq!(tool.name, "read_file");
+        assert_eq!(tool.arguments["path"], "docs/framework-port.md");
+    }
+
+    #[test]
     fn parses_openai_style_final_content() {
         let decision = parse_decision(r#"{"content":"done","tool_calls":null}"#).unwrap();
         assert_eq!(decision.final_answer.as_deref(), Some("done"));
