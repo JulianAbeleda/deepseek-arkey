@@ -347,6 +347,18 @@ mod tests {
     }
 
     #[test]
+    fn repairs_trailing_characters_in_openai_tool_arguments_string() {
+        let decision = parse_decision(
+            r#"{"content":null,"tool_calls":[{"id":"call_1","type":"function","function":{"name":"inspect_tree","arguments":"{\"depth\":2,\"path\":\"pkos_v0.2\"}}"}}]}"#,
+        )
+        .unwrap();
+        let tool = decision.tool.unwrap();
+        assert_eq!(tool.name, "inspect_tree");
+        assert_eq!(tool.arguments["depth"], 2);
+        assert_eq!(tool.arguments["path"], "pkos_v0.2");
+    }
+
+    #[test]
     fn parses_openai_style_final_content() {
         let decision = parse_decision(r#"{"content":"done","tool_calls":null}"#).unwrap();
         assert_eq!(decision.final_answer.as_deref(), Some("done"));

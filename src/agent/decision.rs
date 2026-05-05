@@ -143,7 +143,7 @@ fn remove_extra_brace_at(json: &str, col: usize) -> Option<String> {
         return None;
     }
     let next = json[pos + 1..].trim_start().as_bytes().first().copied();
-    if !matches!(next, Some(b']' | b',' | b'}')) {
+    if !matches!(next, Some(b']' | b'}')) {
         return None;
     }
     Some(format!("{}{}", &json[..pos], &json[pos + 1..]))
@@ -223,8 +223,7 @@ fn openai_tool_calls(value: &serde_json::Value) -> Result<Vec<ToolCall>, String>
             continue;
         };
         let arguments = match function.get("arguments") {
-            Some(value) if value.is_string() => serde_json::from_str(value.as_str().unwrap())
-                .map_err(|err| format!("invalid tool arguments JSON: {err}"))?,
+            Some(value) if value.is_string() => parse_arguments_string(value.as_str().unwrap())?,
             Some(value) => value.clone(),
             None => serde_json::json!({}),
         };
@@ -234,6 +233,19 @@ fn openai_tool_calls(value: &serde_json::Value) -> Result<Vec<ToolCall>, String>
         });
     }
     Ok(parsed)
+}
+
+fn parse_arguments_string(text: &str) -> Result<serde_json::Value, String> {
+    match serde_json::from_str(text) {
+        Ok(value) => Ok(value),
+        Err(first_err) => {
+            let Some(object) = extract_json_object(text) else {
+                return Err(format!("invalid tool arguments JSON: {first_err}"));
+            };
+            serde_json::from_str(object)
+                .map_err(|_| format!("invalid tool arguments JSON: {first_err}"))
+        }
+    }
 }
 
 fn normalize_function_call(value: &serde_json::Value) -> Option<serde_json::Value> {
