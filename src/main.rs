@@ -61,23 +61,26 @@ fn run(args: Args) -> Result<(), String> {
             task,
             root,
             max_steps,
+            final_only,
         }) => {
             if let Some(command) = parse_agent_transcript_command(&task) {
                 print_latest_agent_transcript(root, command)?;
                 return Ok(());
             }
             let task = task.join(" ");
-            let outcome = agent::run_agent(
-                &task,
-                &model,
-                args.temperature,
-                agent::AgentConfig::new(root, max_steps),
-            )?;
-            eprintln!(
-                "agent: steps={} transcript={}",
-                outcome.steps,
-                outcome.transcript_path.display()
-            );
+            let config = agent::AgentConfig::new(root, max_steps);
+            let outcome = if final_only {
+                agent::run_agent_final_only(&task, &model, args.temperature, config)?
+            } else {
+                agent::run_agent(&task, &model, args.temperature, config)?
+            };
+            if !final_only {
+                eprintln!(
+                    "agent: steps={} transcript={}",
+                    outcome.steps,
+                    outcome.transcript_path.display()
+                );
+            }
             println!("{}", repl::format_agent_answer(&outcome.answer));
         }
         Some(Command::Login) => {

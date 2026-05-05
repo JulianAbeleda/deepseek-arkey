@@ -97,6 +97,24 @@ pub fn run_agent_with_options(
     )
 }
 
+pub fn run_agent_final_only(
+    task: &str,
+    model: &str,
+    temperature: Option<f32>,
+    config: AgentConfig,
+) -> Result<AgentOutcome, String> {
+    run_agent_with_chat_handler(
+        task,
+        model,
+        temperature,
+        config,
+        ApprovalMode::Interactive,
+        |_, _| {},
+        |_| ApprovalDecision::Deny,
+        |messages, model, temperature| provider::chat_quiet(messages, model, temperature, None),
+    )
+}
+
 pub fn run_agent_with_approval_handler(
     task: &str,
     model: &str,

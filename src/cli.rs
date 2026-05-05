@@ -58,6 +58,9 @@ pub enum Command {
 
         #[arg(long, default_value_t = DEFAULT_MAX_STEPS)]
         max_steps: usize,
+
+        #[arg(long)]
+        final_only: bool,
     },
     Login,
     Debug {
@@ -77,4 +80,43 @@ pub enum SessionCommand {
     Start { name: Option<String> },
     Status,
     End,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Args, Command};
+    use clap::Parser;
+
+    #[test]
+    fn parses_agent_final_only_flag() {
+        let args = Args::try_parse_from([
+            "deepseek",
+            "agent",
+            "--final-only",
+            "analyze",
+            "this",
+            "repo",
+        ])
+        .unwrap();
+
+        match args.command {
+            Some(Command::Agent {
+                task, final_only, ..
+            }) => {
+                assert!(final_only);
+                assert_eq!(task, ["analyze", "this", "repo"]);
+            }
+            other => panic!("expected agent command, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn agent_final_only_defaults_to_false() {
+        let args = Args::try_parse_from(["deepseek", "agent", "analyze", "this", "repo"]).unwrap();
+
+        match args.command {
+            Some(Command::Agent { final_only, .. }) => assert!(!final_only),
+            other => panic!("expected agent command, got {other:?}"),
+        }
+    }
 }

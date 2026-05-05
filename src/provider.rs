@@ -82,6 +82,7 @@ pub fn chat(
         max_tokens,
         stream,
         true,
+        true,
         |delta| {
             print!("{delta}");
             let _ = std::io::stdout().flush();
@@ -106,8 +107,27 @@ where
         temperature,
         max_tokens,
         stream,
+        true,
         false,
         on_delta,
+    )
+}
+
+pub fn chat_quiet(
+    messages: &[Message],
+    model: &str,
+    temperature: Option<f32>,
+    max_tokens: Option<u32>,
+) -> Result<String, String> {
+    chat_impl(
+        messages,
+        model,
+        temperature,
+        max_tokens,
+        false,
+        false,
+        false,
+        |_| {},
     )
 }
 
@@ -117,6 +137,7 @@ fn chat_impl<F>(
     temperature: Option<f32>,
     max_tokens: Option<u32>,
     stream: bool,
+    print_cache: bool,
     print_stream_trailing_newline: bool,
     on_delta: F,
 ) -> Result<String, String>
@@ -146,7 +167,9 @@ where
         });
     }
     let raw = String::from_utf8_lossy(&output.stdout).to_string();
-    print_cache_stats(&raw);
+    if print_cache {
+        print_cache_stats(&raw);
+    }
     extract_assistant_text(&raw).map(|text| cap_text(&text, DEFAULT_TEXT_CAP))
 }
 
