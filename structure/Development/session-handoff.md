@@ -69,7 +69,7 @@ until a third approval type makes the duplication meaningful.
 - [x] If the audit passes, tag or document Phase 12 as complete.
 - [x] Push the persistent workspace navigation commits if they are not already
       on `origin/main`.
-- [ ] Port MiniMax patch failure-mode tests equivalent to DeepSeek
+- [x] Port MiniMax patch failure-mode tests equivalent to DeepSeek
       `apply_patch_rejects_changed_file` and `rejects_ambiguous_replacement`.
 - [ ] Keep DeepSeek and MiniMax parity unless a provider-specific behavior
       requires divergence.

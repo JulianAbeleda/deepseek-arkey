@@ -56,7 +56,4 @@ Expected behavior:
 
 ## Remaining Follow-Ups
 
-- Re-audit provider parser resilience after the new forced-repair test commit.
-- Decide whether to document this reliability patch in `CHANGELOG.md`.
-- Consider a future parser slice for MiniMax-style placeholder final answers such as `content: "answer with concrete findings"` plus extra fields.
-- Consider future support for multiple tool calls in one provider response; current behavior uses the first tool call.
+- Keep monitoring live provider output for new malformed tool-call shapes.

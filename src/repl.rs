@@ -920,9 +920,9 @@ fn workspace_agent_root_for_prompt(prompt: &str, selected_root: Option<&Path>) -
         return None;
     }
     infer_natural_root(prompt).or_else(|| {
-        selected_root
-            .filter(|_| is_workspace_agent_prompt(prompt))
-            .map(Path::to_path_buf)
+        is_workspace_agent_prompt(prompt)
+            .then(|| effective_workspace_root(selected_root))
+            .flatten()
     })
 }
 
@@ -953,6 +953,11 @@ fn is_workspace_agent_prompt(prompt: &str) -> bool {
         "what is this project trying to do",
         "tell me what this repo is trying to do",
         "tell me what this project is trying to do",
+        "try a shell command",
+        "deny shell command",
+        "approve shell command",
+        "deny patch edit",
+        "approve patch edit",
     ]
     .iter()
     .any(|phrase| normalized.contains(phrase))
@@ -1371,6 +1376,8 @@ mod tests {
             "scan src",
             "read Cargo.toml",
             "what is this repo trying to do",
+            "deny shell command",
+            "approve patch edit",
         ] {
             assert_eq!(
                 workspace_agent_root_for_prompt(prompt, Some(selected)),

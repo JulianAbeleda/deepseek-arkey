@@ -16,10 +16,14 @@ pub struct AgentDecision {
     #[serde(default)]
     pub tool: Option<ToolCall>,
     #[serde(default)]
+    pub tools: Vec<ToolCall>,
+    #[serde(default)]
     pub final_answer: Option<String>,
     #[serde(default)]
     pub blocked: Option<String>,
 }
+
+const PLACEHOLDER_FINAL_CONTENT: &str = "answer with concrete findings";
 
 pub(super) fn system_prompt(root: &Path) -> String {
     format!(
@@ -160,20 +164,23 @@ fn extract_json_object(text: &str) -> Option<&str> {
 }
 
 fn normalize_decision(value: serde_json::Value) -> Result<AgentDecision, String> {
-    if let Some(tool) = openai_tool_call(&value)? {
+    let tools = openai_tool_calls(&value)?;
+    if !tools.is_empty() {
         return Ok(AgentDecision {
             thought: None,
-            tool: Some(tool),
+            tool: tools.first().cloned(),
+            tools,
             final_answer: None,
             blocked: None,
         });
     }
     if let Some(content) = value.get("content").and_then(|content| content.as_str()) {
         let content = content.trim();
-        if !content.is_empty() {
+        if !content.is_empty() && content != PLACEHOLDER_FINAL_CONTENT {
             return Ok(AgentDecision {
                 thought: None,
                 tool: None,
+                tools: Vec::new(),
                 final_answer: Some(content.to_string()),
                 blocked: None,
             });
@@ -182,26 +189,27 @@ fn normalize_decision(value: serde_json::Value) -> Result<AgentDecision, String>
     serde_json::from_value(value).map_err(|err| format!("invalid agent JSON: {err}"))
 }
 
-fn openai_tool_call(value: &serde_json::Value) -> Result<Option<ToolCall>, String> {
+fn openai_tool_calls(value: &serde_json::Value) -> Result<Vec<ToolCall>, String> {
     let Some(calls) = value.get("tool_calls").and_then(|calls| calls.as_array()) else {
-        return Ok(None);
+        return Ok(Vec::new());
     };
-    let Some(call) = calls.first() else {
-        return Ok(None);
-    };
-    let Some(function) = call.get("function") else {
-        return Ok(None);
-    };
-    let name = function
-        .get("name")
-        .and_then(|name| name.as_str())
-        .ok_or_else(|| "invalid agent JSON: missing tool function name".to_string())?
-        .to_string();
-    let arguments = match function.get("arguments") {
-        Some(value) if value.is_string() => serde_json::from_str(value.as_str().unwrap())
-            .map_err(|err| format!("invalid tool arguments JSON: {err}"))?,
-        Some(value) => value.clone(),
-        None => serde_json::json!({}),
-    };
-    Ok(Some(ToolCall { name, arguments }))
+    let mut parsed = Vec::new();
+    for call in calls {
+        let Some(function) = call.get("function") else {
+            continue;
+        };
+        let name = function
+            .get("name")
+            .and_then(|name| name.as_str())
+            .ok_or_else(|| "invalid agent JSON: missing tool function name".to_string())?
+            .to_string();
+        let arguments = match function.get("arguments") {
+            Some(value) if value.is_string() => serde_json::from_str(value.as_str().unwrap())
+                .map_err(|err| format!("invalid tool arguments JSON: {err}"))?,
+            Some(value) => value.clone(),
+            None => serde_json::json!({}),
+        };
+        parsed.push(ToolCall { name, arguments });
+    }
+    Ok(parsed)
 }

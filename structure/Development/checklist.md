@@ -291,7 +291,7 @@ Validation notes:
 
 ## Follow-Up Backlog
 
-- [ ] Port MiniMax patch failure-mode tests equivalent to DeepSeek `apply_patch_rejects_changed_file` and `rejects_ambiguous_replacement`.
+- [x] Port MiniMax patch failure-mode tests equivalent to DeepSeek `apply_patch_rejects_changed_file` and `rejects_ambiguous_replacement`.
 
 Phase 8 smoke commands:
 

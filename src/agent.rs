@@ -145,32 +145,47 @@ pub fn run_agent_with_approval_handler(
                 transcript_path,
             });
         }
-        let Some(tool) = decision.tool else {
+        let mut tools = decision.tools;
+        if tools.is_empty() {
+            if let Some(tool) = decision.tool {
+                tools.push(tool);
+            }
+        }
+        if tools.is_empty() {
             return Err(
                 "agent response did not include final_answer, blocked, or tool".to_string(),
             );
-        };
-        on_step(step, &tool.name);
-        let tool_approval_mode = if approval_mode == ApprovalMode::External {
-            match approval_request(step, &tool) {
-                Some(request) => match on_approval(request) {
-                    ApprovalDecision::Approve => ApprovalMode::Approved,
-                    ApprovalDecision::Deny => ApprovalMode::Deny,
-                },
-                None => ApprovalMode::Deny,
-            }
-        } else {
-            approval_mode
-        };
-        let result = execute_tool(&workspace, &tool, tool_approval_mode);
-        let result_text = cap_text(&redact_text(&result), MAX_TOOL_CHARS);
-        transcript.push(TranscriptEntry {
-            role: format!("tool:{}", tool.name),
-            content: result_text.clone(),
-        });
+        }
+        let mut result_sections = Vec::new();
+        for (index, tool) in tools.iter().enumerate() {
+            on_step(step, &tool.name);
+            let tool_approval_mode = if approval_mode == ApprovalMode::External {
+                match approval_request(step, tool) {
+                    Some(request) => match on_approval(request) {
+                        ApprovalDecision::Approve => ApprovalMode::Approved,
+                        ApprovalDecision::Deny => ApprovalMode::Deny,
+                    },
+                    None => ApprovalMode::Deny,
+                }
+            } else {
+                approval_mode
+            };
+            let result = execute_tool(&workspace, tool, tool_approval_mode);
+            let result_text = cap_text(&redact_text(&result), MAX_TOOL_CHARS);
+            transcript.push(TranscriptEntry {
+                role: format!("tool:{}", tool.name),
+                content: result_text.clone(),
+            });
+            result_sections.push(format!(
+                "Tool result for step {step}, item {} ({}):\n{result_text}",
+                index + 1,
+                tool.name
+            ));
+        }
+        let combined_results = cap_text(&result_sections.join("\n\n"), MAX_TOOL_CHARS);
         messages.push(assistant_message(redacted_raw));
         messages.push(user_message(format!(
-            "Tool result for step {step}:\n{result_text}\nContinue with JSON only."
+            "{combined_results}\nContinue with JSON only."
         )));
     }
 
@@ -300,14 +315,42 @@ mod tests {
             r#"{"content":null,"tool_calls":[{"id":"call_1","type":"function","function":{"name":"read_file","arguments":"{\"path\":\"src/main.rs\"}"}}]}"#,
         )
         .unwrap();
+        assert_eq!(decision.tools.len(), 1);
         let tool = decision.tool.unwrap();
         assert_eq!(tool.name, "read_file");
         assert_eq!(tool.arguments["path"], "src/main.rs");
     }
 
     #[test]
+    fn parses_openai_style_multiple_tool_calls_in_order() {
+        let decision = parse_decision(
+            r#"{"content":null,"tool_calls":[{"id":"call_1","type":"function","function":{"name":"list_files","arguments":"{\"path\":\".\"}"}},{"id":"call_2","type":"function","function":{"name":"read_file","arguments":"{\"path\":\"README.md\"}"}}]}"#,
+        )
+        .unwrap();
+        assert_eq!(decision.tools.len(), 2);
+        assert_eq!(decision.tool.as_ref().unwrap().name, "list_files");
+        assert_eq!(decision.tools[0].arguments["path"], ".");
+        assert_eq!(decision.tools[1].name, "read_file");
+        assert_eq!(decision.tools[1].arguments["path"], "README.md");
+    }
+
+    #[test]
     fn parses_openai_style_final_content() {
         let decision = parse_decision(r#"{"content":"done","tool_calls":null}"#).unwrap();
+        assert_eq!(decision.final_answer.as_deref(), Some("done"));
+    }
+
+    #[test]
+    fn placeholder_content_does_not_mask_real_decision_fields() {
+        let decision =
+            parse_decision(r#"{"content":"answer with concrete findings","blocked":"wait"}"#)
+                .unwrap();
+        assert_eq!(decision.final_answer, None);
+        assert_eq!(decision.blocked.as_deref(), Some("wait"));
+
+        let decision =
+            parse_decision(r#"{"content":"answer with concrete findings","final_answer":"done"}"#)
+                .unwrap();
         assert_eq!(decision.final_answer.as_deref(), Some("done"));
     }
 

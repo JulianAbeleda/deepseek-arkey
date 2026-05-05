@@ -215,6 +215,13 @@ def write_fake_curl(directory):
             else:
                 decision = {"final_answer": "hi docked agent ok"}
 
+            if "no-buffer" in config:
+                print("data: " + json.dumps({
+                    "choices": [{"delta": {"content": json.dumps(decision)}}]
+                }))
+                print("data: [DONE]")
+                raise SystemExit(0)
+
             print(json.dumps({
                 "choices": [{"message": {"content": json.dumps(decision)}}]
             }))

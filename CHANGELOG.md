@@ -2,6 +2,15 @@
 
 ## Phase 12 - Dock-Native Approval First Slice
 
+Reliability addendum:
+
+- OpenAI-style agent decisions now preserve multiple tool calls and execute them
+  in order within one provider step.
+- Placeholder final content such as `answer with concrete findings` no longer
+  masks real `blocked` or `final_answer` fields.
+- Patch failure-mode coverage now tracks ambiguous replacements and changed-file
+  races across the provider CLIs.
+
 Summary:
 
 - Docked model-decided routing can now request approval for `run_shell` and
