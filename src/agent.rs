@@ -9,7 +9,7 @@ mod transcript;
 mod workspace;
 mod write_tools;
 use decision::system_prompt;
-pub use decision::{parse_decision, ToolCall};
+pub use decision::{parse_decision, AgentDecision, ToolCall};
 use transcript::{write_transcript, TranscriptEntry};
 use workspace::Workspace;
 
@@ -116,16 +116,30 @@ pub fn run_agent_with_approval_handler(
     }];
 
     for step in 1..=config.max_steps {
-        let raw = provider::chat(&messages, model, temperature, None, false)?;
-        let redacted_raw = cap_text(&redact_text(&raw), MAX_TOOL_CHARS);
+        let mut raw = provider::chat(&messages, model, temperature, None, false)?;
+        let mut redacted_raw = cap_text(&redact_text(&raw), MAX_TOOL_CHARS);
         transcript.push(TranscriptEntry {
             role: "assistant".to_string(),
             content: redacted_raw.clone(),
         });
-        let decision = parse_decision(&raw).map_err(|err| {
+        let mut decision = parse_decision(&raw).map_err(|err| {
             let snippet = cap_text(&redact_text(&raw), 400);
             format!("{err}\nraw snippet: {snippet}")
         })?;
+        if !decision_has_action(&decision) {
+            messages.push(assistant_message(redacted_raw.clone()));
+            messages.push(user_message(no_decision_retry_prompt()));
+            raw = provider::chat(&messages, model, temperature, None, false)?;
+            redacted_raw = cap_text(&redact_text(&raw), MAX_TOOL_CHARS);
+            transcript.push(TranscriptEntry {
+                role: "assistant_retry".to_string(),
+                content: redacted_raw.clone(),
+            });
+            decision = parse_decision(&raw).map_err(|err| {
+                let snippet = cap_text(&redact_text(&raw), 400);
+                format!("{err}\nraw snippet: {snippet}")
+            })?;
+        }
         if let Some(answer) = decision.final_answer {
             let transcript_path = write_transcript(&workspace.root, &transcript)?;
             return Ok(AgentOutcome {
@@ -195,6 +209,17 @@ pub fn run_agent_with_approval_handler(
         steps: config.max_steps,
         transcript_path,
     })
+}
+
+fn decision_has_action(decision: &AgentDecision) -> bool {
+    decision.final_answer.is_some()
+        || decision.blocked.is_some()
+        || decision.tool.is_some()
+        || !decision.tools.is_empty()
+}
+
+fn no_decision_retry_prompt() -> String {
+    "Your previous JSON parsed, but it did not include an actionable decision. Return exactly one JSON object with one of these shapes: {\"content\":\"final answer\",\"tool_calls\":null}, {\"content\":null,\"tool_calls\":[...]}, or {\"blocked\":\"short reason\"}. No prose outside JSON.".to_string()
 }
 
 fn approval_request(step: usize, call: &ToolCall) -> Option<ApprovalRequest> {
@@ -373,6 +398,18 @@ mod tests {
     fn parses_openai_style_final_content() {
         let decision = parse_decision(r#"{"content":"done","tool_calls":null}"#).unwrap();
         assert_eq!(decision.final_answer.as_deref(), Some("done"));
+    }
+
+    #[test]
+    fn parses_common_final_answer_aliases() {
+        let decision = parse_decision(r#"{"answer":"done"}"#).unwrap();
+        assert_eq!(decision.final_answer.as_deref(), Some("done"));
+
+        let decision = parse_decision(r#"{"response":"also done"}"#).unwrap();
+        assert_eq!(decision.final_answer.as_deref(), Some("also done"));
+
+        let decision = parse_decision(r#"{"result":"finished"}"#).unwrap();
+        assert_eq!(decision.final_answer.as_deref(), Some("finished"));
     }
 
     #[test]

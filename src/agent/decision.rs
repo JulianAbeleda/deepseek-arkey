@@ -245,7 +245,24 @@ fn normalize_decision(value: serde_json::Value) -> Result<AgentDecision, String>
             });
         }
     }
+    if let Some(answer) = first_string_field(&value, &["answer", "response", "result"]) {
+        let answer = answer.trim();
+        if !answer.is_empty() && answer != PLACEHOLDER_FINAL_CONTENT {
+            return Ok(AgentDecision {
+                thought: None,
+                tool: None,
+                tools: Vec::new(),
+                final_answer: Some(answer.to_string()),
+                blocked: None,
+            });
+        }
+    }
     serde_json::from_value(value).map_err(|err| format!("invalid agent JSON: {err}"))
+}
+
+fn first_string_field<'a>(value: &'a serde_json::Value, keys: &[&str]) -> Option<&'a str> {
+    keys.iter()
+        .find_map(|key| value.get(*key).and_then(|field| field.as_str()))
 }
 
 fn openai_tool_calls(value: &serde_json::Value) -> Result<Vec<ToolCall>, String> {
