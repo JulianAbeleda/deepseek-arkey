@@ -251,7 +251,10 @@ fn run_agent_with_chat_handler(
                 approval_mode
             };
             let result = execute_tool(&workspace, tool, tool_approval_mode);
-            let result_text = cap_text(&redact_text(&result), MAX_TOOL_CHARS);
+            let result_text = cap_text(
+                &redact_text(&sanitize_tool_observation(&result)),
+                MAX_TOOL_CHARS,
+            );
             transcript.push(TranscriptEntry {
                 role: format!("tool:{}", tool.name),
                 content: result_text.clone(),
@@ -288,6 +291,20 @@ fn append_assistant_transcript_entry(
         content: redacted_raw.clone(),
     });
     redacted_raw
+}
+
+fn sanitize_tool_observation(text: &str) -> String {
+    let mut sanitized = String::new();
+    for ch in text.chars() {
+        match ch {
+            '\n' | '\r' | '\t' => sanitized.push(ch),
+            ch if ch.is_control() => {
+                sanitized.push_str(&format!("\\u{{{:04X}}}", ch as u32));
+            }
+            ch => sanitized.push(ch),
+        }
+    }
+    sanitized
 }
 
 fn decision_has_action(decision: &AgentDecision) -> bool {
@@ -1039,6 +1056,14 @@ I will list the files now."#,
             .1;
         assert!(summary.contains("final: blocked: model returned no actionable decision"));
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn sanitizes_tool_observation_control_characters() {
+        assert_eq!(
+            super::sanitize_tool_observation("ok\0bad\u{001F}\nnext\tcol"),
+            "ok\\u{0000}bad\\u{001F}\nnext\tcol"
+        );
     }
 
     #[test]
