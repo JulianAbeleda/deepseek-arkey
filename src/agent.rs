@@ -376,6 +376,18 @@ mod tests {
     }
 
     #[test]
+    fn repairs_unescaped_quotes_in_openai_style_final_content() {
+        let decision = parse_decision(
+            r#"{"content":"Repo says "knowledge as code" works\nDone","tool_calls":null}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            decision.final_answer.as_deref(),
+            Some("Repo says \"knowledge as code\" works\nDone")
+        );
+    }
+
+    #[test]
     fn placeholder_content_does_not_mask_real_decision_fields() {
         let decision =
             parse_decision(r#"{"content":"answer with concrete findings","blocked":"wait"}"#)

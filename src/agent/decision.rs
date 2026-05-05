@@ -61,31 +61,69 @@ pub fn parse_decision(text: &str) -> Result<AgentDecision, String> {
         extract_json_object(text).ok_or_else(|| "agent response was not JSON".to_string())?;
     let value: serde_json::Value = match serde_json::from_str(json) {
         Ok(v) => v,
-        Err(first_err) => {
-            if let Some(repaired) = repair_malformed_arguments_string(json) {
-                if let Ok(value) = serde_json::from_str(&repaired) {
-                    value
-                } else if let Some(repaired) = insert_missing_comma(json, first_err.column()) {
-                    serde_json::from_str(&repaired)
-                        .map_err(|_| format!("invalid agent JSON: {first_err}"))?
-                } else if let Some(repaired) = remove_extra_brace_at(json, first_err.column()) {
-                    serde_json::from_str(&repaired)
-                        .map_err(|_| format!("invalid agent JSON: {first_err}"))?
-                } else {
-                    return Err(format!("invalid agent JSON: {first_err}"));
-                }
-            } else if let Some(repaired) = insert_missing_comma(json, first_err.column()) {
-                serde_json::from_str(&repaired)
-                    .map_err(|_| format!("invalid agent JSON: {first_err}"))?
-            } else if let Some(repaired) = remove_extra_brace_at(json, first_err.column()) {
-                serde_json::from_str(&repaired)
-                    .map_err(|_| format!("invalid agent JSON: {first_err}"))?
-            } else {
+        Err(first_err) => match parse_repaired_decision_value(json, first_err.column()) {
+            Some(value) => value,
+            None => {
                 return Err(format!("invalid agent JSON: {first_err}"));
             }
-        }
+        },
     };
     normalize_decision(value)
+}
+
+fn parse_repaired_decision_value(json: &str, column: usize) -> Option<serde_json::Value> {
+    if let Some(repaired) = repair_malformed_arguments_string(json) {
+        if let Ok(value) = serde_json::from_str(&repaired) {
+            return Some(value);
+        }
+    }
+    if let Some(repaired) = insert_missing_comma(json, column) {
+        if let Ok(value) = serde_json::from_str(&repaired) {
+            return Some(value);
+        }
+    }
+    if let Some(repaired) = remove_extra_brace_at(json, column) {
+        if let Ok(value) = serde_json::from_str(&repaired) {
+            return Some(value);
+        }
+    }
+    if let Some(repaired) = repair_unescaped_final_content_string(json) {
+        if let Ok(value) = serde_json::from_str(&repaired) {
+            return Some(value);
+        }
+    }
+    None
+}
+
+fn repair_unescaped_final_content_string(json: &str) -> Option<String> {
+    let prefix = r#"{"content":""#;
+    let suffix = r#"","tool_calls":null}"#;
+    if !json.starts_with(prefix) || !json.ends_with(suffix) {
+        return None;
+    }
+    let content_end = json.len().checked_sub(suffix.len())?;
+    let content = &json[prefix.len()..content_end];
+    let mut escaped_content = String::with_capacity(content.len());
+    let mut escaped = false;
+    for ch in content.chars() {
+        if escaped {
+            escaped_content.push(ch);
+            escaped = false;
+            continue;
+        }
+        match ch {
+            '\\' => {
+                escaped_content.push(ch);
+                escaped = true;
+            }
+            '"' => escaped_content.push_str("\\\""),
+            '\n' => escaped_content.push_str("\\n"),
+            '\r' => escaped_content.push_str("\\r"),
+            '\t' => escaped_content.push_str("\\t"),
+            _ => escaped_content.push(ch),
+        }
+    }
+    Some(format!("{prefix}{escaped_content}{suffix}"))
 }
 
 fn repair_malformed_arguments_string(json: &str) -> Option<String> {
