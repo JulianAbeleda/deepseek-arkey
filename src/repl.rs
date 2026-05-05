@@ -1044,7 +1044,7 @@ fn should_break_before(text: &str, index: usize, rest: &str) -> bool {
     heading_marker
         || horizontal_rule_marker(rest)
         || (!text[..index].ends_with('-') && rest.starts_with("- "))
-        || (!previous_char_is_digit(text, index) && numbered_list_marker(rest))
+        || (previous_char_is_list_boundary(text, index) && numbered_list_marker(rest))
 }
 
 fn horizontal_rule_marker(text: &str) -> bool {
@@ -1053,6 +1053,11 @@ fn horizontal_rule_marker(text: &str) -> bool {
 
 fn previous_char_is_digit(text: &str, index: usize) -> bool {
     matches!(text[..index].chars().last(), Some(ch) if ch.is_ascii_digit())
+}
+
+fn previous_char_is_list_boundary(text: &str, index: usize) -> bool {
+    matches!(text[..index].chars().last(), Some(ch) if ch.is_whitespace())
+        && !previous_char_is_digit(text, index)
 }
 
 fn numbered_list_marker(text: &str) -> bool {
@@ -1115,8 +1120,15 @@ fn split_known_heading_body(line: &str) -> String {
         "Scripts & Tools",
         "Rust Core Packages",
         "Knowledge/Runtime Corpus",
+        "Architecture Highlights",
+        "Key Technical Points",
+        "Notable Design Patterns",
+        "Current Entrypoints",
+        "Overall Purpose",
+        "Key Components",
         "Documentation",
         "Dependencies",
+        "Architecture",
         "Structure",
         "Overview",
         "Skills",
@@ -1720,6 +1732,21 @@ mod tests {
         let raw = "9. item 10. next item";
         let formatted = format_agent_answer(raw);
         assert!(formatted.contains("9. item\n\n10. next item"));
+    }
+
+    #[test]
+    fn does_not_split_version_numbers_as_numbered_lists() {
+        let raw = "Runtime is v2. It is ready.";
+        let formatted = format_agent_answer(raw);
+        assert_eq!(formatted, "Runtime is v2. It is ready.\n");
+    }
+
+    #[test]
+    fn splits_common_agent_heading_bodies() {
+        let raw = "### Overall Purpose This is a Rust migration. ### Architecture **Rust Workspace:** details";
+        let formatted = format_agent_answer(raw);
+        assert!(formatted.contains("### Overall Purpose\nThis is a Rust migration."));
+        assert!(formatted.contains("### Architecture\n**Rust Workspace:** details"));
     }
 
     #[test]
