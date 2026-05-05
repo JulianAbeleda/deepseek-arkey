@@ -253,7 +253,7 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
             continue;
         }
         if let Some(approval) = pending_approval.take() {
-            if prompt == approval.request.approve_phrase {
+            if is_approval_accept(prompt, &approval.request.approve_phrase) {
                 let _ = approval.reply.send(agent::ApprovalDecision::Approve);
                 composer.print_above(&format!("approval: approved {}\n", approval.request.tool))?;
                 context_scan_started = Some(start_context_scan(&mut composer)?);
@@ -707,8 +707,12 @@ fn is_approval_denial(prompt: &str) -> bool {
     matches!(prompt, "n" | "no" | "deny")
 }
 
+fn is_approval_accept(prompt: &str, approve_phrase: &str) -> bool {
+    prompt == "y" || prompt == approve_phrase
+}
+
 fn approval_pending_text(tool: &str, approve_phrase: &str) -> String {
-    format!("approval pending: {tool}\nType exactly `{approve_phrase}` to approve, or `n` to deny. `/exit` cancels and exits.\n")
+    format!("approval pending: {tool}\nType `y` or `{approve_phrase}` to approve, `n` to deny. `/exit` cancels and exits.\n")
 }
 
 fn spawn_docked_turn(
@@ -1573,10 +1577,11 @@ mod tests {
     use super::{
         agent_route_confirmation, approval_pending_text, cap_interactive_memory,
         context_scan_status, format_agent_answer, is_agent_task_cancel_choice,
-        is_agent_task_choice, is_end_command, is_exit_command, is_workspace_agent_prompt,
-        no_pending_agent_task_text, parse_agent_task_command, parse_debug_command,
-        parse_model_command, parse_runtime_command, parse_shell_read_command, shell_pwd_text,
-        task_root_for_prompt, workspace_agent_root_for_prompt, RuntimeCommand, ShellReadCommand,
+        is_agent_task_choice, is_approval_accept, is_end_command, is_exit_command,
+        is_workspace_agent_prompt, no_pending_agent_task_text, parse_agent_task_command,
+        parse_debug_command, parse_model_command, parse_runtime_command, parse_shell_read_command,
+        shell_pwd_text, task_root_for_prompt, workspace_agent_root_for_prompt, RuntimeCommand,
+        ShellReadCommand,
     };
     use crate::provider;
     use crate::runtime;
@@ -1613,9 +1618,17 @@ mod tests {
     #[test]
     fn approval_pending_text_names_exact_phrase_and_exit() {
         let text = approval_pending_text("run_shell", "yes run");
-        assert!(text.contains("Type exactly `yes run`"));
+        assert!(text.contains("Type `y` or `yes run`"));
         assert!(text.contains("`n` to deny"));
         assert!(text.contains("`/exit` cancels"));
+    }
+
+    #[test]
+    fn approval_accepts_short_y_or_exact_phrase() {
+        assert!(is_approval_accept("y", "yes run"));
+        assert!(is_approval_accept("yes run", "yes run"));
+        assert!(!is_approval_accept("yes", "yes run"));
+        assert!(!is_approval_accept("yes apply", "yes run"));
     }
 
     #[test]
