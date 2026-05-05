@@ -584,7 +584,7 @@ fn run_confirmed_agent_task(
         outcome.steps,
         outcome.transcript_path.display()
     );
-    println!("{}", outcome.answer);
+    println!("{}", format_agent_answer(&outcome.answer));
     println!("returning to chat");
     Ok(())
 }
@@ -670,7 +670,7 @@ fn run_interactive_agent(model: &str, temperature: Option<f32>) -> Result<(), St
             outcome.steps,
             outcome.transcript_path.display()
         );
-        println!("{}", outcome.answer);
+        println!("{}", format_agent_answer(&outcome.answer));
     }
     Ok(())
 }
@@ -771,7 +771,7 @@ fn run_agent_streaming(
                 .unwrap_or(agent::ApprovalDecision::Deny)
         },
     )?;
-    let response = outcome.answer;
+    let response = format_agent_answer(&outcome.answer);
     let _ = sender.send(TurnEvent::Delta(response.clone()));
     Ok((prompt.to_string(), response))
 }
@@ -892,6 +892,137 @@ fn shell_pwd_text(root: Option<&Path>) -> String {
 
 fn no_pending_agent_task_text() -> String {
     "route: unclear\nNo pending agent task to confirm.\nType /root <path> to choose a workspace, then repeat the task; or type /agent <task> with the leading slash to run one directly.\n".to_string()
+}
+
+fn format_agent_answer(answer: &str) -> String {
+    let trimmed = answer.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    let mut text = trimmed.replace("\r\n", "\n").replace('\r', "\n");
+    text = insert_markdown_boundaries(&text);
+    text = text.replace("--- ", "---\n\n");
+    text = split_known_heading_bodies(&text);
+    text = collapse_excess_blank_lines(&text);
+    if !text.ends_with('\n') {
+        text.push('\n');
+    }
+    text
+}
+
+fn insert_markdown_boundaries(text: &str) -> String {
+    let mut output = String::new();
+    let mut index = 0usize;
+    while index < text.len() {
+        let rest = &text[index..];
+        if should_break_before(text, index, rest) {
+            push_boundary(&mut output);
+        }
+        let ch = rest.chars().next().unwrap();
+        output.push(ch);
+        index += ch.len_utf8();
+    }
+    output
+}
+
+fn should_break_before(text: &str, index: usize, rest: &str) -> bool {
+    if index == 0 || text[..index].ends_with('\n') {
+        return false;
+    }
+    let heading_marker = !text[..index].ends_with('#')
+        && (rest.starts_with("### ") || rest.starts_with("## ") || rest.starts_with("# "));
+    heading_marker
+        || rest.starts_with("---")
+        || (!text[..index].ends_with('-') && rest.starts_with("- "))
+        || numbered_list_marker(rest)
+}
+
+fn numbered_list_marker(text: &str) -> bool {
+    let mut chars = text.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    if !first.is_ascii_digit() {
+        return false;
+    }
+    let Some(second) = chars.next() else {
+        return false;
+    };
+    second == '.' && chars.next() == Some(' ')
+}
+
+fn push_boundary(output: &mut String) {
+    while output.ends_with(' ') || output.ends_with('\t') {
+        output.pop();
+    }
+    if output.ends_with("\n\n") {
+        return;
+    }
+    if output.ends_with('\n') {
+        output.push('\n');
+    } else {
+        output.push_str("\n\n");
+    }
+}
+
+fn split_known_heading_bodies(text: &str) -> String {
+    text.lines()
+        .map(split_known_heading_body)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn split_known_heading_body(line: &str) -> String {
+    let Some((prefix, content)) = heading_parts(line) else {
+        return line.to_string();
+    };
+    for heading in [
+        "Key Design Decisions",
+        "Scripts & Tools",
+        "Rust Core Packages",
+        "Knowledge/Runtime Corpus",
+        "Documentation",
+        "Dependencies",
+        "Structure",
+        "Overview",
+        "Skills",
+        "Status",
+    ] {
+        if let Some(rest) = content
+            .strip_prefix(heading)
+            .and_then(|rest| rest.strip_prefix(' '))
+        {
+            return format!("{prefix}{heading}\n{rest}");
+        }
+    }
+    line.to_string()
+}
+
+fn heading_parts(line: &str) -> Option<(&str, &str)> {
+    for prefix in ["### ", "## ", "# "] {
+        if let Some(content) = line.strip_prefix(prefix) {
+            return Some((prefix, content));
+        }
+    }
+    None
+}
+
+fn collapse_excess_blank_lines(text: &str) -> String {
+    let mut output = String::new();
+    let mut blank_count = 0usize;
+    for line in text.lines() {
+        if line.trim().is_empty() {
+            blank_count += 1;
+            if blank_count <= 1 {
+                output.push('\n');
+            }
+            continue;
+        }
+        blank_count = 0;
+        output.push_str(line.trim_end());
+        output.push('\n');
+    }
+    output.trim_end().to_string()
 }
 
 fn is_agent_task_choice(prompt: &str) -> bool {
@@ -1277,7 +1408,7 @@ fn paths_equal(left: &Path, right: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        agent_route_confirmation, cap_interactive_memory, context_scan_status,
+        agent_route_confirmation, cap_interactive_memory, context_scan_status, format_agent_answer,
         is_agent_task_cancel_choice, is_agent_task_choice, is_end_command, is_exit_command,
         is_workspace_agent_prompt, no_pending_agent_task_text, parse_agent_task_command,
         parse_debug_command, parse_model_command, parse_runtime_command, parse_shell_read_command,
@@ -1405,6 +1536,18 @@ mod tests {
             );
             assert!(!is_workspace_agent_prompt(prompt), "{prompt}");
         }
+    }
+
+    #[test]
+    fn formats_flat_agent_markdown_into_scannable_blocks() {
+        let raw = "## Arkey v2 / PKOS v0.2 Repository Analysis ### Overview A Rust-core migration project. --- ### Structure **Rust Core Packages**: - `arkey-core/` - `arkey-rs/` ### Key Design Decisions 1. Incremental migration 2. Reference preservation";
+        let formatted = format_agent_answer(raw);
+        assert!(formatted.contains("## Arkey v2 / PKOS v0.2 Repository Analysis\n\n"));
+        assert!(formatted.contains("### Overview\nA Rust-core migration project."));
+        assert!(formatted.contains("\n---\n"));
+        assert!(formatted.contains("\n- `arkey-core/`"));
+        assert!(formatted.contains("\n1. Incremental migration"));
+        assert!(formatted.ends_with('\n'));
     }
 
     #[test]
