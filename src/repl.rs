@@ -1124,6 +1124,8 @@ fn split_known_heading_body(line: &str) -> String {
         "Key Technical Points",
         "Notable Design Patterns",
         "Current Entrypoints",
+        "Knowledge & Corpus Layer (`mind/`)",
+        "Development & Docs",
         "Overall Purpose",
         "Key Components",
         "Documentation",
@@ -1131,6 +1133,7 @@ fn split_known_heading_body(line: &str) -> String {
         "Architecture",
         "Structure",
         "Overview",
+        "Summary",
         "Skills",
         "Status",
     ] {
@@ -1140,6 +1143,9 @@ fn split_known_heading_body(line: &str) -> String {
         {
             return format!("{prefix}{heading}\n{rest}");
         }
+    }
+    if let Some((heading, rest)) = content.split_once(" **") {
+        return format!("{prefix}{heading}\n**{rest}");
     }
     line.to_string()
 }
@@ -1747,6 +1753,14 @@ mod tests {
         let formatted = format_agent_answer(raw);
         assert!(formatted.contains("### Overall Purpose\nThis is a Rust migration."));
         assert!(formatted.contains("### Architecture\n**Rust Workspace:** details"));
+    }
+
+    #[test]
+    fn splits_heading_body_before_bold_text() {
+        let raw = "## Arkey v2 / PKOS v0.2 Repository Analysis **Purpose:** Rust migration.";
+        let formatted = format_agent_answer(raw);
+        assert!(formatted
+            .contains("## Arkey v2 / PKOS v0.2 Repository Analysis\n**Purpose:** Rust migration."));
     }
 
     #[test]
