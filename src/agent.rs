@@ -359,6 +359,17 @@ mod tests {
     }
 
     #[test]
+    fn repairs_unclosed_terminal_string_in_openai_tool_arguments_string() {
+        let decision = parse_decision(
+            r#"{"content":null,"tool_calls":[{"id":"call_read_runtime","type":"function","function":{"name":"read_file","arguments":"{\"path\":\"arkey-core/src/runtime.rs}"}}]}"#,
+        )
+        .unwrap();
+        let tool = decision.tool.unwrap();
+        assert_eq!(tool.name, "read_file");
+        assert_eq!(tool.arguments["path"], "arkey-core/src/runtime.rs");
+    }
+
+    #[test]
     fn parses_openai_style_final_content() {
         let decision = parse_decision(r#"{"content":"done","tool_calls":null}"#).unwrap();
         assert_eq!(decision.final_answer.as_deref(), Some("done"));

@@ -239,13 +239,50 @@ fn parse_arguments_string(text: &str) -> Result<serde_json::Value, String> {
     match serde_json::from_str(text) {
         Ok(value) => Ok(value),
         Err(first_err) => {
-            let Some(object) = extract_json_object(text) else {
-                return Err(format!("invalid tool arguments JSON: {first_err}"));
-            };
-            serde_json::from_str(object)
-                .map_err(|_| format!("invalid tool arguments JSON: {first_err}"))
+            if let Some(object) = extract_json_object(text) {
+                if let Ok(value) = serde_json::from_str(object) {
+                    return Ok(value);
+                }
+            }
+            if let Some(repaired) = repair_unclosed_terminal_string_value(text) {
+                if let Ok(value) = serde_json::from_str(&repaired) {
+                    return Ok(value);
+                }
+            }
+            Err(format!("invalid tool arguments JSON: {first_err}"))
         }
     }
+}
+
+fn repair_unclosed_terminal_string_value(text: &str) -> Option<String> {
+    let trimmed = text.trim();
+    if !trimmed.starts_with('{') || !trimmed.ends_with('}') {
+        return None;
+    }
+    if !has_odd_unescaped_quote_count(trimmed) {
+        return None;
+    }
+    let last_brace = trimmed.rfind('}')?;
+    let mut repaired = String::with_capacity(trimmed.len() + 1);
+    repaired.push_str(&trimmed[..last_brace]);
+    repaired.push('"');
+    repaired.push_str(&trimmed[last_brace..]);
+    Some(repaired)
+}
+
+fn has_odd_unescaped_quote_count(text: &str) -> bool {
+    let mut escaped = false;
+    let mut count = 0usize;
+    for ch in text.chars() {
+        if escaped {
+            escaped = false;
+        } else if ch == '\\' {
+            escaped = true;
+        } else if ch == '"' {
+            count += 1;
+        }
+    }
+    count % 2 == 1
 }
 
 fn normalize_function_call(value: &serde_json::Value) -> Option<serde_json::Value> {
