@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use crate::provider::{self, assistant_message, system_message, user_message};
+use crate::provider::{self, assistant_message, system_message, user_message, Message};
 use crate::safety::{cap_text, redact_text};
 
 mod decision;
@@ -106,6 +106,28 @@ pub fn run_agent_with_approval_handler(
     mut on_step: impl FnMut(usize, &str),
     mut on_approval: impl FnMut(ApprovalRequest) -> ApprovalDecision,
 ) -> Result<AgentOutcome, String> {
+    run_agent_with_chat_handler(
+        task,
+        model,
+        temperature,
+        config,
+        approval_mode,
+        &mut on_step,
+        &mut on_approval,
+        |messages, model, temperature| provider::chat(messages, model, temperature, None, false),
+    )
+}
+
+fn run_agent_with_chat_handler(
+    task: &str,
+    model: &str,
+    temperature: Option<f32>,
+    config: AgentConfig,
+    approval_mode: ApprovalMode,
+    mut on_step: impl FnMut(usize, &str),
+    mut on_approval: impl FnMut(ApprovalRequest) -> ApprovalDecision,
+    mut chat: impl FnMut(&[Message], &str, Option<f32>) -> Result<String, String>,
+) -> Result<AgentOutcome, String> {
     let workspace = Workspace::new(config.root)?;
     let mut messages = vec![
         system_message(system_prompt(&workspace.root)),
@@ -117,32 +139,51 @@ pub fn run_agent_with_approval_handler(
     }];
 
     for step in 1..=config.max_steps {
-        let mut raw = provider::chat(&messages, model, temperature, None, false)?;
-        let mut redacted_raw = cap_text(&redact_text(&raw), MAX_TOOL_CHARS);
-        transcript.push(TranscriptEntry {
-            role: "assistant".to_string(),
-            content: redacted_raw.clone(),
-        });
-        let mut parsed = parse_decision_with_metadata(&raw).map_err(|err| {
-            let snippet = cap_text(&redact_text(&raw), 400);
-            format!("{err}\nraw snippet: {snippet}")
-        })?;
+        let mut raw = chat(&messages, model, temperature)?;
+        let mut redacted_raw =
+            append_assistant_transcript_entry(&mut transcript, "assistant", &raw);
+        let mut parsed = match parse_decision_with_metadata(&raw) {
+            Ok(parsed) => parsed,
+            Err(err) => {
+                append_parse_failure_retry_note(&mut transcript, &err);
+                messages.push(assistant_message(redacted_raw.clone()));
+                messages.push(user_message(decision_retry_prompt()));
+                raw = chat(&messages, model, temperature)?;
+                redacted_raw =
+                    append_assistant_transcript_entry(&mut transcript, "assistant_retry", &raw);
+                match parse_decision_with_metadata(&raw) {
+                    Ok(parsed) => parsed,
+                    Err(retry_err) => {
+                        return Err(fail_with_transcript(
+                            &workspace.root,
+                            &transcript,
+                            &retry_err,
+                            &raw,
+                        ));
+                    }
+                }
+            }
+        };
         append_parser_repair_notes(&mut transcript, &parsed.repairs);
         let mut decision = parsed.decision;
         if !decision_has_action(&decision) {
             append_no_action_retry_note(&mut transcript);
             messages.push(assistant_message(redacted_raw.clone()));
-            messages.push(user_message(no_decision_retry_prompt()));
-            raw = provider::chat(&messages, model, temperature, None, false)?;
-            redacted_raw = cap_text(&redact_text(&raw), MAX_TOOL_CHARS);
-            transcript.push(TranscriptEntry {
-                role: "assistant_retry".to_string(),
-                content: redacted_raw.clone(),
-            });
-            parsed = parse_decision_with_metadata(&raw).map_err(|err| {
-                let snippet = cap_text(&redact_text(&raw), 400);
-                format!("{err}\nraw snippet: {snippet}")
-            })?;
+            messages.push(user_message(decision_retry_prompt()));
+            raw = chat(&messages, model, temperature)?;
+            redacted_raw =
+                append_assistant_transcript_entry(&mut transcript, "assistant_retry", &raw);
+            parsed = match parse_decision_with_metadata(&raw) {
+                Ok(parsed) => parsed,
+                Err(err) => {
+                    return Err(fail_with_transcript(
+                        &workspace.root,
+                        &transcript,
+                        &err,
+                        &raw,
+                    ));
+                }
+            };
             append_parser_repair_notes(&mut transcript, &parsed.repairs);
             decision = parsed.decision;
         }
@@ -172,9 +213,7 @@ pub fn run_agent_with_approval_handler(
             }
         }
         if tools.is_empty() {
-            return Err(
-                "agent response did not include final_answer, blocked, or tool".to_string(),
-            );
+            return Err(fail_no_action_with_transcript(&workspace.root, &transcript));
         }
         let mut result_sections = Vec::new();
         for (index, tool) in tools.iter().enumerate() {
@@ -217,6 +256,19 @@ pub fn run_agent_with_approval_handler(
     })
 }
 
+fn append_assistant_transcript_entry(
+    transcript: &mut Vec<TranscriptEntry>,
+    role: &str,
+    raw: &str,
+) -> String {
+    let redacted_raw = cap_text(&redact_text(raw), MAX_TOOL_CHARS);
+    transcript.push(TranscriptEntry {
+        role: role.to_string(),
+        content: redacted_raw.clone(),
+    });
+    redacted_raw
+}
+
 fn decision_has_action(decision: &AgentDecision) -> bool {
     decision.final_answer.is_some()
         || decision.blocked.is_some()
@@ -240,8 +292,47 @@ fn append_no_action_retry_note(transcript: &mut Vec<TranscriptEntry>) {
     });
 }
 
-fn no_decision_retry_prompt() -> String {
-    "Your previous JSON parsed, but it did not include an actionable decision. Return exactly one JSON object with one of these shapes: {\"content\":\"final answer\",\"tool_calls\":null}, {\"content\":null,\"tool_calls\":[...]}, or {\"blocked\":\"short reason\"}. No prose outside JSON.".to_string()
+fn append_parse_failure_retry_note(transcript: &mut Vec<TranscriptEntry>, err: &str) {
+    transcript.push(TranscriptEntry {
+        role: "parser".to_string(),
+        content: format!(
+            "retried invalid decision JSON: {}",
+            cap_text(&redact_text(err), 240)
+        ),
+    });
+}
+
+fn decision_retry_prompt() -> String {
+    "Your previous response was either invalid JSON or valid JSON without an actionable decision. Return exactly one JSON object with one of these shapes: {\"content\":\"final answer\",\"tool_calls\":null}, {\"content\":null,\"tool_calls\":[{\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"inspect_tree\",\"arguments\":\"{\\\"path\\\":\\\".\\\",\\\"depth\\\":2}\"}}]}, or {\"blocked\":\"short reason\"}. No prose outside JSON.".to_string()
+}
+
+fn fail_with_transcript(
+    root: &std::path::Path,
+    transcript: &[TranscriptEntry],
+    err: &str,
+    raw: &str,
+) -> String {
+    let snippet = cap_text(&redact_text(raw), 400);
+    match write_transcript(root, transcript) {
+        Ok(path) => format!(
+            "{err}\nraw snippet: {snippet}\ntranscript: {}",
+            path.display()
+        ),
+        Err(write_err) => {
+            format!("{err}\nraw snippet: {snippet}\ntranscript write failed: {write_err}")
+        }
+    }
+}
+
+fn fail_no_action_with_transcript(
+    root: &std::path::Path,
+    transcript: &[TranscriptEntry],
+) -> String {
+    let err = "agent response did not include final_answer, blocked, or tool after retry";
+    match write_transcript(root, transcript) {
+        Ok(path) => format!("{err}\ntranscript: {}", path.display()),
+        Err(write_err) => format!("{err}\ntranscript write failed: {write_err}"),
+    }
 }
 
 fn approval_request(step: usize, call: &ToolCall) -> Option<ApprovalRequest> {
@@ -474,6 +565,7 @@ fn execute_tool(workspace: &Workspace, call: &ToolCall, approval_mode: ApprovalM
 
 #[cfg(test)]
 mod tests {
+    use std::collections::VecDeque;
     use std::fs;
     use std::io;
 
@@ -485,8 +577,8 @@ mod tests {
     use super::write_tools::{apply_prepared_patch, prepare_patch};
     use super::{
         append_no_action_retry_note, append_parser_repair_notes, parse_decision,
-        parse_decision_with_metadata, write_transcript, ApprovalMode, ToolCall, TranscriptEntry,
-        DEFAULT_MAX_STEPS,
+        parse_decision_with_metadata, write_transcript, AgentConfig, ApprovalDecision,
+        ApprovalMode, ToolCall, TranscriptEntry, DEFAULT_MAX_STEPS,
     };
 
     fn execute_tool(workspace: &Workspace, call: &ToolCall) -> String {
@@ -736,6 +828,125 @@ I will list the files now."#,
         assert_eq!(transcript[0].role, "parser");
         assert_eq!(transcript[0].content, "retried no-action decision");
         assert!(!transcript[0].content.contains('{'));
+    }
+
+    #[test]
+    fn parse_failure_retries_once_and_succeeds() {
+        let root = std::env::temp_dir().join(format!(
+            "deepseek-agent-parse-retry-test-{}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let mut responses = VecDeque::from([
+            "not json".to_string(),
+            r#"{"content":"recovered","tool_calls":null}"#.to_string(),
+        ]);
+        let outcome = super::run_agent_with_chat_handler(
+            "test",
+            "model",
+            None,
+            AgentConfig::new(root.clone(), 3),
+            ApprovalMode::Deny,
+            |_, _| {},
+            |_| ApprovalDecision::Deny,
+            |_, _, _| Ok(responses.pop_front().unwrap()),
+        )
+        .unwrap();
+        assert_eq!(outcome.answer, "recovered");
+        let transcript = fs::read_to_string(outcome.transcript_path).unwrap();
+        assert!(transcript.contains("retried invalid decision JSON"));
+        assert!(transcript.contains("assistant_retry"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn no_action_decision_retries_once_and_succeeds() {
+        let root = std::env::temp_dir().join(format!(
+            "deepseek-agent-no-action-retry-test-{}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let mut responses = VecDeque::from([
+            r#"{"thought":"still thinking"}"#.to_string(),
+            r#"{"content":"done","tool_calls":null}"#.to_string(),
+        ]);
+        let outcome = super::run_agent_with_chat_handler(
+            "test",
+            "model",
+            None,
+            AgentConfig::new(root.clone(), 3),
+            ApprovalMode::Deny,
+            |_, _| {},
+            |_| ApprovalDecision::Deny,
+            |_, _, _| Ok(responses.pop_front().unwrap()),
+        )
+        .unwrap();
+        assert_eq!(outcome.answer, "done");
+        let transcript = fs::read_to_string(outcome.transcript_path).unwrap();
+        assert!(transcript.contains("retried no-action decision"));
+        assert!(transcript.contains("assistant_retry"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn retry_parse_failure_writes_transcript() {
+        let root = std::env::temp_dir().join(format!(
+            "deepseek-agent-parse-retry-fail-test-{}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let mut responses = VecDeque::from(["not json".to_string(), "still not json".to_string()]);
+        let err = super::run_agent_with_chat_handler(
+            "test",
+            "model",
+            None,
+            AgentConfig::new(root.clone(), 3),
+            ApprovalMode::Deny,
+            |_, _| {},
+            |_| ApprovalDecision::Deny,
+            |_, _, _| Ok(responses.pop_front().unwrap()),
+        )
+        .unwrap_err();
+        assert!(err.contains("agent response was not JSON"));
+        assert!(err.contains("raw snippet: still not json"));
+        assert!(err.contains("transcript:"));
+        let latest = super::read_latest_transcript(root.clone())
+            .unwrap()
+            .unwrap();
+        assert!(latest.1.contains("retried invalid decision JSON"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn retry_no_action_failure_writes_clear_error() {
+        let root = std::env::temp_dir().join(format!(
+            "deepseek-agent-no-action-retry-fail-test-{}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let mut responses = VecDeque::from([
+            r#"{"thought":"one"}"#.to_string(),
+            r#"{"thought":"two"}"#.to_string(),
+        ]);
+        let err = super::run_agent_with_chat_handler(
+            "test",
+            "model",
+            None,
+            AgentConfig::new(root.clone(), 3),
+            ApprovalMode::Deny,
+            |_, _| {},
+            |_| ApprovalDecision::Deny,
+            |_, _, _| Ok(responses.pop_front().unwrap()),
+        )
+        .unwrap_err();
+        assert!(err
+            .contains("agent response did not include final_answer, blocked, or tool after retry"));
+        assert!(err.contains("transcript:"));
+        let latest = super::read_latest_transcript(root.clone())
+            .unwrap()
+            .unwrap();
+        assert!(latest.1.contains("retried no-action decision"));
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
