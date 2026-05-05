@@ -555,6 +555,16 @@ I will list the files now."#,
     }
 
     #[test]
+    fn repairs_multiple_malformed_arguments_strings() {
+        let malformed = r#"{"content":null,"tool_calls":[{"id":"call_2","type":"function","function":{"name":"inspect_tree","arguments":"{\"path":"arkey-core/src","depth":1}"}},{"id":"call_3","type":"function","function":{"name":"inspect_tree","arguments":"{\"path":"arkey-rs/src","depth":1}"}}]}"#;
+        let parsed = parse_decision_with_metadata(malformed).unwrap();
+        assert_eq!(parsed.repairs, vec!["malformed_arguments_string"]);
+        assert_eq!(parsed.decision.tools.len(), 2);
+        assert_eq!(parsed.decision.tools[0].arguments["path"], "arkey-core/src");
+        assert_eq!(parsed.decision.tools[1].arguments["path"], "arkey-rs/src");
+    }
+
+    #[test]
     fn parser_repair_notes_are_sanitized_transcript_entries() {
         let mut transcript = Vec::new();
         append_parser_repair_notes(&mut transcript, &["extra_brace", "arguments_trailing_json"]);

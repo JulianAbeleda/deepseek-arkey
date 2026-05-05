@@ -146,6 +146,16 @@ fn repair_unescaped_final_content_string(json: &str) -> Option<String> {
 }
 
 fn repair_malformed_arguments_string(json: &str) -> Option<String> {
+    let mut repaired = false;
+    let mut current = json.to_string();
+    while let Some(next) = repair_one_malformed_arguments_string(&current) {
+        repaired = true;
+        current = next;
+    }
+    repaired.then_some(current)
+}
+
+fn repair_one_malformed_arguments_string(json: &str) -> Option<String> {
     let marker = r#""arguments":"{"#;
     let marker_start = json.find(marker)?;
     let value_start = marker_start + r#""arguments":""#.len();
