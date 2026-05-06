@@ -170,7 +170,7 @@ where
     if print_cache {
         print_cache_stats(&raw);
     }
-    extract_assistant_text(&raw).map(|text| cap_text(&text, DEFAULT_TEXT_CAP))
+    extract_assistant_text(&raw)
 }
 
 fn chat_streaming<F>(
@@ -354,6 +354,7 @@ pub fn extract_assistant_text(raw: &str) -> Result<String, String> {
         .get("content")
         .and_then(|content| content.as_str())
         .map(|content| content.trim().to_string())
+        .map(|content| cap_text(&content, DEFAULT_TEXT_CAP))
         .filter(|content| !content.is_empty())
         .ok_or_else(|| {
             format!(
@@ -419,6 +420,35 @@ mod tests {
         let text = extract_assistant_text(raw).unwrap();
         let value: serde_json::Value = serde_json::from_str(&text).unwrap();
         assert!(value.get("content").unwrap().is_null());
+        assert_eq!(
+            value.pointer("/tool_calls/0/function/name").unwrap(),
+            "read_file"
+        );
+    }
+
+    #[test]
+    fn does_not_truncate_native_tool_call_decision_json() {
+        let long_path = format!("{}README.md", "a".repeat(super::DEFAULT_TEXT_CAP));
+        let raw = serde_json::json!({
+            "choices": [{
+                "message": {
+                    "content": "",
+                    "tool_calls": [{
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {
+                            "name": "read_file",
+                            "arguments": serde_json::to_string(&serde_json::json!({
+                                "path": long_path,
+                            })).unwrap(),
+                        },
+                    }],
+                },
+            }],
+        })
+        .to_string();
+        let text = extract_assistant_text(&raw).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
         assert_eq!(
             value.pointer("/tool_calls/0/function/name").unwrap(),
             "read_file"
