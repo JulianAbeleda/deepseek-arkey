@@ -920,6 +920,7 @@ pub(crate) fn format_agent_answer(answer: &str) -> String {
         text = json_answer_to_markdown(&value);
     }
     text = insert_markdown_boundaries(&text);
+    text = split_markdown_table_lines(&text);
     text = split_horizontal_rule_lines(&text);
     text = split_known_heading_bodies(&text);
     text = collapse_excess_blank_lines(&text);
@@ -1045,7 +1046,9 @@ fn insert_markdown_boundaries(text: &str) -> String {
     let mut index = 0usize;
     while index < text.len() {
         let rest = &text[index..];
-        if should_break_before(text, index, rest) {
+        if should_break_table_row_before(text, index, rest) {
+            push_line_boundary(&mut output);
+        } else if should_break_before(text, index, rest) {
             push_boundary(&mut output);
         }
         let ch = rest.chars().next().unwrap();
@@ -1065,6 +1068,27 @@ fn should_break_before(text: &str, index: usize, rest: &str) -> bool {
         || horizontal_rule_marker(rest)
         || (!text[..index].ends_with('-') && rest.starts_with("- "))
         || (previous_char_is_list_boundary(text, index) && numbered_list_marker(rest))
+}
+
+fn should_break_table_row_before(text: &str, index: usize, rest: &str) -> bool {
+    if index == 0 || text[..index].ends_with('\n') || !markdown_table_row_marker(rest) {
+        return false;
+    }
+    !current_line_contains_pipe(text, index)
+        || previous_non_whitespace_char(text, index) == Some('|')
+}
+
+fn markdown_table_row_marker(text: &str) -> bool {
+    let Some(after_pipe) = text.strip_prefix('|') else {
+        return false;
+    };
+    if !matches!(after_pipe.chars().next(), Some(' ' | '-' | ':')) {
+        return false;
+    }
+    after_pipe
+        .split('\n')
+        .next()
+        .is_some_and(|line| line.contains('|'))
 }
 
 fn horizontal_rule_marker(text: &str) -> bool {
@@ -1096,6 +1120,62 @@ fn numbered_list_marker(text: &str) -> bool {
     false
 }
 
+fn current_line_contains_pipe(text: &str, index: usize) -> bool {
+    text[..index]
+        .rsplit_once('\n')
+        .map_or(&text[..index], |(_, line)| line)
+        .contains('|')
+}
+
+fn previous_non_whitespace_char(text: &str, index: usize) -> Option<char> {
+    text[..index].chars().rev().find(|ch| !ch.is_whitespace())
+}
+
+fn split_markdown_table_lines(text: &str) -> String {
+    let mut output = String::new();
+    let mut expected_pipes = None;
+    for line in text.lines() {
+        if line.starts_with('|') {
+            let pipe_count = line.chars().filter(|ch| *ch == '|').count();
+            let expected = expected_pipes.get_or_insert(pipe_count);
+            if let Some((row, rest)) = split_table_line_after_pipe_count(line, *expected) {
+                output.push_str(row.trim_end());
+                output.push('\n');
+                output.push_str(rest.trim_start());
+                output.push('\n');
+                continue;
+            }
+        } else if !line.trim().is_empty() {
+            expected_pipes = None;
+        }
+        output.push_str(line);
+        output.push('\n');
+    }
+    output.trim_end().to_string()
+}
+
+fn split_table_line_after_pipe_count(line: &str, expected_pipes: usize) -> Option<(&str, &str)> {
+    if expected_pipes < 2 {
+        return None;
+    }
+    let mut count = 0usize;
+    for (index, ch) in line.char_indices() {
+        if ch != '|' {
+            continue;
+        }
+        count += 1;
+        if count == expected_pipes {
+            let end = index + ch.len_utf8();
+            let rest = &line[end..];
+            if rest.trim().is_empty() {
+                return None;
+            }
+            return Some((&line[..end], rest));
+        }
+    }
+    None
+}
+
 fn split_horizontal_rule_lines(text: &str) -> String {
     let mut output = String::new();
     for line in text.lines() {
@@ -1121,6 +1201,15 @@ fn push_boundary(output: &mut String) {
         output.push('\n');
     } else {
         output.push_str("\n\n");
+    }
+}
+
+fn push_line_boundary(output: &mut String) {
+    while output.ends_with(' ') || output.ends_with('\t') {
+        output.pop();
+    }
+    if !output.ends_with('\n') {
+        output.push('\n');
     }
 }
 
@@ -1798,6 +1887,17 @@ mod tests {
         let raw = "### Purpose A standalone Rust CLI for querying models.";
         let formatted = format_agent_answer(raw);
         assert!(formatted.contains("### Purpose\nA standalone Rust CLI for querying models."));
+    }
+
+    #[test]
+    fn splits_flattened_markdown_table_rows() {
+        let raw = "### Supported Commands | Command | Description | |---|---| | `chat` | Single-shot prompt | | `agent` | Autonomous run | Key inline code: `run_interactive`.";
+        let formatted = format_agent_answer(raw);
+        assert!(formatted.contains("### Supported Commands\n| Command | Description |"));
+        assert!(formatted.contains("\n|---|---|"));
+        assert!(formatted.contains("\n| `chat` | Single-shot prompt |"));
+        assert!(formatted.contains("\n| `agent` | Autonomous run |"));
+        assert!(formatted.contains("\nKey inline code: `run_interactive`."));
     }
 
     #[test]
