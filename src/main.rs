@@ -7,6 +7,7 @@ mod repl;
 mod runtime;
 mod safety;
 mod session;
+mod terminal_markdown;
 mod ui;
 mod workspace;
 
