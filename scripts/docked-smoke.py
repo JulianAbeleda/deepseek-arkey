@@ -66,6 +66,10 @@ class Screen:
     def above_bottom(self) -> str:
         return self.line(self.rows - 2)
 
+    def dock_text(self, rows=7) -> str:
+        start = max(0, self.rows - rows)
+        return "\n".join(self.line(row) for row in range(start, self.rows))
+
     def _put(self, ch: str):
         if self.col >= self.cols:
             self.col = 0
@@ -167,6 +171,19 @@ def wait_for(predicate, fd, screen, label, timeout=3.0):
     raise AssertionError(f"timed out waiting for {label}\n{dump}")
 
 
+def dock_contains(screen, text):
+    return text in screen.dock_text()
+
+
+def dock_prompt_visible(screen, name, prompt_fragment):
+    dock = screen.dock_text()
+    return name in dock and prompt_fragment in dock and "›" in dock
+
+
+def dock_idle_prompt(screen):
+    return screen.dock_text().rstrip().endswith("›")
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--binary", default=None)
@@ -198,30 +215,30 @@ def main():
         os.close(slave)
         screen = Screen()
         try:
-            wait_for(lambda: args.name in screen.bottom() and prompt_fragment in screen.bottom(), master, screen, "PromptIdle dock")
+            wait_for(lambda: dock_prompt_visible(screen, args.name, prompt_fragment), master, screen, "PromptIdle dock")
             if args.entrypoint == "switch":
                 os.write(master, b"/agent\r")
                 wait_for(lambda: screen.contains("workspace:") and screen.contains("agent"), master, screen, "inline agent mode")
                 os.write(master, b"/chat\r")
-                wait_for(lambda: args.name in screen.bottom() and "debug:" in screen.bottom(), master, screen, "chat dock after /chat")
+                wait_for(lambda: dock_prompt_visible(screen, args.name, "debug:"), master, screen, "chat dock after /chat")
                 proc.terminate()
                 proc.wait(timeout=2)
                 print(f"{args.name} switch docked smoke: ok")
                 return
             os.write(master, b"/sta\t")
-            wait_for(lambda: "/status" in screen.bottom(), master, screen, "slash command completion")
+            wait_for(lambda: dock_contains(screen, "/status"), master, screen, "slash command completion")
             os.write(master, b"\x03")
-            wait_for(lambda: screen.bottom().endswith("›"), master, screen, "clear completed slash command")
+            wait_for(lambda: dock_idle_prompt(screen), master, screen, "clear completed slash command")
             os.write(master, b"one two")
-            wait_for(lambda: "one two" in screen.bottom(), master, screen, "editable draft in dock")
+            wait_for(lambda: dock_contains(screen, "one two"), master, screen, "editable draft in dock")
             os.write(master, b"\x1b[1;5D")
             os.write(master, b"X")
-            wait_for(lambda: "one Xtwo" in screen.bottom(), master, screen, "ctrl-left word movement")
+            wait_for(lambda: dock_contains(screen, "one Xtwo"), master, screen, "ctrl-left word movement")
             os.write(master, b"\x03")
-            wait_for(lambda: screen.bottom().endswith("›"), master, screen, "clear word movement draft")
+            wait_for(lambda: dock_idle_prompt(screen), master, screen, "clear word movement draft")
             os.write(master, b"\x1b[200~line one\nline two\x1b[201~")
             wait_for(
-                lambda: "line one" in screen.above_bottom() and "line two" in screen.bottom(),
+                lambda: dock_contains(screen, "line one") and dock_contains(screen, "line two"),
                 master,
                 screen,
                 "bracketed paste multiline insert",
@@ -229,7 +246,7 @@ def main():
             os.write(master, b"\r")
             wait_for(lambda: screen.contains("context: scanning"), master, screen, "ContextScan row")
             wait_for(lambda: screen.contains(response_fragment), master, screen, "ResponseRender", timeout=10.0)
-            wait_for(lambda: args.name in screen.bottom() and prompt_fragment in screen.bottom(), master, screen, "PromptResume dock")
+            wait_for(lambda: dock_prompt_visible(screen, args.name, prompt_fragment), master, screen, "PromptResume dock")
             if not screen.contains(response_fragment):
                 dump = "\n".join(f"{i:02d}: {screen.line(i)}" for i in range(screen.rows))
                 raise AssertionError(f"streamed response did not persist after completion\n{dump}")
