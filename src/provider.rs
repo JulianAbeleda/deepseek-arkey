@@ -337,11 +337,21 @@ pub fn extract_assistant_text(raw: &str) -> Result<String, String> {
             cap_text(&error.to_string(), 1000)
         ));
     }
-    value
+    let message = value
         .get("choices")
         .and_then(|choices| choices.get(0))
         .and_then(|choice| choice.get("message"))
-        .and_then(|message| message.get("content"))
+        .ok_or_else(|| {
+            format!(
+                "provider response did not include assistant text: {}",
+                cap_text(raw, 1000)
+            )
+        })?;
+    if let Some(decision) = openai_tool_decision_text(message) {
+        return Ok(decision);
+    }
+    message
+        .get("content")
         .and_then(|content| content.as_str())
         .map(|content| content.trim().to_string())
         .filter(|content| !content.is_empty())
@@ -351,6 +361,20 @@ pub fn extract_assistant_text(raw: &str) -> Result<String, String> {
                 cap_text(raw, 1000)
             )
         })
+}
+
+fn openai_tool_decision_text(message: &serde_json::Value) -> Option<String> {
+    let calls = message.get("tool_calls").filter(|calls| calls.is_array())?;
+    let content = message
+        .get("content")
+        .and_then(|content| content.as_str())
+        .map(str::trim)
+        .filter(|content| !content.is_empty());
+    let decision = serde_json::json!({
+        "content": content,
+        "tool_calls": calls,
+    });
+    Some(decision.to_string())
 }
 
 fn stream_delta(value: &serde_json::Value) -> Option<&str> {
@@ -387,6 +411,18 @@ mod tests {
     fn extracts_assistant_text() {
         let raw = r#"{"choices":[{"message":{"content":"hello"}}]}"#;
         assert_eq!(extract_assistant_text(raw).unwrap(), "hello");
+    }
+
+    #[test]
+    fn extracts_native_tool_calls_as_agent_decision_json() {
+        let raw = r#"{"choices":[{"message":{"content":"","tool_calls":[{"id":"call_1","type":"function","function":{"name":"read_file","arguments":"{\"path\":\"src/main.rs\"}"}}]}}]}"#;
+        let text = extract_assistant_text(raw).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert!(value.get("content").unwrap().is_null());
+        assert_eq!(
+            value.pointer("/tool_calls/0/function/name").unwrap(),
+            "read_file"
+        );
     }
 
     #[test]
