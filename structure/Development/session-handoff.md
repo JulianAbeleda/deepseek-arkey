@@ -1,5 +1,44 @@
 # Session Handoff
 
+## Stop Point: 2026-05-06 Formatter/Dogfood Prep
+
+DeepSeek and MiniMax are clean, pushed, and ready for real interactive dogfood.
+
+DeepSeek current formatter commits:
+
+- `324c9bb [ui] Extract terminal markdown renderer`
+- `aee5aae [ui] Split flattened agent table rows`
+- `a3e13b3 [ui] Cover flattened table line splitting`
+
+MiniMax matching formatter commits:
+
+- `2dd72a1 [ui] Extract terminal markdown renderer`
+- `3274dcb [ui] Split flattened agent table rows`
+- `11ab1f3 [ui] Cover flattened table line splitting`
+
+Latest validation:
+
+- DeepSeek: `cargo fmt --check`, `cargo test --offline` -> `150 passed`
+- MiniMax: `cargo fmt --check`, `cargo test --offline` -> `159 passed`
+- Kimi accepted the renderer extraction and flattened-table follow-ups with no
+  confirmed defects.
+
+Current behavior:
+
+- Agent final answers use centralized complete-text terminal Markdown rendering.
+- Agent normalization handles flattened heading bodies and flattened table rows,
+  including prose attached after the final row.
+- Regular chat remains raw-streamed and intentionally does not use the Markdown
+  renderer.
+
+Next move:
+
+- Dogfood installed `deepseek` and `minimax` in the interactive TUI.
+- Use repo-analysis prompts that produce headings, bullets, tables, inline code,
+  URLs, and follow-up questions.
+- If formatting breaks, capture exact prompt, visible output, expected rendering,
+  and whether the transcript Markdown was valid or model-flattened.
+
 ## Current State
 
 Phase 11 model-decided docked routing, Phase 12 dock-native approvals, and the
