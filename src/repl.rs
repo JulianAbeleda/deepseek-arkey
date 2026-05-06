@@ -718,7 +718,7 @@ fn spawn_prompt_turn(
     let (sender, receiver) = mpsc::channel();
     let prior_messages = prior_messages.to_vec();
     thread::spawn(move || {
-        let result = run_prompt_streaming(
+        let result = run_prompt_buffered_rendered(
             &prior_messages,
             &prompt,
             &model,
@@ -1436,7 +1436,7 @@ fn normalize_workspace_prompt(prompt: &str) -> String {
         .join(" ")
 }
 
-fn run_prompt_streaming(
+fn run_prompt_buffered_rendered(
     prior_messages: &[Message],
     prompt: &str,
     model: &str,
@@ -1460,14 +1460,7 @@ fn run_prompt_streaming(
         }
         response
     } else {
-        let response = provider::chat_with_delta_quiet_cache(
-            &messages,
-            model,
-            temperature,
-            None,
-            true,
-            |_| {},
-        )?;
+        let response = provider::chat_quiet(&messages, model, temperature, None)?;
         let _ = sender.send(TurnEvent::Delta(render_terminal_markdown(&response)));
         response
     };
@@ -1498,14 +1491,7 @@ fn run_prompt_with_memory(
         }
         response
     } else if let Some(sender) = sender {
-        let response = provider::chat_with_delta_quiet_cache(
-            &messages,
-            model,
-            temperature,
-            None,
-            true,
-            |_| {},
-        )?;
+        let response = provider::chat_quiet(&messages, model, temperature, None)?;
         let _ = sender.send(TurnEvent::Delta(render_terminal_markdown(&response)));
         response
     } else {
