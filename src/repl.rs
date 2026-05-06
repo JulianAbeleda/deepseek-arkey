@@ -1313,6 +1313,7 @@ fn split_known_heading_body(line: &str) -> String {
         "Knowledge & Corpus Layer (`mind/`)",
         "Development & Docs",
         "Overall Purpose",
+        "Purpose",
         "Key Components",
         "Documentation",
         "Dependencies",
@@ -1956,6 +1957,13 @@ mod tests {
         let formatted = format_agent_answer(raw);
         assert!(formatted.contains("### Overall Purpose\nThis is a Rust migration."));
         assert!(formatted.contains("### Architecture\n**Rust Workspace:** details"));
+    }
+
+    #[test]
+    fn splits_purpose_heading_body() {
+        let raw = "### Purpose A standalone Rust CLI for querying models.";
+        let formatted = format_agent_answer(raw);
+        assert!(formatted.contains("### Purpose\nA standalone Rust CLI for querying models."));
     }
 
     #[test]
