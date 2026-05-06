@@ -116,12 +116,29 @@ fn parse_repaired_decision_value(
             return Some((value, "extra_brace"));
         }
     }
+    if let Some(repaired) = repair_missing_key_quote_tool_calls(json) {
+        if let Ok(value) = serde_json::from_str(&repaired) {
+            return Some((value, "missing_key_quote_tool_calls"));
+        }
+    }
     if let Some(repaired) = repair_unescaped_final_content_string(json) {
         if let Ok(value) = serde_json::from_str(&repaired) {
             return Some((value, "unescaped_final_content"));
         }
     }
     None
+}
+
+// Handles: {"content":"...",tool_calls":null} when the opening quote is missing.
+fn repair_missing_key_quote_tool_calls(json: &str) -> Option<String> {
+    let bad_suffix = r#"",tool_calls":null}"#;
+    let good_suffix = r#"","tool_calls":null}"#;
+    if json.ends_with(bad_suffix) {
+        let prefix = &json[..json.len() - bad_suffix.len()];
+        Some(format!("{prefix}{good_suffix}"))
+    } else {
+        None
+    }
 }
 
 fn repair_unescaped_final_content_string(json: &str) -> Option<String> {

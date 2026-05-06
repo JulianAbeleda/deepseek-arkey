@@ -814,6 +814,18 @@ mod tests {
     }
 
     #[test]
+    fn repairs_missing_key_quote_before_tool_calls() {
+        // Provider returns ,tool_calls":null} with the opening key quote missing.
+        let raw = r#"{"content":"Repo summary: tables and files.",tool_calls":null}"#;
+        let parsed = parse_decision_with_metadata(raw).unwrap();
+        assert_eq!(parsed.repairs, vec!["missing_key_quote_tool_calls"]);
+        assert_eq!(
+            parsed.decision.final_answer.as_deref(),
+            Some("Repo summary: tables and files.")
+        );
+    }
+
+    #[test]
     fn placeholder_content_does_not_mask_real_decision_fields() {
         let decision =
             parse_decision(r#"{"content":"answer with concrete findings","blocked":"wait"}"#)
