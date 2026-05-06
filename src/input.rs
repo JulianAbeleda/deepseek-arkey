@@ -14,7 +14,8 @@ pub enum InputAction {
     Exit,
 }
 
-const DOCK_RESERVED_ROWS: usize = 5;
+const DOCK_RESERVED_ROWS: usize = 7;
+const DOCK_VERTICAL_PADDING_ROWS: usize = 2;
 const SLASH_COMMANDS: &[&str] = &[
     "/chat", "/agent", "/root", "/model", "/debug", "/runtime", "/status", "/end", "/exit", "?",
 ];
@@ -259,7 +260,7 @@ impl DockedComposer {
                     if !submitted.trim().is_empty() {
                         self.history.push(submitted.clone());
                     }
-                    self.print_above(&format!("{}{}\n", self.prompt, submitted))?;
+                    self.print_above(&format!("\n{}{}\n\n", self.prompt, submitted))?;
                     Ok(Some(InputAction::Submit(submitted)))
                 }
                 KeyCode::Tab => {
@@ -684,11 +685,15 @@ fn render_dock_lines(
     cursor: usize,
     previous_rows: usize,
 ) -> Result<usize, String> {
-    let rows = compose_dock_rows(prompt, buffer, cursor, terminal_width());
+    let mut rows = compose_dock_rows(prompt, buffer, cursor, terminal_width());
+    rows.lines.insert(0, String::new());
+    rows.lines.push(String::new());
+    rows.cursor_row += 1;
+    let input_capacity = DOCK_RESERVED_ROWS.saturating_sub(DOCK_VERTICAL_PADDING_ROWS);
     let visible_rows = rows
         .lines
         .len()
-        .saturating_sub(DOCK_RESERVED_ROWS)
+        .saturating_sub(input_capacity)
         .min(rows.lines.len());
     let display_lines = if rows.lines.len() > DOCK_RESERVED_ROWS {
         &rows.lines[rows.lines.len() - DOCK_RESERVED_ROWS..]
@@ -1250,6 +1255,19 @@ mod tests {
         assert_eq!(rows.lines, vec!["p> alpha".to_string(), "beta".to_string()]);
         assert_eq!(rows.cursor_row, 1);
         assert_eq!(rows.cursor_col, 2);
+        assert!(DOCK_RESERVED_ROWS >= rows.lines.len());
+    }
+
+    #[test]
+    fn dock_reserves_vertical_padding_rows() {
+        let mut rows = compose_dock_rows("p> ", "draft", 5, 20);
+        rows.lines.insert(0, String::new());
+        rows.lines.push(String::new());
+        rows.cursor_row += 1;
+
+        assert_eq!(rows.lines.first().map(String::as_str), Some(""));
+        assert_eq!(rows.lines.last().map(String::as_str), Some(""));
+        assert_eq!(rows.cursor_row, 1);
         assert!(DOCK_RESERVED_ROWS >= rows.lines.len());
     }
 

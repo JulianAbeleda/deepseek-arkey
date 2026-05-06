@@ -90,6 +90,7 @@ pub fn chat(
     )
 }
 
+#[allow(dead_code)]
 pub fn chat_with_delta<F>(
     messages: &[Message],
     model: &str,
@@ -108,6 +109,29 @@ where
         max_tokens,
         stream,
         true,
+        false,
+        on_delta,
+    )
+}
+
+pub fn chat_with_delta_quiet_cache<F>(
+    messages: &[Message],
+    model: &str,
+    temperature: Option<f32>,
+    max_tokens: Option<u32>,
+    stream: bool,
+    on_delta: F,
+) -> Result<String, String>
+where
+    F: FnMut(&str),
+{
+    chat_impl(
+        messages,
+        model,
+        temperature,
+        max_tokens,
+        stream,
+        false,
         false,
         on_delta,
     )

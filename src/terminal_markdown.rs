@@ -2,27 +2,47 @@ pub(crate) fn render_terminal_markdown(text: &str) -> String {
     // This renderer expects complete text, not incremental streaming chunks.
     let mut output = String::new();
     let mut in_code_block = false;
-    for line in text.lines() {
+    let lines = text.lines().collect::<Vec<_>>();
+    let mut index = 0usize;
+    while index < lines.len() {
+        let line = lines[index];
         let stripped = line.trim();
         if stripped.starts_with("```") {
             in_code_block = !in_code_block;
             output.push_str(line);
             output.push('\n');
+            index += 1;
             continue;
         }
         if in_code_block {
             output.push_str(line);
             output.push('\n');
+            index += 1;
+            continue;
+        }
+        if is_table_row(stripped) {
+            let (rendered_table, next_index) = render_table_block(&lines, index);
+            if !rendered_table.is_empty() {
+                output.push_str(&rendered_table);
+                index = next_index;
+                continue;
+            }
+        }
+        if stripped.is_empty() {
+            output.push('\n');
+            index += 1;
             continue;
         }
         if let Some((level, body)) = markdown_heading(stripped) {
             output.push_str(&tokyo_heading(level, body));
             output.push('\n');
+            index += 1;
             continue;
         }
         if stripped == "---" {
             output.push_str(&tokyo_muted(&"-".repeat(40)));
             output.push('\n');
+            index += 1;
             continue;
         }
         if let Some(body) = stripped
@@ -34,6 +54,7 @@ pub(crate) fn render_terminal_markdown(text: &str) -> String {
             output.push(' ');
             output.push_str(&render_inline_markdown(body));
             output.push('\n');
+            index += 1;
             continue;
         }
         if let Some((marker, body)) = markdown_numbered_item(stripped) {
@@ -41,10 +62,12 @@ pub(crate) fn render_terminal_markdown(text: &str) -> String {
             output.push(' ');
             output.push_str(&render_inline_markdown(body));
             output.push('\n');
+            index += 1;
             continue;
         }
         output.push_str(&render_inline_markdown(line));
         output.push('\n');
+        index += 1;
     }
     output
 }
@@ -83,6 +106,214 @@ fn render_inline_markdown(text: &str) -> String {
         output.push_str("\x1b[0m");
     }
     output
+}
+
+fn render_table_block(lines: &[&str], start: usize) -> (String, usize) {
+    let mut end = start;
+    let mut rows = Vec::new();
+    while let Some(line) = lines.get(end) {
+        let stripped = line.trim();
+        if !is_table_row(stripped) {
+            break;
+        }
+        rows.push(parse_table_row(stripped));
+        end += 1;
+    }
+    if rows.len() < 2 || !is_table_separator_row(&rows[1]) {
+        return (String::new(), start);
+    }
+    let column_count = rows.iter().map(Vec::len).max().unwrap_or(0);
+    if column_count < 2 {
+        return (String::new(), start);
+    }
+    for row in &mut rows {
+        row.resize(column_count, String::new());
+    }
+    let data_rows = rows
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| *index != 1)
+        .map(|(_, row)| row)
+        .collect::<Vec<_>>();
+    let mut widths = vec![3usize; column_count];
+    for row in &data_rows {
+        for (index, cell) in row.iter().enumerate() {
+            widths[index] = widths[index]
+                .max(display_width(cell).min(MAX_TABLE_CELL_WIDTH))
+                .min(MAX_TABLE_CELL_WIDTH);
+        }
+    }
+    let mut output = String::new();
+    output.push_str(&format_table_row(&rows[0], &widths));
+    output.push_str(&format_table_rule(&widths));
+    for row in rows.iter().skip(2) {
+        output.push_str(&format_table_row(row, &widths));
+    }
+    (output, end)
+}
+
+const MAX_TABLE_CELL_WIDTH: usize = 36;
+
+fn is_table_row(line: &str) -> bool {
+    line.starts_with('|') && line.ends_with('|') && line.matches('|').count() >= 2
+}
+
+fn parse_table_row(line: &str) -> Vec<String> {
+    line.trim()
+        .trim_matches('|')
+        .split('|')
+        .map(|cell| cell.trim().to_string())
+        .collect()
+}
+
+fn is_table_separator_row(row: &[String]) -> bool {
+    row.iter().all(|cell| {
+        let cell = cell.trim();
+        cell.len() >= 3 && cell.chars().all(|ch| matches!(ch, '-' | ':' | ' '))
+    })
+}
+
+fn format_table_row(row: &[String], widths: &[usize]) -> String {
+    let wrapped = row
+        .iter()
+        .zip(widths)
+        .map(|(cell, width)| wrap_table_cell(cell, *width))
+        .collect::<Vec<_>>();
+    let height = wrapped.iter().map(Vec::len).max().unwrap_or(1);
+    let mut output = String::new();
+    for line_index in 0..height {
+        output.push_str(&tokyo_muted("|"));
+        for (column, width) in widths.iter().enumerate() {
+            let cell = wrapped
+                .get(column)
+                .and_then(|lines| lines.get(line_index))
+                .map(String::as_str)
+                .unwrap_or("");
+            let rendered = render_inline_markdown(cell);
+            output.push(' ');
+            output.push_str(&pad_display_width(&rendered, *width));
+            output.push(' ');
+            output.push_str(&tokyo_muted("|"));
+        }
+        output.push('\n');
+    }
+    output
+}
+
+fn format_table_rule(widths: &[usize]) -> String {
+    let mut output = String::new();
+    output.push_str(&tokyo_muted("|"));
+    for width in widths {
+        output.push_str(&tokyo_muted(&format!("{}|", "-".repeat(width + 2))));
+    }
+    output.push('\n');
+    output
+}
+
+fn wrap_table_cell(cell: &str, width: usize) -> Vec<String> {
+    let width = width.max(1);
+    let mut lines = Vec::new();
+    let mut current = String::new();
+    let mut current_width = 0usize;
+    for word in cell.split_whitespace() {
+        let word_width = display_width(word);
+        if word_width > width {
+            if !current.is_empty() {
+                lines.push(current);
+                current = String::new();
+                current_width = 0;
+            }
+            lines.extend(chunk_long_word(word, width));
+            continue;
+        }
+        let separator = usize::from(!current.is_empty());
+        if current_width + separator + word_width > width && !current.is_empty() {
+            lines.push(current);
+            current = String::new();
+            current_width = 0;
+        }
+        if !current.is_empty() {
+            current.push(' ');
+            current_width += 1;
+        }
+        current.push_str(word);
+        current_width += word_width;
+    }
+    if !current.is_empty() {
+        lines.push(current);
+    }
+    if lines.is_empty() {
+        lines.push(String::new());
+    }
+    lines
+}
+
+fn chunk_long_word(word: &str, width: usize) -> Vec<String> {
+    let mut chunks = Vec::new();
+    let mut current = String::new();
+    let mut current_width = 0usize;
+    for ch in word.chars() {
+        let ch_width = char_display_width(ch);
+        if current_width + ch_width > width && !current.is_empty() {
+            chunks.push(current);
+            current = String::new();
+            current_width = 0;
+        }
+        current.push(ch);
+        current_width += ch_width;
+    }
+    if !current.is_empty() {
+        chunks.push(current);
+    }
+    chunks
+}
+
+fn pad_display_width(text: &str, width: usize) -> String {
+    let len = display_width(text);
+    if len >= width {
+        return text.to_string();
+    }
+    format!("{text}{}", " ".repeat(width - len))
+}
+
+fn display_width(text: &str) -> usize {
+    let mut len = 0usize;
+    let mut chars = text.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '\x1b' && chars.peek() == Some(&'[') {
+            chars.next();
+            for next in chars.by_ref() {
+                if ('@'..='~').contains(&next) {
+                    break;
+                }
+            }
+            continue;
+        }
+        len += char_display_width(ch);
+    }
+    len
+}
+
+fn char_display_width(ch: char) -> usize {
+    if ch.is_control() {
+        0
+    } else if matches!(
+        ch as u32,
+        0x1100..=0x115f
+            | 0x2329..=0x232a
+            | 0x2e80..=0xa4cf
+            | 0xac00..=0xd7a3
+            | 0xf900..=0xfaff
+            | 0xfe10..=0xfe19
+            | 0xfe30..=0xfe6f
+            | 0xff00..=0xff60
+            | 0xffe0..=0xffe6
+            | 0x1f300..=0x1faff
+    ) {
+        2
+    } else {
+        1
+    }
 }
 
 fn render_inline_code_and_urls(text: &str, bold_active: bool) -> String {
@@ -201,10 +432,14 @@ mod tests {
     }
 
     #[test]
-    fn preserves_table_lines_without_destroying_markdown() {
-        let raw = "| A | B |\n|---|---|\n| `x` | **y** |\n";
+    fn renders_aligned_markdown_tables() {
+        let raw = "| A | Longer |\n|---|---|\n| `x` | **y** |\n";
         let rendered = render_terminal_markdown(raw);
-        assert!(strip_ansi_for_test(&rendered).contains("| A | B |\n|---|---|\n| x | y |"));
+        let stripped = strip_ansi_for_test(&rendered);
+
+        assert!(stripped.contains("| A   | Longer |"));
+        assert!(stripped.contains("|-----|--------|"));
+        assert!(stripped.contains("| x   | y      |"));
     }
 
     #[test]

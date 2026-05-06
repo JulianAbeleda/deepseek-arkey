@@ -16,6 +16,7 @@ use crate::ui;
 use crate::workspace::{
     effective_workspace_root, infer_natural_root, parse_navigation_request_from,
     parse_root_command, path_boundary_clarify_text, root_status, update_selected_root,
+    update_selected_root_from,
 };
 
 enum TurnEvent {
@@ -150,7 +151,7 @@ fn run_interactive_chat(model: &str, temperature: Option<f32>, stream: bool) -> 
         ) {
             Ok((_, response)) => {
                 if !stream {
-                    println!("{response}");
+                    print!("{}", render_terminal_markdown(&response));
                 }
             }
             Err(err) => ui::print_error(err),
@@ -195,6 +196,7 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
     let mut pending_approval: Option<PendingDockApproval> = None;
     let mut selected_root: Option<PathBuf> =
         persisted_selected_root.or_else(|| approved_agent_root.clone());
+    let mut previous_selected_root: Option<PathBuf> = None;
     let mut switch_to_agent = false;
     loop {
         let context_scan_ready = context_scan_started
@@ -295,8 +297,25 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
             switch_to_agent = true;
             break;
         }
+        if is_cd_previous_request(prompt) {
+            let Some(previous_root) = previous_selected_root.take() else {
+                composer.print_above("root error: no previous root\n")?;
+                continue;
+            };
+            previous_selected_root = selected_root.clone();
+            selected_root = Some(previous_root);
+            approved_agent_root = None;
+            clear_session_agent_root()?;
+            save_selected_root(selected_root.as_deref())?;
+            pending_agent_task = None;
+            composer.print_above(&root_status(selected_root.as_deref(), true))?;
+            continue;
+        }
         match parse_navigation_request_from(prompt, selected_root.as_deref()) {
             Ok(Some(root)) => {
+                if selected_root.as_deref() != Some(root.as_path()) {
+                    previous_selected_root = selected_root.clone();
+                }
                 selected_root = Some(root);
                 approved_agent_root = None;
                 clear_session_agent_root()?;
@@ -376,20 +395,27 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
         }
         if let Some(root_arg) = parse_root_command(prompt) {
             let output = match root_arg {
-                Some(root_arg) => match update_selected_root(root_arg) {
-                    Ok(next_root) => {
-                        selected_root = next_root;
-                        approved_agent_root = None;
-                        clear_session_agent_root()?;
-                        save_selected_root(selected_root.as_deref())?;
-                        pending_agent_task = None;
-                        root_status(
-                            effective_workspace_root(selected_root.as_deref()).as_deref(),
-                            selected_root.is_some(),
-                        )
+                Some(root_arg) => {
+                    match update_selected_root_from(root_arg, selected_root.as_deref())
+                        .or_else(|_| update_selected_root(root_arg))
+                    {
+                        Ok(next_root) => {
+                            if selected_root != next_root {
+                                previous_selected_root = selected_root.clone();
+                            }
+                            selected_root = next_root;
+                            approved_agent_root = None;
+                            clear_session_agent_root()?;
+                            save_selected_root(selected_root.as_deref())?;
+                            pending_agent_task = None;
+                            root_status(
+                                effective_workspace_root(selected_root.as_deref()).as_deref(),
+                                selected_root.is_some(),
+                            )
+                        }
+                        Err(err) => format!("root error: {err}\n"),
                     }
-                    Err(err) => format!("root error: {err}\n"),
-                },
+                }
                 None => root_status(
                     effective_workspace_root(selected_root.as_deref()).as_deref(),
                     selected_root.is_some(),
@@ -712,6 +738,13 @@ fn is_approval_accept(prompt: &str, approve_phrase: &str) -> bool {
     prompt == "y" || prompt == approve_phrase
 }
 
+fn is_cd_previous_request(prompt: &str) -> bool {
+    matches!(
+        prompt.trim().to_ascii_lowercase().as_str(),
+        "cd -" | "cd previous" | "cd back"
+    )
+}
+
 fn approval_pending_text(tool: &str, approve_phrase: &str) -> String {
     format!("approval pending: {tool}\nType `y` or `{approve_phrase}` to approve, `n` to deny. `/exit` cancels and exits.\n")
 }
@@ -770,7 +803,7 @@ fn run_agent_streaming(
         let _ = sender.send(TurnEvent::Delta(response.clone()));
         return Ok((prompt.to_string(), response));
     }
-    let outcome = agent::run_agent_with_approval_handler(
+    let outcome = agent::run_agent_quiet_cache_with_approval_handler(
         prompt,
         model,
         temperature,
@@ -1427,9 +1460,16 @@ fn run_prompt_streaming(
         }
         response
     } else {
-        provider::chat_with_delta(&messages, model, temperature, None, true, |delta| {
-            let _ = sender.send(TurnEvent::Delta(delta.to_string()));
-        })?
+        let response = provider::chat_with_delta_quiet_cache(
+            &messages,
+            model,
+            temperature,
+            None,
+            true,
+            |_| {},
+        )?;
+        let _ = sender.send(TurnEvent::Delta(render_terminal_markdown(&response)));
+        response
     };
     Ok((prompt.to_string(), response))
 }
@@ -1458,9 +1498,16 @@ fn run_prompt_with_memory(
         }
         response
     } else if let Some(sender) = sender {
-        provider::chat_with_delta(&messages, model, temperature, None, true, |delta| {
-            let _ = sender.send(TurnEvent::Delta(delta.to_string()));
-        })?
+        let response = provider::chat_with_delta_quiet_cache(
+            &messages,
+            model,
+            temperature,
+            None,
+            true,
+            |_| {},
+        )?;
+        let _ = sender.send(TurnEvent::Delta(render_terminal_markdown(&response)));
+        response
     } else {
         provider::chat(&messages, model, temperature, None, stream)?
     };

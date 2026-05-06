@@ -136,6 +136,27 @@ pub fn run_agent_with_approval_handler(
     )
 }
 
+pub fn run_agent_quiet_cache_with_approval_handler(
+    task: &str,
+    model: &str,
+    temperature: Option<f32>,
+    config: AgentConfig,
+    approval_mode: ApprovalMode,
+    mut on_step: impl FnMut(usize, &str),
+    mut on_approval: impl FnMut(ApprovalRequest) -> ApprovalDecision,
+) -> Result<AgentOutcome, String> {
+    run_agent_with_chat_handler(
+        task,
+        model,
+        temperature,
+        config,
+        approval_mode,
+        &mut on_step,
+        &mut on_approval,
+        |messages, model, temperature| provider::chat_quiet(messages, model, temperature, None),
+    )
+}
+
 fn run_agent_with_chat_handler(
     task: &str,
     model: &str,

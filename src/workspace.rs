@@ -103,6 +103,17 @@ pub(crate) fn update_selected_root(root_arg: &str) -> Result<Option<PathBuf>, St
     Ok(Some(root))
 }
 
+pub(crate) fn update_selected_root_from(
+    root_arg: &str,
+    base_root: Option<&Path>,
+) -> Result<Option<PathBuf>, String> {
+    if matches!(root_arg, "clear" | "reset" | "cwd") {
+        return Ok(None);
+    }
+    let path = expand_path(root_arg, base_root);
+    canonical_dir(path).map(Some)
+}
+
 fn navigation_target<'a>(prompt: &'a str, lowered: &str) -> Option<(&'a str, bool)> {
     for verb in [
         "cd", "go", "navigate", "switch", "move", "change", "enter", "open",
@@ -128,18 +139,14 @@ fn clean_navigation_target(target: &str) -> &str {
             target = &target[..index];
         }
     }
-    target = target
-        .trim()
-        .trim_matches(|ch: char| matches!(ch, '.' | ',' | ';' | ':' | '"' | '\''));
+    target = trim_navigation_punctuation(target.trim());
     for prep in ["into ", "inside ", "from ", "to ", "in "] {
         if target.to_lowercase().starts_with(prep) {
             target = &target[prep.len()..];
             break;
         }
     }
-    target = target
-        .trim()
-        .trim_matches(|ch: char| matches!(ch, '.' | ',' | ';' | ':' | '"' | '\''));
+    target = trim_navigation_punctuation(target.trim());
     if target.to_lowercase().starts_with("the ") {
         target = &target[4..];
     }
@@ -149,6 +156,14 @@ fn clean_navigation_target(target: &str) -> &str {
         }
     }
     target
+}
+
+fn trim_navigation_punctuation(target: &str) -> &str {
+    let target = target.trim_matches(|ch: char| matches!(ch, ',' | ';' | ':' | '"' | '\''));
+    if target == "." || target == ".." || looks_like_path_target(target) {
+        return target;
+    }
+    target.trim_matches('.')
 }
 
 fn expand_path(path: &str, base_root: Option<&Path>) -> PathBuf {
@@ -190,6 +205,8 @@ fn navigation_alias_root(target: &str) -> Option<PathBuf> {
 fn looks_like_path_target(target: &str) -> bool {
     target == "~"
         || target.starts_with("~/")
+        || target == "."
+        || target == ".."
         || target.starts_with('/')
         || target.starts_with("./")
         || target.starts_with("../")
@@ -239,7 +256,7 @@ pub(crate) fn path_boundary_clarify_text(root: &Path, path: &Path) -> String {
 mod tests {
     use super::{
         parse_navigation_request, parse_navigation_request_from, parse_root_command,
-        path_boundary_clarify_text, root_status,
+        path_boundary_clarify_text, root_status, update_selected_root_from,
     };
     use std::fs;
     use std::path::Path;
@@ -387,6 +404,47 @@ mod tests {
                 .unwrap()
                 .as_deref(),
             Some(child.canonicalize().unwrap().as_path())
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn relative_navigation_supports_parent_and_current_directory() {
+        let root = std::env::temp_dir().join(format!(
+            "deepseek-navigation-relative-test-{}",
+            std::process::id()
+        ));
+        let parent = root.join("parent");
+        let child = parent.join("child");
+        let sibling = parent.join("sibling");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&child).unwrap();
+        fs::create_dir_all(&sibling).unwrap();
+
+        assert_eq!(
+            parse_navigation_request_from("cd ..", Some(&child))
+                .unwrap()
+                .as_deref(),
+            Some(parent.canonicalize().unwrap().as_path())
+        );
+        assert_eq!(
+            parse_navigation_request_from("cd ../sibling", Some(&child))
+                .unwrap()
+                .as_deref(),
+            Some(sibling.canonicalize().unwrap().as_path())
+        );
+        assert_eq!(
+            parse_navigation_request_from("cd .", Some(&child))
+                .unwrap()
+                .as_deref(),
+            Some(child.canonicalize().unwrap().as_path())
+        );
+        assert_eq!(
+            update_selected_root_from("../sibling", Some(&child))
+                .unwrap()
+                .as_deref(),
+            Some(sibling.canonicalize().unwrap().as_path())
         );
 
         let _ = fs::remove_dir_all(&root);
