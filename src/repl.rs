@@ -1136,15 +1136,22 @@ fn split_markdown_table_lines(text: &str) -> String {
     let mut expected_pipes = None;
     for line in text.lines() {
         if line.starts_with('|') {
-            let pipe_count = line.chars().filter(|ch| *ch == '|').count();
-            let expected = expected_pipes.get_or_insert(pipe_count);
-            if let Some((row, rest)) = split_table_line_after_pipe_count(line, *expected) {
-                output.push_str(row.trim_end());
+            let expected = *expected_pipes
+                .get_or_insert_with(|| infer_table_row_pipe_count(line).unwrap_or_default());
+            let mut rest = line;
+            while let Some((row, next)) = split_table_line_after_pipe_count(rest, expected) {
+                output.push_str(row);
                 output.push('\n');
-                output.push_str(rest.trim_start());
-                output.push('\n');
-                continue;
+                rest = next.trim_start();
+                if !markdown_table_row_marker(rest) {
+                    break;
+                }
             }
+            if !rest.is_empty() {
+                output.push_str(rest);
+                output.push('\n');
+            }
+            continue;
         } else if !line.trim().is_empty() {
             expected_pipes = None;
         }
@@ -1152,6 +1159,21 @@ fn split_markdown_table_lines(text: &str) -> String {
         output.push('\n');
     }
     output.trim_end().to_string()
+}
+
+fn infer_table_row_pipe_count(line: &str) -> Option<usize> {
+    let mut count = 0usize;
+    for (index, ch) in line.char_indices() {
+        if ch != '|' {
+            continue;
+        }
+        count += 1;
+        let rest = line[index + ch.len_utf8()..].trim_start();
+        if count >= 2 && markdown_table_row_marker(rest) {
+            return Some(count);
+        }
+    }
+    Some(count).filter(|count| *count >= 2)
 }
 
 fn split_table_line_after_pipe_count(line: &str, expected_pipes: usize) -> Option<(&str, &str)> {
@@ -1675,7 +1697,7 @@ mod tests {
         is_agent_task_choice, is_approval_accept, is_end_command, is_exit_command,
         is_workspace_agent_prompt, no_pending_agent_task_text, parse_agent_task_command,
         parse_debug_command, parse_model_command, parse_runtime_command, parse_shell_read_command,
-        shell_pwd_text, task_root_for_prompt, terminal_agent_answer,
+        shell_pwd_text, split_markdown_table_lines, task_root_for_prompt, terminal_agent_answer,
         workspace_agent_root_for_prompt, RuntimeCommand, ShellReadCommand,
     };
     use crate::provider;
@@ -1898,6 +1920,16 @@ mod tests {
         assert!(formatted.contains("\n| `chat` | Single-shot prompt |"));
         assert!(formatted.contains("\n| `agent` | Autonomous run |"));
         assert!(formatted.contains("\nKey inline code: `run_interactive`."));
+    }
+
+    #[test]
+    fn split_markdown_table_lines_splits_overlong_table_line() {
+        let raw = "| Command | Description | |---|---| | `chat` | Single-shot prompt | Key inline code: `run_interactive`.";
+        let split = split_markdown_table_lines(raw);
+        assert!(split.contains("| Command | Description |\n"));
+        assert!(split.contains("|---|---|\n"));
+        assert!(split.contains("| `chat` | Single-shot prompt |\n"));
+        assert!(split.contains("\nKey inline code: `run_interactive`."));
     }
 
     #[test]
