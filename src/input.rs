@@ -260,7 +260,7 @@ impl DockedComposer {
                     if !submitted.trim().is_empty() {
                         self.history.push(submitted.clone());
                     }
-                    self.print_above(&format!("\n{}{}\n\n", self.prompt, submitted))?;
+                    self.print_above(&submitted_prompt_echo(&submitted))?;
                     Ok(Some(InputAction::Submit(submitted)))
                 }
                 KeyCode::Tab => {
@@ -743,6 +743,72 @@ fn write_raw_lines(stdout: &mut io::Stdout, text: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn submitted_prompt_echo(submitted: &str) -> String {
+    submitted_prompt_echo_at_width(submitted, terminal_width())
+}
+
+fn submitted_prompt_echo_at_width(submitted: &str, terminal_width: usize) -> String {
+    let width = terminal_width.max(24);
+    let marker_width = visible_len("> ").max(1);
+    let body_width = width.saturating_sub(marker_width);
+    let mut output = String::from("\n");
+    let mut lines = submitted.split('\n').peekable();
+
+    output.push_str(&prompt_echo_block(" ".repeat(width)));
+    output.push('\n');
+
+    if lines.peek().is_none() {
+        output.push_str(&prompt_echo_marker("> "));
+        output.push_str(&prompt_echo_block(" ".repeat(body_width)));
+    } else {
+        for (index, line) in lines.enumerate() {
+            if index > 0 {
+                output.push('\n');
+            }
+            output.push_str(&prompt_echo_marker("> "));
+            output.push_str(&prompt_echo_block(pad_visible_width(
+                format!(" {line} "),
+                body_width,
+            )));
+        }
+    }
+
+    output.push('\n');
+    output.push_str(&prompt_echo_block(" ".repeat(width)));
+    output.push_str("\n\n");
+    output
+}
+
+fn prompt_echo_marker(text: impl AsRef<str>) -> String {
+    style_prompt_echo("1;38;2;187;154;247;48;2;40;42;54", text)
+}
+
+fn prompt_echo_block(text: impl AsRef<str>) -> String {
+    style_prompt_echo("38;2;220;223;230;48;2;40;42;54", text)
+}
+
+fn style_prompt_echo(code: &str, text: impl AsRef<str>) -> String {
+    style_prompt_echo_with_color(code, text, std::env::var_os("NO_COLOR").is_none())
+}
+
+fn style_prompt_echo_with_color(code: &str, text: impl AsRef<str>, color_enabled: bool) -> String {
+    let text = text.as_ref();
+    if color_enabled {
+        format!("\x1b[{code}m{text}\x1b[0m")
+    } else {
+        text.to_string()
+    }
+}
+
+fn pad_visible_width(text: impl Into<String>, width: usize) -> String {
+    let mut text = text.into();
+    let len = visible_len(&text);
+    if len < width {
+        text.push_str(&" ".repeat(width - len));
+    }
+    text
+}
+
 fn insert_at(buffer: &mut String, cursor: &mut usize, ch: char) {
     let byte_index = byte_index(buffer, *cursor);
     buffer.insert(byte_index, ch);
@@ -1172,8 +1238,9 @@ fn is_wide_char(ch: char) -> bool {
 mod tests {
     use super::{
         buffer_prefix, compose_dock_rows, insert_at, next_word_cursor, parse_forced_terminal_size,
-        previous_word_cursor, remove_at, remove_before, remove_previous_word, visible_len,
-        visible_suffix, DockedComposer, DOCK_RESERVED_ROWS,
+        previous_word_cursor, remove_at, remove_before, remove_previous_word,
+        style_prompt_echo_with_color, submitted_prompt_echo_at_width, take_ansi_sequence,
+        visible_len, visible_suffix, DockedComposer, DOCK_RESERVED_ROWS,
     };
 
     #[test]
@@ -1272,6 +1339,39 @@ mod tests {
     }
 
     #[test]
+    fn submitted_prompt_echo_uses_compact_previous_prompt_marker() {
+        let echo = submitted_prompt_echo_at_width("inspect README", 40);
+        let plain = strip_ansi_for_test(&echo);
+        let lines = plain.lines().collect::<Vec<_>>();
+
+        assert_eq!(lines.len(), 5);
+        assert_eq!(lines[0], "");
+        assert_eq!(lines[1], " ".repeat(40));
+        assert!(lines[2].starts_with(">  inspect README"));
+        assert_eq!(lines[2].len(), 40);
+        assert_eq!(lines[3], " ".repeat(40));
+        assert_eq!(lines[4], "");
+    }
+
+    #[test]
+    fn submitted_prompt_echo_prefixes_multiline_prompts() {
+        let echo = submitted_prompt_echo_at_width("first line\nsecond line", 36);
+        let plain = strip_ansi_for_test(&echo);
+
+        assert!(plain.contains(">  first line"));
+        assert!(plain.contains(">  second line"));
+        assert_eq!(plain.lines().count(), 6);
+    }
+
+    #[test]
+    fn prompt_echo_style_can_render_highlight_background() {
+        let styled = style_prompt_echo_with_color("38;2;220;223;230;48;2;40;42;54", "text", true);
+
+        assert!(styled.contains("48;2;40;42;54"));
+        assert_eq!(strip_ansi_for_test(&styled), "text");
+    }
+
+    #[test]
     fn composer_stream_state_can_reset() {
         let mut composer = DockedComposer::new("prompt › ".to_string());
         composer.buffer = "draft".to_string();
@@ -1321,5 +1421,17 @@ mod tests {
         assert_eq!(parse_forced_terminal_size("80x24"), Some((80, 24)));
         assert_eq!(parse_forced_terminal_size("0x0"), Some((1, 1)));
         assert_eq!(parse_forced_terminal_size("80:24"), None);
+    }
+
+    fn strip_ansi_for_test(text: &str) -> String {
+        let mut out = String::new();
+        let mut chars = text.chars().peekable();
+        while let Some(ch) = chars.next() {
+            if take_ansi_sequence(ch, &mut chars).is_some() {
+                continue;
+            }
+            out.push(ch);
+        }
+        out
     }
 }
