@@ -13,21 +13,16 @@ pub fn print_banner(model: &str) -> Option<u16> {
     let _ = execute!(stdout, MoveToColumn(0), Clear(ClearType::CurrentLine));
     let _ = write!(
         stdout,
-        "{} {}\r\n",
+        "{} {}  {}\r\n",
         accent(PROVIDER.to_ascii_lowercase()),
+        muted("booted"),
         muted(format!("[{model}]"))
-    );
-    let _ = execute!(stdout, MoveToColumn(0), Clear(ClearType::CurrentLine));
-    let _ = write!(
-        stdout,
-        "{}\r\n",
-        muted("Enter send · ? help · /model · /debug · /runtime · /end · /exit")
     );
     let _ = stdout.flush();
     position()
         .ok()
         .map(|(_, row)| row.min(max_transcript_row()))
-        .filter(|row| *row >= 2)
+        .filter(|row| *row >= 1)
 }
 
 pub fn prompt_text(model: &str) -> String {

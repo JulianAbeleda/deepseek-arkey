@@ -16,6 +16,7 @@ pub enum InputAction {
 
 const DOCK_RESERVED_ROWS: usize = 7;
 const DOCK_VERTICAL_PADDING_ROWS: usize = 2;
+const DOCK_HELP_TEXT: &str = "Enter send · ? help · /model · /debug · /runtime · /end · /exit";
 const SLASH_COMMANDS: &[&str] = &[
     "/chat", "/agent", "/root", "/model", "/debug", "/runtime", "/status", "/end", "/exit", "?",
 ];
@@ -687,7 +688,7 @@ fn render_dock_lines(
 ) -> Result<usize, String> {
     let mut rows = compose_dock_rows(prompt, buffer, cursor, terminal_width());
     rows.lines.insert(0, String::new());
-    rows.lines.push(String::new());
+    rows.lines.push(muted_dock_help(DOCK_HELP_TEXT));
     rows.cursor_row += 1;
     let input_capacity = DOCK_RESERVED_ROWS.saturating_sub(DOCK_VERTICAL_PADDING_ROWS);
     let visible_rows = rows
@@ -726,6 +727,10 @@ fn render_dock_lines(
     Ok(display_lines.len().min(DOCK_RESERVED_ROWS))
 }
 
+fn muted_dock_help(text: &str) -> String {
+    style_prompt_echo("90", text)
+}
+
 fn newline() -> Result<(), String> {
     let mut stdout = io::stdout();
     write!(stdout, "\r\n").map_err(|err| err.to_string())?;
@@ -744,47 +749,28 @@ fn write_raw_lines(stdout: &mut io::Stdout, text: &str) -> Result<(), String> {
 }
 
 fn submitted_prompt_echo(submitted: &str) -> String {
-    submitted_prompt_echo_at_width(submitted, terminal_width())
-}
-
-fn submitted_prompt_echo_at_width(submitted: &str, terminal_width: usize) -> String {
-    let width = terminal_width.max(24);
-    let marker_width = visible_len("> ").max(1);
-    let body_width = width.saturating_sub(marker_width);
     let mut output = String::from("\n");
     let mut lines = submitted.split('\n').peekable();
 
-    output.push_str(&prompt_echo_block(" ".repeat(width)));
-    output.push('\n');
-
     if lines.peek().is_none() {
         output.push_str(&prompt_echo_marker("> "));
-        output.push_str(&prompt_echo_block(" ".repeat(body_width)));
     } else {
         for (index, line) in lines.enumerate() {
             if index > 0 {
                 output.push('\n');
             }
             output.push_str(&prompt_echo_marker("> "));
-            output.push_str(&prompt_echo_block(pad_visible_width(
-                format!(" {line} "),
-                body_width,
-            )));
+            output.push(' ');
+            output.push_str(line);
         }
     }
 
-    output.push('\n');
-    output.push_str(&prompt_echo_block(" ".repeat(width)));
     output.push_str("\n\n");
     output
 }
 
 fn prompt_echo_marker(text: impl AsRef<str>) -> String {
-    style_prompt_echo("1;38;2;187;154;247;48;2;40;42;54", text)
-}
-
-fn prompt_echo_block(text: impl AsRef<str>) -> String {
-    style_prompt_echo("38;2;220;223;230;48;2;40;42;54", text)
+    style_prompt_echo("36;1", text)
 }
 
 fn style_prompt_echo(code: &str, text: impl AsRef<str>) -> String {
@@ -798,15 +784,6 @@ fn style_prompt_echo_with_color(code: &str, text: impl AsRef<str>, color_enabled
     } else {
         text.to_string()
     }
-}
-
-fn pad_visible_width(text: impl Into<String>, width: usize) -> String {
-    let mut text = text.into();
-    let len = visible_len(&text);
-    if len < width {
-        text.push_str(&" ".repeat(width - len));
-    }
-    text
 }
 
 fn insert_at(buffer: &mut String, cursor: &mut usize, ch: char) {
@@ -1239,8 +1216,8 @@ mod tests {
     use super::{
         buffer_prefix, compose_dock_rows, insert_at, next_word_cursor, parse_forced_terminal_size,
         previous_word_cursor, remove_at, remove_before, remove_previous_word,
-        style_prompt_echo_with_color, submitted_prompt_echo_at_width, take_ansi_sequence,
-        visible_len, visible_suffix, DockedComposer, DOCK_RESERVED_ROWS,
+        style_prompt_echo_with_color, submitted_prompt_echo, take_ansi_sequence, visible_len,
+        visible_suffix, DockedComposer, DOCK_RESERVED_ROWS,
     };
 
     #[test]
@@ -1340,35 +1317,33 @@ mod tests {
 
     #[test]
     fn submitted_prompt_echo_uses_compact_previous_prompt_marker() {
-        let echo = submitted_prompt_echo_at_width("inspect README", 40);
+        let echo = submitted_prompt_echo("inspect README");
         let plain = strip_ansi_for_test(&echo);
         let lines = plain.lines().collect::<Vec<_>>();
 
-        assert_eq!(lines.len(), 5);
+        assert_eq!(lines.len(), 3);
         assert_eq!(lines[0], "");
-        assert_eq!(lines[1], " ".repeat(40));
-        assert!(lines[2].starts_with(">  inspect README"));
-        assert_eq!(lines[2].len(), 40);
-        assert_eq!(lines[3], " ".repeat(40));
-        assert_eq!(lines[4], "");
+        assert_eq!(lines[1], ">  inspect README");
+        assert_eq!(lines[2], "");
+        assert!(!echo.contains("48;2"));
     }
 
     #[test]
     fn submitted_prompt_echo_prefixes_multiline_prompts() {
-        let echo = submitted_prompt_echo_at_width("first line\nsecond line", 36);
+        let echo = submitted_prompt_echo("first line\nsecond line");
         let plain = strip_ansi_for_test(&echo);
 
         assert!(plain.contains(">  first line"));
         assert!(plain.contains(">  second line"));
-        assert_eq!(plain.lines().count(), 6);
+        assert_eq!(plain.lines().count(), 4);
     }
 
     #[test]
-    fn prompt_echo_style_can_render_highlight_background() {
-        let styled = style_prompt_echo_with_color("38;2;220;223;230;48;2;40;42;54", "text", true);
+    fn prompt_echo_marker_can_render_cyan() {
+        let styled = style_prompt_echo_with_color("36;1", ">", true);
 
-        assert!(styled.contains("48;2;40;42;54"));
-        assert_eq!(strip_ansi_for_test(&styled), "text");
+        assert!(styled.contains("\x1b[36;1m"));
+        assert_eq!(strip_ansi_for_test(&styled), ">");
     }
 
     #[test]
