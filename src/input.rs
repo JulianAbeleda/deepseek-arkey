@@ -755,30 +755,134 @@ fn write_raw_lines(stdout: &mut io::Stdout, text: &str) -> Result<(), String> {
 }
 
 fn submitted_prompt_echo(submitted: &str) -> String {
-    let mut output = String::from("\n");
-    let mut lines = submitted.split('\n').peekable();
+    submitted_prompt_echo_with_options(
+        submitted,
+        terminal_width(),
+        std::env::var_os("NO_COLOR").is_none(),
+    )
+}
 
-    if lines.peek().is_none() {
-        output.push_str(&prompt_echo_line(""));
-    } else {
-        for (index, line) in lines.enumerate() {
-            if index > 0 {
-                output.push('\n');
-            }
-            output.push_str(&prompt_echo_line(line));
+fn submitted_prompt_echo_with_options(
+    submitted: &str,
+    terminal_width: usize,
+    color_enabled: bool,
+) -> String {
+    let mut output = String::from("\n");
+    let mut block_lines = Vec::new();
+    let width = terminal_width.max(24);
+
+    for line in submitted.split('\n') {
+        if !block_lines.is_empty() {
+            block_lines.push(prompt_echo_block_blank(width, color_enabled));
         }
+        block_lines.extend(prompt_echo_block_lines(line, width, color_enabled));
     }
 
+    output.push_str(&block_lines.join("\n"));
     output.push_str("\n\n");
     output
 }
 
-fn prompt_echo_line(text: &str) -> String {
-    prompt_echo_line_with_color(text, std::env::var_os("NO_COLOR").is_none())
+fn prompt_echo_block_lines(text: &str, width: usize, color_enabled: bool) -> Vec<String> {
+    let marker_width = 2usize;
+    let content_width = width.saturating_sub(marker_width + 2).max(10);
+    let wrapped = wrap_prompt_echo_text(text, content_width);
+    let mut lines = Vec::with_capacity(wrapped.len().max(1) + 2);
+
+    lines.push(prompt_echo_block_blank(width, color_enabled));
+    for (index, line) in wrapped.into_iter().enumerate() {
+        let marker = if index == 0 { "> " } else { "  " };
+        let content = pad_visible_width(&format!(" {line} "), width.saturating_sub(marker_width));
+        lines.push(format!(
+            "{}{}",
+            prompt_echo_marker(marker, color_enabled),
+            prompt_echo_block(&content, color_enabled)
+        ));
+    }
+    lines.push(prompt_echo_block_blank(width, color_enabled));
+    lines
 }
 
-fn prompt_echo_line_with_color(text: &str, color_enabled: bool) -> String {
-    style_prompt_echo_with_color("36;1", format!(">  {text}"), color_enabled)
+fn prompt_echo_block_blank(width: usize, color_enabled: bool) -> String {
+    prompt_echo_block(&" ".repeat(width), color_enabled)
+}
+
+fn prompt_echo_marker(text: &str, color_enabled: bool) -> String {
+    style_prompt_echo_with_color("1;38;2;187;154;247;48;2;40;42;54", text, color_enabled)
+}
+
+fn prompt_echo_block(text: &str, color_enabled: bool) -> String {
+    style_prompt_echo_with_color("38;2;220;223;230;48;2;40;42;54", text, color_enabled)
+}
+
+fn wrap_prompt_echo_text(text: &str, width: usize) -> Vec<String> {
+    if text.is_empty() {
+        return vec![String::new()];
+    }
+
+    let mut lines = Vec::new();
+    let mut current = String::new();
+    for word in text.split_whitespace() {
+        if visible_len(word) > width {
+            if !current.is_empty() {
+                lines.push(std::mem::take(&mut current));
+            }
+            lines.extend(chunk_prompt_echo_word(word, width));
+            continue;
+        }
+
+        let candidate_len = if current.is_empty() {
+            visible_len(word)
+        } else {
+            visible_len(&current) + 1 + visible_len(word)
+        };
+
+        if candidate_len <= width {
+            if !current.is_empty() {
+                current.push(' ');
+            }
+            current.push_str(word);
+        } else {
+            lines.push(std::mem::take(&mut current));
+            current.push_str(word);
+        }
+    }
+
+    if !current.is_empty() {
+        lines.push(current);
+    }
+    lines
+}
+
+fn chunk_prompt_echo_word(word: &str, width: usize) -> Vec<String> {
+    let width = width.max(1);
+    let mut chunks = Vec::new();
+    let mut current = String::new();
+    let mut current_width = 0usize;
+
+    for ch in word.chars() {
+        let char_width = char_display_width(ch);
+        if current_width > 0 && current_width + char_width > width {
+            chunks.push(std::mem::take(&mut current));
+            current_width = 0;
+        }
+        current.push(ch);
+        current_width += char_width;
+    }
+
+    if !current.is_empty() {
+        chunks.push(current);
+    }
+    chunks
+}
+
+fn pad_visible_width(text: &str, width: usize) -> String {
+    let mut output = text.to_string();
+    let visible = visible_len(text);
+    if visible < width {
+        output.push_str(&" ".repeat(width - visible));
+    }
+    output
 }
 
 fn style_prompt_echo(code: &str, text: impl AsRef<str>) -> String {
@@ -1233,9 +1337,9 @@ fn is_wide_char(ch: char) -> bool {
 mod tests {
     use super::{
         buffer_prefix, compose_dock_rows, insert_at, next_word_cursor, output_row,
-        parse_forced_terminal_size, previous_word_cursor, prompt_echo_line_with_color, remove_at,
-        remove_before, remove_previous_word, submitted_prompt_echo, take_ansi_sequence,
-        visible_len, visible_suffix, DockedComposer, DOCK_RESERVED_ROWS,
+        parse_forced_terminal_size, previous_word_cursor, prompt_echo_block_lines, remove_at,
+        remove_before, remove_previous_word, submitted_prompt_echo_with_options,
+        take_ansi_sequence, visible_len, visible_suffix, DockedComposer, DOCK_RESERVED_ROWS,
     };
 
     #[test]
@@ -1352,34 +1456,46 @@ mod tests {
     }
 
     #[test]
-    fn submitted_prompt_echo_uses_compact_previous_prompt_marker() {
-        let echo = submitted_prompt_echo("inspect README");
+    fn submitted_prompt_echo_uses_highlighted_prompt_block() {
+        let echo = submitted_prompt_echo_with_options("inspect README", 40, true);
         let plain = strip_ansi_for_test(&echo);
         let lines = plain.lines().collect::<Vec<_>>();
 
-        assert_eq!(lines.len(), 3);
+        assert_eq!(lines.len(), 5);
         assert_eq!(lines[0], "");
-        assert_eq!(lines[1], ">  inspect README");
-        assert_eq!(lines[2], "");
-        assert!(!echo.contains("48;2"));
+        assert_eq!(lines[1], " ".repeat(40));
+        assert!(lines[2].starts_with(">  inspect README"));
+        assert_eq!(visible_len(lines[2]), 40);
+        assert_eq!(lines[3], " ".repeat(40));
+        assert_eq!(lines[4], "");
+        assert!(echo.contains("48;2;40;42;54"));
+        assert!(echo.contains("\x1b[1;38;2;187;154;247;48;2;40;42;54m"));
     }
 
     #[test]
     fn submitted_prompt_echo_prefixes_multiline_prompts() {
-        let echo = submitted_prompt_echo("first line\nsecond line");
+        let echo = submitted_prompt_echo_with_options("first line\nsecond line", 32, false);
         let plain = strip_ansi_for_test(&echo);
 
         assert!(plain.contains(">  first line"));
         assert!(plain.contains(">  second line"));
-        assert_eq!(plain.lines().count(), 4);
+        assert!(plain
+            .lines()
+            .all(|line| line.is_empty() || visible_len(line) == 32));
     }
 
     #[test]
-    fn prompt_echo_line_can_render_cyan() {
-        let styled = prompt_echo_line_with_color("inspect README", true);
+    fn prompt_echo_block_wraps_and_pads_rows() {
+        let lines =
+            prompt_echo_block_lines("this is a longer prompt that should wrap cleanly", 30, true);
+        let plain = strip_ansi_for_test(&lines.join("\n"));
 
-        assert!(styled.contains("\x1b[36;1m"));
-        assert_eq!(strip_ansi_for_test(&styled), ">  inspect README");
+        assert!(lines.len() > 3);
+        assert!(plain.contains(">  this is a longer prompt"));
+        assert!(lines
+            .iter()
+            .all(|line| visible_len(&strip_ansi_for_test(line)) == 30));
+        assert!(lines[0].contains("48;2;40;42;54"));
     }
 
     #[test]
