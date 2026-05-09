@@ -1001,12 +1001,7 @@ fn next_slash_completion(
 ) -> Option<SlashCompletion> {
     let (token, token_end) = slash_completion_token(buffer, cursor)?;
     let prefix = previous_prefix.unwrap_or(token);
-    let matches = SLASH_COMMANDS
-        .iter()
-        .copied()
-        .enumerate()
-        .filter(|(_, command)| command.starts_with(prefix))
-        .collect::<Vec<_>>();
+    let matches = slash_command_match_entries(prefix);
     if matches.is_empty() {
         return None;
     }
@@ -1028,32 +1023,29 @@ fn next_slash_completion(
 }
 
 fn slash_completion_token(buffer: &str, cursor: usize) -> Option<(&str, usize)> {
-    if buffer.is_empty() || cursor > char_len(buffer) {
+    if cursor > char_len(buffer) {
         return None;
     }
-    let mut token_end = char_len(buffer);
-    for (index, ch) in buffer.chars().enumerate() {
-        if ch.is_whitespace() {
-            token_end = index;
-            break;
-        }
-    }
+    let (token, token_end) = first_slash_token_with_end(buffer)?;
     if cursor != token_end || token_end == 0 {
         return None;
     }
-    let token = &buffer[..byte_index(buffer, token_end)];
-    if token.starts_with('/') || token == "?" {
-        Some((token, token_end))
-    } else {
-        None
-    }
+    Some((token, token_end))
 }
 
-fn slash_command_matches(prefix: &str) -> Vec<&'static str> {
+fn slash_command_match_entries(prefix: &str) -> Vec<(usize, &'static str)> {
     SLASH_COMMANDS
         .iter()
         .copied()
-        .filter(|command| command.starts_with(prefix))
+        .enumerate()
+        .filter(|(_, command)| command.starts_with(prefix))
+        .collect()
+}
+
+fn slash_command_matches(prefix: &str) -> Vec<&'static str> {
+    slash_command_match_entries(prefix)
+        .into_iter()
+        .map(|(_, command)| command)
         .collect()
 }
 
@@ -1067,6 +1059,10 @@ fn slash_completion_footer(buffer: &str) -> Option<String> {
 }
 
 fn first_slash_token(buffer: &str) -> Option<&str> {
+    first_slash_token_with_end(buffer).map(|(token, _)| token)
+}
+
+fn first_slash_token_with_end(buffer: &str) -> Option<(&str, usize)> {
     if buffer.is_empty() {
         return None;
     }
@@ -1082,7 +1078,7 @@ fn first_slash_token(buffer: &str) -> Option<&str> {
     }
     let token = &buffer[..byte_index(buffer, token_end)];
     if token.starts_with('/') || token == "?" {
-        Some(token)
+        Some((token, token_end))
     } else {
         None
     }
