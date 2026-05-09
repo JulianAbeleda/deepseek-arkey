@@ -22,7 +22,8 @@ const DOCK_RESERVED_ROWS: usize = 7;
 const DOCK_VERTICAL_PADDING_ROWS: usize = 2;
 const DOCK_HELP_TEXT: &str = "Enter send · ? help · /model · /debug · /runtime · /end · /exit";
 const SLASH_COMMANDS: &[&str] = &[
-    "/chat", "/agent", "/root", "/model", "/debug", "/runtime", "/status", "/end", "/exit", "?",
+    "/chat", "/agent", "/root", "/model", "/debug", "/runtime", "/status", "/end", "/exit",
+    "/help", "?",
 ];
 
 pub struct InlineInput {
@@ -1568,6 +1569,21 @@ mod tests {
             Some("Tab complete  /root  /runtime".to_string())
         );
         assert_eq!(slash_command_matches("/sta"), vec!["/status"]);
+    }
+
+    #[test]
+    fn help_slash_command_completes_from_h_prefix() {
+        let mut composer = DockedComposer::new("prompt › ".to_string());
+        composer.buffer = "/h".to_string();
+        composer.cursor = 2;
+
+        assert_eq!(
+            slash_completion_footer("/h"),
+            Some("Tab complete  /help".to_string())
+        );
+        assert!(composer.apply_slash_completion());
+        assert_eq!(composer.buffer, "/help");
+        assert_eq!(composer.cursor, 5);
     }
 
     #[test]
