@@ -13,17 +13,19 @@ use crate::terminal_width::{
     char_display_width, display_width, pad_display_width, wrap_plain_text,
 };
 
+mod approval;
+mod slash;
+
+pub use approval::ApprovalChoice;
+use approval::{approval_panel_rows, ApprovalModal};
+#[cfg(test)]
+use slash::slash_command_matches;
+use slash::{next_slash_completion, slash_completion_panel_rows};
+
 pub enum InputAction {
     Submit(String),
     Approval(ApprovalChoice),
     Exit,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ApprovalChoice {
-    ApproveOnce,
-    ApproveForSession,
-    Reject,
 }
 
 const DOCK_RESERVED_ROWS: usize = 7;
@@ -83,34 +85,6 @@ pub struct DockedComposer {
     rendered_dock_rows: usize,
     cursor_hidden: bool,
 }
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct ApprovalModal {
-    tool: String,
-    summary: String,
-    selected_index: usize,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct ApprovalOption {
-    label: &'static str,
-    choice: ApprovalChoice,
-}
-
-const APPROVAL_OPTIONS: &[ApprovalOption] = &[
-    ApprovalOption {
-        label: "Approve once",
-        choice: ApprovalChoice::ApproveOnce,
-    },
-    ApprovalOption {
-        label: "Approve for this session",
-        choice: ApprovalChoice::ApproveForSession,
-    },
-    ApprovalOption {
-        label: "Reject",
-        choice: ApprovalChoice::Reject,
-    },
-];
 
 pub struct RawModeSession;
 
@@ -310,11 +284,7 @@ impl DockedComposer {
         self.cursor = 0;
         self.history_index = None;
         self.reset_slash_completion();
-        self.approval_modal = Some(ApprovalModal {
-            tool,
-            summary,
-            selected_index: 0,
-        });
+        self.approval_modal = Some(ApprovalModal::new(tool, summary));
         self.hide_cursor()?;
         self.render()
     }
@@ -718,22 +688,14 @@ impl DockedComposer {
         let Some(modal) = self.approval_modal.as_mut() else {
             return Ok(());
         };
-        let option_count = APPROVAL_OPTIONS.len();
-        modal.selected_index = if delta.is_negative() {
-            modal
-                .selected_index
-                .checked_sub(delta.unsigned_abs())
-                .unwrap_or(option_count - 1)
-        } else {
-            (modal.selected_index + delta as usize) % option_count
-        };
+        modal.move_selection(delta);
         self.render()
     }
 
     fn selected_approval_choice(&self) -> Option<ApprovalChoice> {
         self.approval_modal
             .as_ref()
-            .map(|modal| APPROVAL_OPTIONS[modal.selected_index].choice)
+            .map(ApprovalModal::selected_choice)
     }
 
     fn approval_panel_rows(&self) -> Vec<String> {
@@ -1200,261 +1162,6 @@ fn remove_previous_word(buffer: &mut String, cursor: &mut usize) -> bool {
     buffer.replace_range(start_byte..end_byte, "");
     *cursor = start;
     true
-}
-
-struct SlashCompletion {
-    command: String,
-    index: usize,
-    prefix: String,
-    token_end: usize,
-}
-
-fn next_slash_completion(
-    buffer: &str,
-    cursor: usize,
-    previous_index: Option<usize>,
-    previous_prefix: Option<&str>,
-) -> Option<SlashCompletion> {
-    let (token, token_end) = slash_completion_token(buffer, cursor)?;
-    let prefix = previous_prefix.unwrap_or(token);
-    let matches = slash_command_match_entries(prefix);
-    if matches.is_empty() {
-        return None;
-    }
-    let selected = previous_index
-        .and_then(|index| {
-            matches
-                .iter()
-                .position(|(command_index, _)| *command_index == index)
-        })
-        .map(|position| (position + 1) % matches.len())
-        .unwrap_or(0);
-    let (index, command) = matches[selected];
-    Some(SlashCompletion {
-        command: command.command.to_string(),
-        index,
-        prefix: prefix.to_string(),
-        token_end,
-    })
-}
-
-fn slash_completion_token(buffer: &str, cursor: usize) -> Option<(&str, usize)> {
-    if cursor > char_len(buffer) {
-        return None;
-    }
-    let (token, token_end) = first_slash_token_with_end(buffer)?;
-    if cursor != token_end || token_end == 0 {
-        return None;
-    }
-    Some((token, token_end))
-}
-
-fn slash_command_match_entries(prefix: &str) -> Vec<(usize, SlashCommandSpec)> {
-    SLASH_COMMANDS
-        .iter()
-        .copied()
-        .enumerate()
-        .filter(|(_, command)| command.command.starts_with(prefix))
-        .collect()
-}
-
-#[cfg(test)]
-fn slash_command_matches(prefix: &str) -> Vec<&'static str> {
-    slash_command_match_entries(prefix)
-        .into_iter()
-        .map(|(_, command)| command.command)
-        .collect()
-}
-
-fn slash_completion_panel_rows(
-    buffer: &str,
-    selected_command_index: Option<usize>,
-    width: usize,
-) -> Vec<String> {
-    let width = width.max(1);
-    let Some(token) = first_slash_token(buffer) else {
-        return Vec::new();
-    };
-    let matches = slash_command_match_entries(token);
-    let mut rows = Vec::new();
-    rows.push(muted_dock_help(&"─".repeat(width)));
-    if matches.is_empty() {
-        rows.push(muted_dock_help(&pad_display_width(
-            "  No slash command match",
-            width,
-        )));
-        return rows;
-    }
-
-    let marker_width = 2usize;
-    let command_width = slash_panel_command_width(&matches, width, marker_width);
-    let gap_width = if width > marker_width + command_width + 6 {
-        3
-    } else {
-        1
-    };
-    let description_width = width.saturating_sub(marker_width + command_width + gap_width);
-
-    rows.extend(matches.into_iter().map(|(index, command)| {
-        slash_completion_panel_row(
-            command,
-            selected_command_index == Some(index),
-            marker_width,
-            command_width,
-            gap_width,
-            description_width,
-            width,
-        )
-    }));
-    rows
-}
-
-fn slash_panel_command_width(
-    matches: &[(usize, SlashCommandSpec)],
-    width: usize,
-    marker_width: usize,
-) -> usize {
-    let longest = matches
-        .iter()
-        .map(|(_, command)| visible_len(command.command))
-        .max()
-        .unwrap_or(0);
-    let usable_width = width.saturating_sub(marker_width);
-    longest.saturating_add(2).min(usable_width)
-}
-
-fn slash_completion_panel_row(
-    command: SlashCommandSpec,
-    selected: bool,
-    marker_width: usize,
-    command_width: usize,
-    gap_width: usize,
-    description_width: usize,
-    width: usize,
-) -> String {
-    let marker = if selected { "› " } else { "  " };
-    let command_text = truncate_display_text(command.command, command_width);
-    let description = truncate_display_text(command.description, description_width);
-    let text = format!(
-        "{}{}{}{}",
-        pad_display_width(marker, marker_width),
-        pad_display_width(&command_text, command_width),
-        " ".repeat(gap_width),
-        pad_display_width(&description, description_width)
-    );
-    muted_dock_help(&pad_display_width(&text, width))
-}
-
-fn approval_panel_rows(modal: &ApprovalModal, width: usize) -> Vec<String> {
-    let width = width.max(1);
-    let inner_width = width.saturating_sub(2);
-    let mut rows = Vec::new();
-    rows.push(muted_dock_help(&approval_top_border(width)));
-    rows.push(approval_panel_content_row(
-        &format!("{} requires approval", modal.tool),
-        width,
-    ));
-
-    let preview_rows = approval_preview_rows(&modal.summary, inner_width);
-    if let Some(preview) = preview_rows.first() {
-        rows.push(approval_panel_content_row(preview, width));
-    } else {
-        rows.push(approval_panel_content_row("", width));
-    }
-
-    for (index, option) in APPROVAL_OPTIONS.iter().enumerate() {
-        let marker = if modal.selected_index == index {
-            "→"
-        } else {
-            " "
-        };
-        rows.push(approval_panel_content_row(
-            &format!("{marker} [{}] {}", index + 1, option.label),
-            width,
-        ));
-    }
-
-    rows.push(muted_dock_help(&approval_bottom_border(width)));
-    rows.truncate(DOCK_RESERVED_ROWS);
-    rows
-}
-
-fn approval_preview_rows(summary: &str, width: usize) -> Vec<String> {
-    let candidates = summary
-        .lines()
-        .map(str::trim)
-        .filter(|line| {
-            !line.is_empty()
-                && !line.starts_with("approval required:")
-                && !line.starts_with("Type ")
-        })
-        .collect::<Vec<_>>();
-    let preview = candidates
-        .iter()
-        .find(|line| line.starts_with("command:") || line.starts_with("path:"))
-        .copied()
-        .or_else(|| candidates.first().copied());
-    preview
-        .into_iter()
-        .map(|line| truncate_display_text(line, width.saturating_sub(2)))
-        .collect()
-}
-
-fn approval_top_border(width: usize) -> String {
-    if width <= 2 {
-        return "─".repeat(width);
-    }
-    let title = "─ approval ";
-    let right = width.saturating_sub(2 + visible_len(title));
-    format!("╭{}{}╮", title, "─".repeat(right))
-}
-
-fn approval_bottom_border(width: usize) -> String {
-    if width <= 2 {
-        return "─".repeat(width);
-    }
-    let hint = " ↑/↓ Enter Esc ";
-    let hint_width = visible_len(hint);
-    if width <= hint_width + 2 {
-        return format!("╰{}╯", "─".repeat(width - 2));
-    }
-    let left = width.saturating_sub(hint_width + 2);
-    format!("╰{}{}╯", "─".repeat(left), hint)
-}
-
-fn approval_panel_content_row(text: &str, width: usize) -> String {
-    if width <= 2 {
-        return muted_dock_help(&truncate_display_text(text, width));
-    }
-    let inner_width = width - 2;
-    let content = truncate_display_text(text, inner_width);
-    muted_dock_help(&format!("│{}│", pad_display_width(&content, inner_width)))
-}
-
-fn first_slash_token(buffer: &str) -> Option<&str> {
-    first_slash_token_with_end(buffer).map(|(token, _)| token)
-}
-
-fn first_slash_token_with_end(buffer: &str) -> Option<(&str, usize)> {
-    if buffer.is_empty() {
-        return None;
-    }
-    let mut token_end = char_len(buffer);
-    for (index, ch) in buffer.chars().enumerate() {
-        if ch.is_whitespace() {
-            token_end = index;
-            break;
-        }
-    }
-    if token_end == 0 {
-        return None;
-    }
-    let token = &buffer[..byte_index(buffer, token_end)];
-    if token.starts_with('/') || token == "?" {
-        Some((token, token_end))
-    } else {
-        None
-    }
 }
 
 struct ComposedDockRows {
@@ -2059,11 +1766,10 @@ mod tests {
 
     #[test]
     fn approval_modal_renders_inside_dock_without_input_row() {
-        let modal = ApprovalModal {
-            tool: "run_shell".to_string(),
-            summary: "approval required: run_shell\ncwd: .\nreason: run tests\ncommand: cargo test --offline\nType yes run to approve, n to deny.\n".to_string(),
-            selected_index: 0,
-        };
+        let modal = ApprovalModal::new(
+            "run_shell".to_string(),
+            "approval required: run_shell\ncwd: .\nreason: run tests\ncommand: cargo test --offline\nType yes run to approve, n to deny.\n".to_string(),
+        );
         let panel = approval_panel_rows(&modal, 56);
         let rows = compose_rendered_dock_rows("p> ", "hidden", 6, 56, &panel, true);
         let plain = strip_ansi_for_test(&rows.lines.join("\n"));
@@ -2079,6 +1785,11 @@ mod tests {
 
     #[test]
     fn approval_modal_selection_maps_to_session_choice() {
+        let mut modal = ApprovalModal::new(
+            "propose_patch".to_string(),
+            "approval required: propose_patch\npath: src/input.rs\n".to_string(),
+        );
+        modal.move_selection(1);
         let composer = DockedComposer {
             prompt: "p> ".to_string(),
             buffer: String::new(),
@@ -2087,11 +1798,7 @@ mod tests {
             history_index: None,
             slash_completion_index: None,
             slash_completion_prefix: None,
-            approval_modal: Some(ApprovalModal {
-                tool: "propose_patch".to_string(),
-                summary: "approval required: propose_patch\npath: src/input.rs\n".to_string(),
-                selected_index: 1,
-            }),
+            approval_modal: Some(modal),
             stream_buffer: String::new(),
             status_active: false,
             transcript_lines: Vec::new(),
