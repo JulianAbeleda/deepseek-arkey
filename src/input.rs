@@ -759,15 +759,13 @@ fn submitted_prompt_echo(submitted: &str) -> String {
     let mut lines = submitted.split('\n').peekable();
 
     if lines.peek().is_none() {
-        output.push_str(&prompt_echo_marker("> "));
+        output.push_str(&prompt_echo_line(""));
     } else {
         for (index, line) in lines.enumerate() {
             if index > 0 {
                 output.push('\n');
             }
-            output.push_str(&prompt_echo_marker("> "));
-            output.push(' ');
-            output.push_str(line);
+            output.push_str(&prompt_echo_line(line));
         }
     }
 
@@ -775,8 +773,12 @@ fn submitted_prompt_echo(submitted: &str) -> String {
     output
 }
 
-fn prompt_echo_marker(text: impl AsRef<str>) -> String {
-    style_prompt_echo("36;1", text)
+fn prompt_echo_line(text: &str) -> String {
+    prompt_echo_line_with_color(text, std::env::var_os("NO_COLOR").is_none())
+}
+
+fn prompt_echo_line_with_color(text: &str, color_enabled: bool) -> String {
+    style_prompt_echo_with_color("36;1", format!(">  {text}"), color_enabled)
 }
 
 fn style_prompt_echo(code: &str, text: impl AsRef<str>) -> String {
@@ -1231,9 +1233,9 @@ fn is_wide_char(ch: char) -> bool {
 mod tests {
     use super::{
         buffer_prefix, compose_dock_rows, insert_at, next_word_cursor, output_row,
-        parse_forced_terminal_size, previous_word_cursor, remove_at, remove_before,
-        remove_previous_word, style_prompt_echo_with_color, submitted_prompt_echo,
-        take_ansi_sequence, visible_len, visible_suffix, DockedComposer, DOCK_RESERVED_ROWS,
+        parse_forced_terminal_size, previous_word_cursor, prompt_echo_line_with_color, remove_at,
+        remove_before, remove_previous_word, submitted_prompt_echo, take_ansi_sequence,
+        visible_len, visible_suffix, DockedComposer, DOCK_RESERVED_ROWS,
     };
 
     #[test]
@@ -1373,11 +1375,11 @@ mod tests {
     }
 
     #[test]
-    fn prompt_echo_marker_can_render_cyan() {
-        let styled = style_prompt_echo_with_color("36;1", ">", true);
+    fn prompt_echo_line_can_render_cyan() {
+        let styled = prompt_echo_line_with_color("inspect README", true);
 
         assert!(styled.contains("\x1b[36;1m"));
-        assert_eq!(strip_ansi_for_test(&styled), ">");
+        assert_eq!(strip_ansi_for_test(&styled), ">  inspect README");
     }
 
     #[test]
