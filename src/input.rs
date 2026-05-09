@@ -36,6 +36,8 @@ pub struct DockedComposer {
     cursor: usize,
     history: Vec<String>,
     history_index: Option<usize>,
+    slash_completion_index: Option<usize>,
+    slash_completion_prefix: Option<String>,
     stream_buffer: String,
     status_active: bool,
     transcript_lines: Vec<String>,
@@ -196,6 +198,8 @@ impl DockedComposer {
             cursor: 0,
             history: Vec::new(),
             history_index: None,
+            slash_completion_index: None,
+            slash_completion_prefix: None,
             stream_buffer: String::new(),
             status_active: false,
             transcript_lines: Vec::new(),
@@ -224,6 +228,7 @@ impl DockedComposer {
             &self.prompt,
             &self.buffer,
             self.cursor,
+            self.slash_completion_footer().as_deref(),
             self.rendered_dock_rows,
         )?;
         Ok(())
@@ -254,6 +259,7 @@ impl DockedComposer {
             &self.prompt,
             &self.buffer,
             self.cursor,
+            self.slash_completion_footer().as_deref(),
             self.rendered_dock_rows,
         )?;
         execute!(io::stdout(), MoveTo(column, row)).map_err(|err| err.to_string())?;
@@ -280,6 +286,7 @@ impl DockedComposer {
                     let submitted = std::mem::take(&mut self.buffer);
                     self.cursor = 0;
                     self.history_index = None;
+                    self.reset_slash_completion();
                     if !submitted.trim().is_empty() {
                         self.history.push(submitted.clone());
                     }
@@ -304,6 +311,8 @@ impl DockedComposer {
                 }
                 KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                     if remove_previous_word(&mut self.buffer, &mut self.cursor) {
+                        self.history_index = None;
+                        self.reset_slash_completion();
                         self.render()?;
                     }
                     Ok(None)
@@ -312,11 +321,14 @@ impl DockedComposer {
                     self.buffer.clear();
                     self.cursor = 0;
                     self.history_index = None;
+                    self.reset_slash_completion();
                     self.render()?;
                     Ok(None)
                 }
                 KeyCode::Char(ch) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
                     insert_at(&mut self.buffer, &mut self.cursor, ch);
+                    self.history_index = None;
+                    self.reset_slash_completion();
                     self.render()?;
                     Ok(None)
                 }
@@ -325,15 +337,21 @@ impl DockedComposer {
                         || key.modifiers.contains(KeyModifiers::CONTROL)
                     {
                         if remove_previous_word(&mut self.buffer, &mut self.cursor) {
+                            self.history_index = None;
+                            self.reset_slash_completion();
                             self.render()?;
                         }
                     } else if remove_before(&mut self.buffer, &mut self.cursor).is_some() {
+                        self.history_index = None;
+                        self.reset_slash_completion();
                         self.render()?;
                     }
                     Ok(None)
                 }
                 KeyCode::Delete => {
                     if remove_at(&mut self.buffer, self.cursor).is_some() {
+                        self.history_index = None;
+                        self.reset_slash_completion();
                         self.render()?;
                     }
                     Ok(None)
@@ -346,6 +364,7 @@ impl DockedComposer {
                     } else {
                         self.cursor.saturating_sub(1)
                     };
+                    self.reset_slash_completion();
                     self.render()?;
                     Ok(None)
                 }
@@ -357,16 +376,19 @@ impl DockedComposer {
                     } else {
                         (self.cursor + 1).min(char_len(&self.buffer))
                     };
+                    self.reset_slash_completion();
                     self.render()?;
                     Ok(None)
                 }
                 KeyCode::Home => {
                     self.cursor = 0;
+                    self.reset_slash_completion();
                     self.render()?;
                     Ok(None)
                 }
                 KeyCode::End => {
                     self.cursor = char_len(&self.buffer);
+                    self.reset_slash_completion();
                     self.render()?;
                     Ok(None)
                 }
@@ -374,6 +396,7 @@ impl DockedComposer {
                     if let Some(line) = self.previous_history() {
                         self.buffer = line;
                         self.cursor = char_len(&self.buffer);
+                        self.reset_slash_completion();
                         self.render()?;
                     }
                     Ok(None)
@@ -382,6 +405,7 @@ impl DockedComposer {
                     if let Some(line) = self.next_history() {
                         self.buffer = line;
                         self.cursor = char_len(&self.buffer);
+                        self.reset_slash_completion();
                         self.render()?;
                     }
                     Ok(None)
@@ -493,35 +517,42 @@ impl DockedComposer {
     fn insert_text(&mut self, text: &str) -> Result<(), String> {
         insert_str_at(&mut self.buffer, &mut self.cursor, text);
         self.history_index = None;
+        self.reset_slash_completion();
         self.render()
     }
 
     fn complete_slash_command(&mut self) -> Result<(), String> {
-        let prefix = self.buffer.trim_start();
-        if !prefix.starts_with('/') && prefix != "?" {
-            return Ok(());
+        if self.apply_slash_completion() {
+            self.render()?;
         }
-        let leading_spaces = self.buffer.len() - prefix.len();
-        let token = prefix.split_whitespace().next().unwrap_or(prefix);
-        let matches = SLASH_COMMANDS
-            .iter()
-            .copied()
-            .filter(|command| command.starts_with(token))
-            .collect::<Vec<_>>();
-        match matches.as_slice() {
-            [command] => {
-                let rest =
-                    &self.buffer[byte_index(&self.buffer, leading_spaces + char_len(token))..];
-                self.buffer = format!("{}{}{}", " ".repeat(leading_spaces), command, rest);
-                self.cursor = leading_spaces + char_len(command);
-                self.render()
-            }
-            [] => Ok(()),
-            _ => {
-                self.print_above(&format!("commands: {}\n", matches.join(" ")))?;
-                Ok(())
-            }
-        }
+        Ok(())
+    }
+
+    fn apply_slash_completion(&mut self) -> bool {
+        let Some(next) = next_slash_completion(
+            &self.buffer,
+            self.cursor,
+            self.slash_completion_index,
+            self.slash_completion_prefix.as_deref(),
+        ) else {
+            return false;
+        };
+        let rest = &self.buffer[byte_index(&self.buffer, next.token_end)..];
+        self.buffer = format!("{}{}", next.command, rest);
+        self.cursor = char_len(&next.command);
+        self.history_index = None;
+        self.slash_completion_index = Some(next.index);
+        self.slash_completion_prefix = Some(next.prefix);
+        true
+    }
+
+    fn reset_slash_completion(&mut self) {
+        self.slash_completion_index = None;
+        self.slash_completion_prefix = None;
+    }
+
+    fn slash_completion_footer(&self) -> Option<String> {
+        slash_completion_footer(&self.buffer)
     }
 
     fn scroll_transcript(&mut self, pages: usize) -> Result<(), String> {
@@ -715,12 +746,10 @@ fn render_dock_lines(
     prompt: &str,
     buffer: &str,
     cursor: usize,
+    footer: Option<&str>,
     previous_rows: usize,
 ) -> Result<usize, String> {
-    let mut rows = compose_dock_rows(prompt, buffer, cursor, terminal_width());
-    rows.lines.insert(0, String::new());
-    rows.lines.push(muted_dock_help(DOCK_HELP_TEXT));
-    rows.cursor_row += 1;
+    let rows = compose_rendered_dock_rows(prompt, buffer, cursor, terminal_width(), footer);
     let input_capacity = DOCK_RESERVED_ROWS.saturating_sub(DOCK_VERTICAL_PADDING_ROWS);
     let visible_rows = rows
         .lines
@@ -757,6 +786,23 @@ fn render_dock_lines(
     .map_err(|err| err.to_string())?;
     stdout.flush().map_err(|err| err.to_string())?;
     Ok(display_lines.len().min(DOCK_RESERVED_ROWS))
+}
+
+fn compose_rendered_dock_rows(
+    prompt: &str,
+    buffer: &str,
+    cursor: usize,
+    width: usize,
+    footer: Option<&str>,
+) -> ComposedDockRows {
+    let mut rows = compose_dock_rows(prompt, buffer, cursor, width);
+    rows.lines.insert(0, String::new());
+    if let Some(footer) = footer {
+        rows.lines.push(muted_dock_help(footer));
+    }
+    rows.lines.push(muted_dock_help(DOCK_HELP_TEXT));
+    rows.cursor_row += 1;
+    rows
 }
 
 fn muted_dock_help(text: &str) -> String {
@@ -937,6 +983,108 @@ fn remove_previous_word(buffer: &mut String, cursor: &mut usize) -> bool {
     buffer.replace_range(start_byte..end_byte, "");
     *cursor = start;
     true
+}
+
+struct SlashCompletion {
+    command: String,
+    index: usize,
+    prefix: String,
+    token_end: usize,
+}
+
+fn next_slash_completion(
+    buffer: &str,
+    cursor: usize,
+    previous_index: Option<usize>,
+    previous_prefix: Option<&str>,
+) -> Option<SlashCompletion> {
+    let (token, token_end) = slash_completion_token(buffer, cursor)?;
+    let prefix = previous_prefix.unwrap_or(token);
+    let matches = SLASH_COMMANDS
+        .iter()
+        .copied()
+        .enumerate()
+        .filter(|(_, command)| command.starts_with(prefix))
+        .collect::<Vec<_>>();
+    if matches.is_empty() {
+        return None;
+    }
+    let selected = previous_index
+        .and_then(|index| {
+            matches
+                .iter()
+                .position(|(command_index, _)| *command_index == index)
+        })
+        .map(|position| (position + 1) % matches.len())
+        .unwrap_or(0);
+    let (index, command) = matches[selected];
+    Some(SlashCompletion {
+        command: command.to_string(),
+        index,
+        prefix: prefix.to_string(),
+        token_end,
+    })
+}
+
+fn slash_completion_token(buffer: &str, cursor: usize) -> Option<(&str, usize)> {
+    if buffer.is_empty() || cursor > char_len(buffer) {
+        return None;
+    }
+    let mut token_end = char_len(buffer);
+    for (index, ch) in buffer.chars().enumerate() {
+        if ch.is_whitespace() {
+            token_end = index;
+            break;
+        }
+    }
+    if cursor != token_end || token_end == 0 {
+        return None;
+    }
+    let token = &buffer[..byte_index(buffer, token_end)];
+    if token.starts_with('/') || token == "?" {
+        Some((token, token_end))
+    } else {
+        None
+    }
+}
+
+fn slash_command_matches(prefix: &str) -> Vec<&'static str> {
+    SLASH_COMMANDS
+        .iter()
+        .copied()
+        .filter(|command| command.starts_with(prefix))
+        .collect()
+}
+
+fn slash_completion_footer(buffer: &str) -> Option<String> {
+    let token = first_slash_token(buffer)?;
+    let matches = slash_command_matches(token);
+    if matches.is_empty() {
+        return Some("No slash command match".to_string());
+    }
+    Some(format!("Tab complete  {}", matches.join("  ")))
+}
+
+fn first_slash_token(buffer: &str) -> Option<&str> {
+    if buffer.is_empty() {
+        return None;
+    }
+    let mut token_end = char_len(buffer);
+    for (index, ch) in buffer.chars().enumerate() {
+        if ch.is_whitespace() {
+            token_end = index;
+            break;
+        }
+    }
+    if token_end == 0 {
+        return None;
+    }
+    let token = &buffer[..byte_index(buffer, token_end)];
+    if token.starts_with('/') || token == "?" {
+        Some(token)
+    } else {
+        None
+    }
 }
 
 struct ComposedDockRows {
@@ -1258,10 +1406,12 @@ fn is_sgr_reset(sequence: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        buffer_prefix, compose_dock_rows, insert_at, next_word_cursor, output_row,
-        parse_forced_terminal_size, previous_word_cursor, prompt_echo_block_lines, remove_at,
-        remove_before, remove_previous_word, submitted_prompt_echo_with_options,
-        take_ansi_sequence, visible_len, visible_suffix, DockedComposer, DOCK_RESERVED_ROWS,
+        buffer_prefix, compose_dock_rows, compose_rendered_dock_rows, insert_at,
+        next_slash_completion, next_word_cursor, output_row, parse_forced_terminal_size,
+        previous_word_cursor, prompt_echo_block_lines, remove_at, remove_before,
+        remove_previous_word, slash_command_matches, slash_completion_footer,
+        submitted_prompt_echo_with_options, take_ansi_sequence, visible_len, visible_suffix,
+        DockedComposer, DOCK_RESERVED_ROWS,
     };
 
     #[test]
@@ -1357,6 +1507,93 @@ mod tests {
         assert_eq!(rows.lines.last().map(String::as_str), Some(""));
         assert_eq!(rows.cursor_row, 1);
         assert!(DOCK_RESERVED_ROWS >= rows.lines.len());
+    }
+
+    #[test]
+    fn tab_completes_unique_slash_command_prefix() {
+        let mut composer = DockedComposer::new("prompt › ".to_string());
+        composer.buffer = "/sta".to_string();
+        composer.cursor = 4;
+
+        assert!(composer.apply_slash_completion());
+        assert_eq!(composer.buffer, "/status");
+        assert_eq!(composer.cursor, 7);
+    }
+
+    #[test]
+    fn repeated_tab_cycles_multiple_slash_matches() {
+        let mut composer = DockedComposer::new("prompt › ".to_string());
+        composer.buffer = "/r".to_string();
+        composer.cursor = 2;
+
+        assert!(composer.apply_slash_completion());
+        assert_eq!(composer.buffer, "/root");
+        assert_eq!(composer.cursor, 5);
+        assert!(composer.apply_slash_completion());
+        assert_eq!(composer.buffer, "/runtime");
+        assert_eq!(composer.cursor, 8);
+        assert!(composer.apply_slash_completion());
+        assert_eq!(composer.buffer, "/root");
+    }
+
+    #[test]
+    fn slash_completion_preserves_trailing_text_after_command_token() {
+        let completion = next_slash_completion("/r path", 2, None, None).unwrap();
+        let rest = &"/r path"[super::byte_index("/r path", completion.token_end)..];
+
+        assert_eq!(completion.command, "/root");
+        assert_eq!(rest, " path");
+    }
+
+    #[test]
+    fn editing_after_completion_resets_slash_cycle() {
+        let mut composer = DockedComposer::new("prompt › ".to_string());
+        composer.buffer = "/r".to_string();
+        composer.cursor = 2;
+
+        assert!(composer.apply_slash_completion());
+        assert!(composer.slash_completion_index.is_some());
+        insert_at(&mut composer.buffer, &mut composer.cursor, 'x');
+        composer.reset_slash_completion();
+
+        assert_eq!(composer.buffer, "/rootx");
+        assert_eq!(composer.slash_completion_index, None);
+        assert_eq!(composer.slash_completion_prefix, None);
+    }
+
+    #[test]
+    fn slash_draft_renders_footer_suggestions() {
+        assert_eq!(
+            slash_completion_footer("/r"),
+            Some("Tab complete  /root  /runtime".to_string())
+        );
+        assert_eq!(slash_command_matches("/sta"), vec!["/status"]);
+    }
+
+    #[test]
+    fn no_match_slash_draft_renders_footer() {
+        assert_eq!(
+            slash_completion_footer("/zzz"),
+            Some("No slash command match".to_string())
+        );
+    }
+
+    #[test]
+    fn footer_does_not_alter_input_cursor_position() {
+        let rows = compose_rendered_dock_rows(
+            "p> ",
+            "/r",
+            2,
+            20,
+            slash_completion_footer("/r").as_deref(),
+        );
+
+        assert_eq!(
+            strip_ansi_for_test(&rows.lines[2]),
+            "Tab complete  /root  /runtime"
+        );
+        assert_eq!(rows.cursor_row, 1);
+        assert_eq!(rows.cursor_col, 5);
     }
 
     #[test]
