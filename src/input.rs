@@ -17,7 +17,7 @@ mod approval;
 mod slash;
 
 pub use approval::ApprovalChoice;
-use approval::{approval_panel_rows, ApprovalModal};
+use approval::{approval_panel_rows, ApprovalKeyAction, ApprovalModal};
 #[cfg(test)]
 use slash::slash_command_matches;
 use slash::{next_slash_completion, slash_completion_panel_rows};
@@ -26,6 +26,11 @@ pub enum InputAction {
     Submit(String),
     Approval(ApprovalChoice),
     Exit,
+}
+
+enum ApprovalModalEvent {
+    Consumed(Option<InputAction>),
+    PassThrough,
 }
 
 const DOCK_RESERVED_ROWS: usize = 7;
@@ -338,45 +343,17 @@ impl DockedComposer {
         if !event::poll(timeout).map_err(|err| err.to_string())? {
             return Ok(None);
         }
-        match event::read().map_err(|err| err.to_string())? {
+        let event = event::read().map_err(|err| err.to_string())?;
+        if let ApprovalModalEvent::Consumed(action) = self.handle_approval_modal_event(&event)? {
+            return Ok(action);
+        }
+        match event {
             Event::Paste(text) => {
-                if self.approval_modal.is_some() {
-                    return Ok(None);
-                }
                 self.insert_text(&text)?;
                 Ok(None)
             }
             Event::Key(key) => match key.code {
-                KeyCode::Up if self.approval_modal.is_some() => {
-                    self.move_approval_selection(-1)?;
-                    Ok(None)
-                }
-                KeyCode::Down if self.approval_modal.is_some() => {
-                    self.move_approval_selection(1)?;
-                    Ok(None)
-                }
-                KeyCode::Char('1') if self.approval_modal.is_some() => {
-                    Ok(Some(InputAction::Approval(ApprovalChoice::ApproveOnce)))
-                }
-                KeyCode::Char('2') if self.approval_modal.is_some() => Ok(Some(
-                    InputAction::Approval(ApprovalChoice::ApproveForSession),
-                )),
-                KeyCode::Char('3') if self.approval_modal.is_some() => {
-                    Ok(Some(InputAction::Approval(ApprovalChoice::Reject)))
-                }
-                KeyCode::Esc if self.approval_modal.is_some() => {
-                    Ok(Some(InputAction::Approval(ApprovalChoice::Reject)))
-                }
-                KeyCode::Char('c') | KeyCode::Char('d')
-                    if self.approval_modal.is_some()
-                        && key.modifiers.contains(KeyModifiers::CONTROL) =>
-                {
-                    Ok(Some(InputAction::Approval(ApprovalChoice::Reject)))
-                }
                 KeyCode::Enter => {
-                    if let Some(choice) = self.selected_approval_choice() {
-                        return Ok(Some(InputAction::Approval(choice)));
-                    }
                     if key.modifiers.contains(KeyModifiers::SHIFT)
                         || key.modifiers.contains(KeyModifiers::ALT)
                     {
@@ -394,9 +371,6 @@ impl DockedComposer {
                     Ok(Some(InputAction::Submit(submitted)))
                 }
                 KeyCode::Tab => {
-                    if self.approval_modal.is_some() {
-                        return Ok(None);
-                    }
                     self.complete_slash_command()?;
                     Ok(None)
                 }
@@ -409,16 +383,10 @@ impl DockedComposer {
                     Ok(None)
                 }
                 KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    if self.approval_modal.is_some() {
-                        return Ok(Some(InputAction::Approval(ApprovalChoice::Reject)));
-                    }
                     self.print_above("")?;
                     Ok(Some(InputAction::Exit))
                 }
                 KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    if self.approval_modal.is_some() {
-                        return Ok(None);
-                    }
                     if remove_previous_word(&mut self.buffer, &mut self.cursor) {
                         self.history_index = None;
                         self.reset_slash_completion();
@@ -427,9 +395,6 @@ impl DockedComposer {
                     Ok(None)
                 }
                 KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    if self.approval_modal.is_some() {
-                        return Ok(Some(InputAction::Approval(ApprovalChoice::Reject)));
-                    }
                     self.buffer.clear();
                     self.cursor = 0;
                     self.history_index = None;
@@ -438,9 +403,6 @@ impl DockedComposer {
                     Ok(None)
                 }
                 KeyCode::Char(ch) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    if self.approval_modal.is_some() {
-                        return Ok(None);
-                    }
                     insert_at(&mut self.buffer, &mut self.cursor, ch);
                     self.history_index = None;
                     self.reset_slash_completion();
@@ -448,9 +410,6 @@ impl DockedComposer {
                     Ok(None)
                 }
                 KeyCode::Backspace => {
-                    if self.approval_modal.is_some() {
-                        return Ok(None);
-                    }
                     if key.modifiers.contains(KeyModifiers::ALT)
                         || key.modifiers.contains(KeyModifiers::CONTROL)
                     {
@@ -467,9 +426,6 @@ impl DockedComposer {
                     Ok(None)
                 }
                 KeyCode::Delete => {
-                    if self.approval_modal.is_some() {
-                        return Ok(None);
-                    }
                     if remove_at(&mut self.buffer, self.cursor).is_some() {
                         self.history_index = None;
                         self.reset_slash_completion();
@@ -478,9 +434,6 @@ impl DockedComposer {
                     Ok(None)
                 }
                 KeyCode::Left => {
-                    if self.approval_modal.is_some() {
-                        return Ok(None);
-                    }
                     self.cursor = if key.modifiers.contains(KeyModifiers::CONTROL)
                         || key.modifiers.contains(KeyModifiers::ALT)
                     {
@@ -493,9 +446,6 @@ impl DockedComposer {
                     Ok(None)
                 }
                 KeyCode::Right => {
-                    if self.approval_modal.is_some() {
-                        return Ok(None);
-                    }
                     self.cursor = if key.modifiers.contains(KeyModifiers::CONTROL)
                         || key.modifiers.contains(KeyModifiers::ALT)
                     {
@@ -508,18 +458,12 @@ impl DockedComposer {
                     Ok(None)
                 }
                 KeyCode::Home => {
-                    if self.approval_modal.is_some() {
-                        return Ok(None);
-                    }
                     self.cursor = 0;
                     self.reset_slash_completion();
                     self.render()?;
                     Ok(None)
                 }
                 KeyCode::End => {
-                    if self.approval_modal.is_some() {
-                        return Ok(None);
-                    }
                     self.cursor = char_len(&self.buffer);
                     self.reset_slash_completion();
                     self.render()?;
@@ -661,6 +605,28 @@ impl DockedComposer {
         Ok(())
     }
 
+    fn handle_approval_modal_event(&mut self, event: &Event) -> Result<ApprovalModalEvent, String> {
+        let Some(modal) = self.approval_modal.as_ref() else {
+            return Ok(ApprovalModalEvent::PassThrough);
+        };
+
+        match event {
+            Event::Key(key) => match modal.key_action(*key) {
+                ApprovalKeyAction::Choose(choice) => Ok(ApprovalModalEvent::Consumed(Some(
+                    InputAction::Approval(choice),
+                ))),
+                ApprovalKeyAction::Ignore => Ok(ApprovalModalEvent::Consumed(None)),
+                ApprovalKeyAction::MoveSelection(delta) => {
+                    self.move_approval_selection(delta)?;
+                    Ok(ApprovalModalEvent::Consumed(None))
+                }
+                ApprovalKeyAction::PassThrough => Ok(ApprovalModalEvent::PassThrough),
+            },
+            Event::Paste(_) => Ok(ApprovalModalEvent::Consumed(None)),
+            _ => Ok(ApprovalModalEvent::Consumed(None)),
+        }
+    }
+
     fn apply_slash_completion(&mut self) -> bool {
         let Some(next) = next_slash_completion(
             &self.buffer,
@@ -690,12 +656,6 @@ impl DockedComposer {
         };
         modal.move_selection(delta);
         self.render()
-    }
-
-    fn selected_approval_choice(&self) -> Option<ApprovalChoice> {
-        self.approval_modal
-            .as_ref()
-            .map(ApprovalModal::selected_choice)
     }
 
     fn approval_panel_rows(&self) -> Vec<String> {
@@ -1790,30 +1750,8 @@ mod tests {
             "approval required: propose_patch\npath: src/input.rs\n".to_string(),
         );
         modal.move_selection(1);
-        let composer = DockedComposer {
-            prompt: "p> ".to_string(),
-            buffer: String::new(),
-            cursor: 0,
-            history: Vec::new(),
-            history_index: None,
-            slash_completion_index: None,
-            slash_completion_prefix: None,
-            approval_modal: Some(modal),
-            stream_buffer: String::new(),
-            status_active: false,
-            transcript_lines: Vec::new(),
-            transcript_view_offset: 0,
-            transcript_start_row: None,
-            transcript_cursor_row: None,
-            transcript_cursor_column: 0,
-            rendered_dock_rows: 0,
-            cursor_hidden: false,
-        };
 
-        assert_eq!(
-            composer.selected_approval_choice(),
-            Some(ApprovalChoice::ApproveForSession)
-        );
+        assert_eq!(modal.selected_choice(), ApprovalChoice::ApproveForSession);
     }
 
     #[test]

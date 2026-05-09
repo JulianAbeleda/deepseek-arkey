@@ -1,5 +1,7 @@
 use crate::terminal_width::pad_display_width;
 
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
 use super::{muted_dock_help, truncate_display_text, visible_len, DOCK_RESERVED_ROWS};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -14,6 +16,14 @@ pub(super) struct ApprovalModal {
     tool: String,
     summary: String,
     selected_index: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ApprovalKeyAction {
+    Choose(ApprovalChoice),
+    Ignore,
+    MoveSelection(isize),
+    PassThrough,
 }
 
 impl ApprovalModal {
@@ -38,6 +48,25 @@ impl ApprovalModal {
 
     pub(super) fn selected_choice(&self) -> ApprovalChoice {
         APPROVAL_OPTIONS[self.selected_index].choice
+    }
+
+    pub(super) fn key_action(&self, key: KeyEvent) -> ApprovalKeyAction {
+        match key.code {
+            KeyCode::Up => ApprovalKeyAction::MoveSelection(-1),
+            KeyCode::Down => ApprovalKeyAction::MoveSelection(1),
+            KeyCode::Char('1') => ApprovalKeyAction::Choose(ApprovalChoice::ApproveOnce),
+            KeyCode::Char('2') => ApprovalKeyAction::Choose(ApprovalChoice::ApproveForSession),
+            KeyCode::Char('3') => ApprovalKeyAction::Choose(ApprovalChoice::Reject),
+            KeyCode::Esc => ApprovalKeyAction::Choose(ApprovalChoice::Reject),
+            KeyCode::Char('c') | KeyCode::Char('d')
+                if key.modifiers.contains(KeyModifiers::CONTROL) =>
+            {
+                ApprovalKeyAction::Choose(ApprovalChoice::Reject)
+            }
+            KeyCode::Enter => ApprovalKeyAction::Choose(self.selected_choice()),
+            KeyCode::PageUp | KeyCode::PageDown => ApprovalKeyAction::PassThrough,
+            _ => ApprovalKeyAction::Ignore,
+        }
     }
 }
 

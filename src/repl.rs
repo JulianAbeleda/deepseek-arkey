@@ -277,29 +277,7 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
         if prompt.is_empty() {
             continue;
         }
-        if let Some(approval) = pending_approval.take() {
-            if is_approval_accept(prompt, &approval.request.approve_phrase) {
-                let _ = approval.reply.send(agent::ApprovalDecision::Approve);
-                composer.print_above(&format!("approval: approved {}\n", approval.request.tool))?;
-                context_scan_started = Some(start_context_scan(&mut composer)?);
-            } else if is_approval_denial(prompt) {
-                let _ = approval.reply.send(agent::ApprovalDecision::Deny);
-                composer.print_above(&format!("approval: denied {}\n", approval.request.tool))?;
-                context_scan_started = Some(start_context_scan(&mut composer)?);
-            } else if is_exit_command(prompt) {
-                let _ = approval.reply.send(agent::ApprovalDecision::Deny);
-                composer.print_above(&format!(
-                    "approval: denied {}\nexiting\n",
-                    approval.request.tool
-                ))?;
-                break;
-            } else {
-                composer.print_above(&approval_pending_text(
-                    &approval.request.tool,
-                    &approval.request.approve_phrase,
-                ))?;
-                pending_approval = Some(approval);
-            }
+        if pending_approval.is_some() {
             continue;
         }
         if is_exit_command(prompt) {
@@ -753,14 +731,6 @@ fn spawn_prompt_turn(
     receiver
 }
 
-fn is_approval_denial(prompt: &str) -> bool {
-    matches!(prompt, "n" | "no" | "deny")
-}
-
-fn is_approval_accept(prompt: &str, approve_phrase: &str) -> bool {
-    prompt == "y" || prompt == approve_phrase
-}
-
 fn handle_dock_approval_choice(
     composer: &mut DockedComposer,
     approval: PendingDockApproval,
@@ -810,10 +780,6 @@ fn is_cd_previous_request(prompt: &str) -> bool {
         prompt.trim().to_ascii_lowercase().as_str(),
         "cd -" | "cd previous" | "cd back"
     )
-}
-
-fn approval_pending_text(tool: &str, approve_phrase: &str) -> String {
-    format!("approval pending: {tool}\nType `y` or `{approve_phrase}` to approve, `n` to deny. `/exit` cancels and exits.\n")
 }
 
 fn spawn_docked_turn(
@@ -1783,13 +1749,13 @@ fn paths_equal(left: &Path, right: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        agent_route_confirmation, approval_decision_for_choice, approval_pending_text,
-        cap_interactive_memory, context_scan_status, format_agent_answer,
-        is_agent_task_cancel_choice, is_agent_task_choice, is_approval_accept, is_end_command,
-        is_exit_command, is_workspace_agent_prompt, no_pending_agent_task_text,
-        parse_agent_task_command, parse_debug_command, parse_model_command, parse_runtime_command,
-        parse_shell_read_command, shell_pwd_text, split_markdown_table_lines, task_root_for_prompt,
-        terminal_agent_answer, workspace_agent_root_for_prompt, RuntimeCommand, ShellReadCommand,
+        agent_route_confirmation, approval_decision_for_choice, cap_interactive_memory,
+        context_scan_status, format_agent_answer, is_agent_task_cancel_choice,
+        is_agent_task_choice, is_end_command, is_exit_command, is_workspace_agent_prompt,
+        no_pending_agent_task_text, parse_agent_task_command, parse_debug_command,
+        parse_model_command, parse_runtime_command, parse_shell_read_command, shell_pwd_text,
+        split_markdown_table_lines, task_root_for_prompt, terminal_agent_answer,
+        workspace_agent_root_for_prompt, RuntimeCommand, ShellReadCommand,
     };
     use crate::agent;
     use crate::input::ApprovalChoice;
@@ -1824,22 +1790,6 @@ mod tests {
             assert!(is_end_command(prompt));
         }
         assert!(!is_end_command("/exit"));
-    }
-
-    #[test]
-    fn approval_pending_text_names_exact_phrase_and_exit() {
-        let text = approval_pending_text("run_shell", "yes run");
-        assert!(text.contains("Type `y` or `yes run`"));
-        assert!(text.contains("`n` to deny"));
-        assert!(text.contains("`/exit` cancels"));
-    }
-
-    #[test]
-    fn approval_accepts_short_y_or_exact_phrase() {
-        assert!(is_approval_accept("y", "yes run"));
-        assert!(is_approval_accept("yes run", "yes run"));
-        assert!(!is_approval_accept("yes", "yes run"));
-        assert!(!is_approval_accept("yes apply", "yes run"));
     }
 
     #[test]
