@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::io::{self, IsTerminal};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -6,7 +6,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::agent;
-use crate::input::{DockedComposer, InlineInput, InputAction, RawModeSession};
+use crate::input::{ApprovalChoice, DockedComposer, InlineInput, InputAction, RawModeSession};
 use crate::intent::{classify_intent, path_boundary_violation, recent_task_context, Intent};
 use crate::provider::{self, Message, DEFAULT_SESSION_NAME, PROVIDER};
 use crate::runtime::{self, RuntimeBackend};
@@ -77,6 +77,7 @@ fn run_interactive_chat(model: &str, temperature: Option<f32>, stream: bool) -> 
         let prompt_text = ui::prompt_text(&runtime_state.label(&current_model));
         let line = match input.read_action(&prompt_text)? {
             InputAction::Submit(line) => line,
+            InputAction::Approval(_) => continue,
             InputAction::Exit => break,
         };
         let prompt = line.trim();
@@ -193,6 +194,7 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
     let mut memory = Vec::<Message>::new();
     let mut pending_agent_task: Option<PendingAgentTask> = None;
     let mut pending_approval: Option<PendingDockApproval> = None;
+    let mut session_approved_tools = HashSet::<String>::new();
     let mut selected_root: Option<PathBuf> =
         persisted_selected_root.or_else(|| approved_agent_root.clone());
     let mut previous_selected_root: Option<PathBuf> = None;
@@ -203,9 +205,17 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
                 let (result, streamed, approval) =
                     drain_turn_events(receiver, &mut composer, "response worker disconnected")?;
                 if let Some(approval) = approval {
-                    pending_approval = Some(approval);
                     context_scan_started = None;
-                    composer.show_cursor()?;
+                    if session_approved_tools.contains(&approval.request.tool) {
+                        let _ = approval.reply.send(agent::ApprovalDecision::Approve);
+                        context_scan_started = Some(start_context_scan(&mut composer)?);
+                    } else {
+                        composer.show_approval_modal(
+                            approval.request.tool.clone(),
+                            approval.request.summary.clone(),
+                        )?;
+                        pending_approval = Some(approval);
+                    }
                 }
                 if streamed {
                     context_scan_started = None;
@@ -247,6 +257,20 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
         };
         let line = match action {
             InputAction::Submit(line) => line,
+            InputAction::Approval(choice) => {
+                let Some(approval) = pending_approval.take() else {
+                    composer.clear_approval_modal()?;
+                    continue;
+                };
+                handle_dock_approval_choice(
+                    &mut composer,
+                    approval,
+                    choice,
+                    &mut session_approved_tools,
+                )?;
+                context_scan_started = Some(start_context_scan(&mut composer)?);
+                continue;
+            }
             InputAction::Exit => break,
         };
         let prompt = line.trim();
@@ -640,6 +664,7 @@ fn run_interactive_agent(model: &str, temperature: Option<f32>) -> Result<(), St
         let prompt_text = agent_prompt_text(&runtime_state.label(&current_model));
         let line = match input.read_action(&prompt_text)? {
             InputAction::Submit(line) => line,
+            InputAction::Approval(_) => continue,
             InputAction::Exit => break,
         };
         let prompt = line.trim();
@@ -734,6 +759,50 @@ fn is_approval_denial(prompt: &str) -> bool {
 
 fn is_approval_accept(prompt: &str, approve_phrase: &str) -> bool {
     prompt == "y" || prompt == approve_phrase
+}
+
+fn handle_dock_approval_choice(
+    composer: &mut DockedComposer,
+    approval: PendingDockApproval,
+    choice: ApprovalChoice,
+    session_approved_tools: &mut HashSet<String>,
+) -> Result<(), String> {
+    composer.clear_approval_modal()?;
+    let decision =
+        approval_decision_for_choice(&approval.request.tool, choice, session_approved_tools);
+    match choice {
+        ApprovalChoice::ApproveOnce => {
+            let _ = approval.reply.send(decision);
+            composer.status_above(&format!("approval: approved {}", approval.request.tool))?;
+        }
+        ApprovalChoice::ApproveForSession => {
+            let _ = approval.reply.send(decision);
+            composer.status_above(&format!(
+                "approval: approved {} for session",
+                approval.request.tool
+            ))?;
+        }
+        ApprovalChoice::Reject => {
+            let _ = approval.reply.send(agent::ApprovalDecision::Deny);
+            composer.status_above(&format!("approval: denied {}", approval.request.tool))?;
+        }
+    }
+    Ok(())
+}
+
+fn approval_decision_for_choice(
+    tool: &str,
+    choice: ApprovalChoice,
+    session_approved_tools: &mut HashSet<String>,
+) -> agent::ApprovalDecision {
+    match choice {
+        ApprovalChoice::ApproveOnce => agent::ApprovalDecision::Approve,
+        ApprovalChoice::ApproveForSession => {
+            session_approved_tools.insert(tool.to_string());
+            agent::ApprovalDecision::ApproveForSession
+        }
+        ApprovalChoice::Reject => agent::ApprovalDecision::Deny,
+    }
 }
 
 fn is_cd_previous_request(prompt: &str) -> bool {
@@ -859,7 +928,6 @@ fn drain_turn_events(
                     composer.stream_above(&chunk)?;
                     chunk.clear();
                 }
-                composer.print_above(&request.summary)?;
                 approval = Some(PendingDockApproval { request, reply });
                 break;
             }
@@ -1715,16 +1783,19 @@ fn paths_equal(left: &Path, right: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        agent_route_confirmation, approval_pending_text, cap_interactive_memory,
-        context_scan_status, format_agent_answer, is_agent_task_cancel_choice,
-        is_agent_task_choice, is_approval_accept, is_end_command, is_exit_command,
-        is_workspace_agent_prompt, no_pending_agent_task_text, parse_agent_task_command,
-        parse_debug_command, parse_model_command, parse_runtime_command, parse_shell_read_command,
-        shell_pwd_text, split_markdown_table_lines, task_root_for_prompt, terminal_agent_answer,
-        workspace_agent_root_for_prompt, RuntimeCommand, ShellReadCommand,
+        agent_route_confirmation, approval_decision_for_choice, approval_pending_text,
+        cap_interactive_memory, context_scan_status, format_agent_answer,
+        is_agent_task_cancel_choice, is_agent_task_choice, is_approval_accept, is_end_command,
+        is_exit_command, is_workspace_agent_prompt, no_pending_agent_task_text,
+        parse_agent_task_command, parse_debug_command, parse_model_command, parse_runtime_command,
+        parse_shell_read_command, shell_pwd_text, split_markdown_table_lines, task_root_for_prompt,
+        terminal_agent_answer, workspace_agent_root_for_prompt, RuntimeCommand, ShellReadCommand,
     };
+    use crate::agent;
+    use crate::input::ApprovalChoice;
     use crate::provider;
     use crate::runtime;
+    use std::collections::HashSet;
     use std::path::{Path, PathBuf};
     use std::time::Instant;
 
@@ -1769,6 +1840,37 @@ mod tests {
         assert!(is_approval_accept("yes run", "yes run"));
         assert!(!is_approval_accept("yes", "yes run"));
         assert!(!is_approval_accept("yes apply", "yes run"));
+    }
+
+    #[test]
+    fn approval_for_session_records_tool_type() {
+        let mut approved = HashSet::new();
+        let decision = approval_decision_for_choice(
+            "run_shell",
+            ApprovalChoice::ApproveForSession,
+            &mut approved,
+        );
+
+        assert_eq!(decision, agent::ApprovalDecision::ApproveForSession);
+        assert!(approved.contains("run_shell"));
+        assert!(!approved.contains("propose_patch"));
+    }
+
+    #[test]
+    fn approval_once_and_reject_do_not_record_session_tool() {
+        let mut approved = HashSet::new();
+
+        assert_eq!(
+            approval_decision_for_choice("run_shell", ApprovalChoice::ApproveOnce, &mut approved),
+            agent::ApprovalDecision::Approve
+        );
+        assert!(approved.is_empty());
+
+        assert_eq!(
+            approval_decision_for_choice("run_shell", ApprovalChoice::Reject, &mut approved),
+            agent::ApprovalDecision::Deny
+        );
+        assert!(approved.is_empty());
     }
 
     #[test]

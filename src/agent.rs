@@ -49,6 +49,7 @@ pub enum ApprovalMode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ApprovalDecision {
     Approve,
+    ApproveForSession,
     Deny,
 }
 
@@ -263,7 +264,9 @@ fn run_agent_with_chat_handler(
             let tool_approval_mode = if approval_mode == ApprovalMode::External {
                 match approval_request(step, tool) {
                     Some(request) => match on_approval(request) {
-                        ApprovalDecision::Approve => ApprovalMode::Approved,
+                        ApprovalDecision::Approve | ApprovalDecision::ApproveForSession => {
+                            ApprovalMode::Approved
+                        }
                         ApprovalDecision::Deny => ApprovalMode::Deny,
                     },
                     None => ApprovalMode::Deny,

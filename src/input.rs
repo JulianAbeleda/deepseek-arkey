@@ -15,7 +15,15 @@ use crate::terminal_width::{
 
 pub enum InputAction {
     Submit(String),
+    Approval(ApprovalChoice),
     Exit,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ApprovalChoice {
+    ApproveOnce,
+    ApproveForSession,
+    Reject,
 }
 
 const DOCK_RESERVED_ROWS: usize = 7;
@@ -64,6 +72,7 @@ pub struct DockedComposer {
     history_index: Option<usize>,
     slash_completion_index: Option<usize>,
     slash_completion_prefix: Option<String>,
+    approval_modal: Option<ApprovalModal>,
     stream_buffer: String,
     status_active: bool,
     transcript_lines: Vec<String>,
@@ -74,6 +83,34 @@ pub struct DockedComposer {
     rendered_dock_rows: usize,
     cursor_hidden: bool,
 }
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ApprovalModal {
+    tool: String,
+    summary: String,
+    selected_index: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ApprovalOption {
+    label: &'static str,
+    choice: ApprovalChoice,
+}
+
+const APPROVAL_OPTIONS: &[ApprovalOption] = &[
+    ApprovalOption {
+        label: "Approve once",
+        choice: ApprovalChoice::ApproveOnce,
+    },
+    ApprovalOption {
+        label: "Approve for this session",
+        choice: ApprovalChoice::ApproveForSession,
+    },
+    ApprovalOption {
+        label: "Reject",
+        choice: ApprovalChoice::Reject,
+    },
+];
 
 pub struct RawModeSession;
 
@@ -226,6 +263,7 @@ impl DockedComposer {
             history_index: None,
             slash_completion_index: None,
             slash_completion_prefix: None,
+            approval_modal: None,
             stream_buffer: String::new(),
             status_active: false,
             transcript_lines: Vec::new(),
@@ -250,14 +288,41 @@ impl DockedComposer {
     }
 
     pub fn render(&mut self) -> Result<(), String> {
+        let approval_rows = self.approval_panel_rows();
+        let panel_rows = if approval_rows.is_empty() {
+            self.slash_completion_panel_rows()
+        } else {
+            approval_rows
+        };
         self.rendered_dock_rows = render_dock_lines(
             &self.prompt,
             &self.buffer,
             self.cursor,
-            &self.slash_completion_panel_rows(),
+            &panel_rows,
+            self.approval_modal.is_some(),
             self.rendered_dock_rows,
         )?;
         Ok(())
+    }
+
+    pub fn show_approval_modal(&mut self, tool: String, summary: String) -> Result<(), String> {
+        self.buffer.clear();
+        self.cursor = 0;
+        self.history_index = None;
+        self.reset_slash_completion();
+        self.approval_modal = Some(ApprovalModal {
+            tool,
+            summary,
+            selected_index: 0,
+        });
+        self.hide_cursor()?;
+        self.render()
+    }
+
+    pub fn clear_approval_modal(&mut self) -> Result<(), String> {
+        self.approval_modal = None;
+        self.show_cursor()?;
+        self.render()
     }
 
     pub fn hide_cursor(&mut self) -> Result<(), String> {
@@ -281,11 +346,18 @@ impl DockedComposer {
         let column = self
             .transcript_cursor_column
             .min(terminal_width().saturating_sub(1)) as u16;
+        let approval_rows = self.approval_panel_rows();
+        let panel_rows = if approval_rows.is_empty() {
+            self.slash_completion_panel_rows()
+        } else {
+            approval_rows
+        };
         self.rendered_dock_rows = render_dock_lines(
             &self.prompt,
             &self.buffer,
             self.cursor,
-            &self.slash_completion_panel_rows(),
+            &panel_rows,
+            self.approval_modal.is_some(),
             self.rendered_dock_rows,
         )?;
         execute!(io::stdout(), MoveTo(column, row)).map_err(|err| err.to_string())?;
@@ -298,11 +370,43 @@ impl DockedComposer {
         }
         match event::read().map_err(|err| err.to_string())? {
             Event::Paste(text) => {
+                if self.approval_modal.is_some() {
+                    return Ok(None);
+                }
                 self.insert_text(&text)?;
                 Ok(None)
             }
             Event::Key(key) => match key.code {
+                KeyCode::Up if self.approval_modal.is_some() => {
+                    self.move_approval_selection(-1)?;
+                    Ok(None)
+                }
+                KeyCode::Down if self.approval_modal.is_some() => {
+                    self.move_approval_selection(1)?;
+                    Ok(None)
+                }
+                KeyCode::Char('1') if self.approval_modal.is_some() => {
+                    Ok(Some(InputAction::Approval(ApprovalChoice::ApproveOnce)))
+                }
+                KeyCode::Char('2') if self.approval_modal.is_some() => Ok(Some(
+                    InputAction::Approval(ApprovalChoice::ApproveForSession),
+                )),
+                KeyCode::Char('3') if self.approval_modal.is_some() => {
+                    Ok(Some(InputAction::Approval(ApprovalChoice::Reject)))
+                }
+                KeyCode::Esc if self.approval_modal.is_some() => {
+                    Ok(Some(InputAction::Approval(ApprovalChoice::Reject)))
+                }
+                KeyCode::Char('c') | KeyCode::Char('d')
+                    if self.approval_modal.is_some()
+                        && key.modifiers.contains(KeyModifiers::CONTROL) =>
+                {
+                    Ok(Some(InputAction::Approval(ApprovalChoice::Reject)))
+                }
                 KeyCode::Enter => {
+                    if let Some(choice) = self.selected_approval_choice() {
+                        return Ok(Some(InputAction::Approval(choice)));
+                    }
                     if key.modifiers.contains(KeyModifiers::SHIFT)
                         || key.modifiers.contains(KeyModifiers::ALT)
                     {
@@ -320,6 +424,9 @@ impl DockedComposer {
                     Ok(Some(InputAction::Submit(submitted)))
                 }
                 KeyCode::Tab => {
+                    if self.approval_modal.is_some() {
+                        return Ok(None);
+                    }
                     self.complete_slash_command()?;
                     Ok(None)
                 }
@@ -332,10 +439,16 @@ impl DockedComposer {
                     Ok(None)
                 }
                 KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    if self.approval_modal.is_some() {
+                        return Ok(Some(InputAction::Approval(ApprovalChoice::Reject)));
+                    }
                     self.print_above("")?;
                     Ok(Some(InputAction::Exit))
                 }
                 KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    if self.approval_modal.is_some() {
+                        return Ok(None);
+                    }
                     if remove_previous_word(&mut self.buffer, &mut self.cursor) {
                         self.history_index = None;
                         self.reset_slash_completion();
@@ -344,6 +457,9 @@ impl DockedComposer {
                     Ok(None)
                 }
                 KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    if self.approval_modal.is_some() {
+                        return Ok(Some(InputAction::Approval(ApprovalChoice::Reject)));
+                    }
                     self.buffer.clear();
                     self.cursor = 0;
                     self.history_index = None;
@@ -352,6 +468,9 @@ impl DockedComposer {
                     Ok(None)
                 }
                 KeyCode::Char(ch) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    if self.approval_modal.is_some() {
+                        return Ok(None);
+                    }
                     insert_at(&mut self.buffer, &mut self.cursor, ch);
                     self.history_index = None;
                     self.reset_slash_completion();
@@ -359,6 +478,9 @@ impl DockedComposer {
                     Ok(None)
                 }
                 KeyCode::Backspace => {
+                    if self.approval_modal.is_some() {
+                        return Ok(None);
+                    }
                     if key.modifiers.contains(KeyModifiers::ALT)
                         || key.modifiers.contains(KeyModifiers::CONTROL)
                     {
@@ -375,6 +497,9 @@ impl DockedComposer {
                     Ok(None)
                 }
                 KeyCode::Delete => {
+                    if self.approval_modal.is_some() {
+                        return Ok(None);
+                    }
                     if remove_at(&mut self.buffer, self.cursor).is_some() {
                         self.history_index = None;
                         self.reset_slash_completion();
@@ -383,6 +508,9 @@ impl DockedComposer {
                     Ok(None)
                 }
                 KeyCode::Left => {
+                    if self.approval_modal.is_some() {
+                        return Ok(None);
+                    }
                     self.cursor = if key.modifiers.contains(KeyModifiers::CONTROL)
                         || key.modifiers.contains(KeyModifiers::ALT)
                     {
@@ -395,6 +523,9 @@ impl DockedComposer {
                     Ok(None)
                 }
                 KeyCode::Right => {
+                    if self.approval_modal.is_some() {
+                        return Ok(None);
+                    }
                     self.cursor = if key.modifiers.contains(KeyModifiers::CONTROL)
                         || key.modifiers.contains(KeyModifiers::ALT)
                     {
@@ -407,12 +538,18 @@ impl DockedComposer {
                     Ok(None)
                 }
                 KeyCode::Home => {
+                    if self.approval_modal.is_some() {
+                        return Ok(None);
+                    }
                     self.cursor = 0;
                     self.reset_slash_completion();
                     self.render()?;
                     Ok(None)
                 }
                 KeyCode::End => {
+                    if self.approval_modal.is_some() {
+                        return Ok(None);
+                    }
                     self.cursor = char_len(&self.buffer);
                     self.reset_slash_completion();
                     self.render()?;
@@ -575,6 +712,35 @@ impl DockedComposer {
     fn reset_slash_completion(&mut self) {
         self.slash_completion_index = None;
         self.slash_completion_prefix = None;
+    }
+
+    fn move_approval_selection(&mut self, delta: isize) -> Result<(), String> {
+        let Some(modal) = self.approval_modal.as_mut() else {
+            return Ok(());
+        };
+        let option_count = APPROVAL_OPTIONS.len();
+        modal.selected_index = if delta.is_negative() {
+            modal
+                .selected_index
+                .checked_sub(delta.unsigned_abs())
+                .unwrap_or(option_count - 1)
+        } else {
+            (modal.selected_index + delta as usize) % option_count
+        };
+        self.render()
+    }
+
+    fn selected_approval_choice(&self) -> Option<ApprovalChoice> {
+        self.approval_modal
+            .as_ref()
+            .map(|modal| APPROVAL_OPTIONS[modal.selected_index].choice)
+    }
+
+    fn approval_panel_rows(&self) -> Vec<String> {
+        self.approval_modal
+            .as_ref()
+            .map(|modal| approval_panel_rows(modal, terminal_width()))
+            .unwrap_or_default()
     }
 
     fn slash_completion_panel_rows(&self) -> Vec<String> {
@@ -773,9 +939,17 @@ fn render_dock_lines(
     buffer: &str,
     cursor: usize,
     panel_rows: &[String],
+    hide_input: bool,
     previous_rows: usize,
 ) -> Result<usize, String> {
-    let rows = compose_rendered_dock_rows(prompt, buffer, cursor, terminal_width(), panel_rows);
+    let rows = compose_rendered_dock_rows(
+        prompt,
+        buffer,
+        cursor,
+        terminal_width(),
+        panel_rows,
+        hide_input,
+    );
     let input_capacity = DOCK_RESERVED_ROWS.saturating_sub(DOCK_VERTICAL_PADDING_ROWS);
     let visible_rows = rows
         .lines
@@ -820,7 +994,23 @@ fn compose_rendered_dock_rows(
     cursor: usize,
     width: usize,
     panel_rows: &[String],
+    hide_input: bool,
 ) -> ComposedDockRows {
+    if hide_input {
+        let mut lines = panel_rows
+            .iter()
+            .take(DOCK_RESERVED_ROWS)
+            .cloned()
+            .collect::<Vec<_>>();
+        if lines.is_empty() {
+            lines.push(String::new());
+        }
+        return ComposedDockRows {
+            lines,
+            cursor_row: 0,
+            cursor_col: 0,
+        };
+    }
     let mut rows = compose_dock_rows(prompt, buffer, cursor, width);
     rows.lines.insert(0, String::new());
     let available_panel_rows = DOCK_RESERVED_ROWS.saturating_sub(rows.lines.len() + 1);
@@ -1153,6 +1343,92 @@ fn slash_completion_panel_row(
         pad_display_width(&description, description_width)
     );
     muted_dock_help(&pad_display_width(&text, width))
+}
+
+fn approval_panel_rows(modal: &ApprovalModal, width: usize) -> Vec<String> {
+    let width = width.max(1);
+    let inner_width = width.saturating_sub(2);
+    let mut rows = Vec::new();
+    rows.push(muted_dock_help(&approval_top_border(width)));
+    rows.push(approval_panel_content_row(
+        &format!("{} requires approval", modal.tool),
+        width,
+    ));
+
+    let preview_rows = approval_preview_rows(&modal.summary, inner_width);
+    if let Some(preview) = preview_rows.first() {
+        rows.push(approval_panel_content_row(preview, width));
+    } else {
+        rows.push(approval_panel_content_row("", width));
+    }
+
+    for (index, option) in APPROVAL_OPTIONS.iter().enumerate() {
+        let marker = if modal.selected_index == index {
+            "→"
+        } else {
+            " "
+        };
+        rows.push(approval_panel_content_row(
+            &format!("{marker} [{}] {}", index + 1, option.label),
+            width,
+        ));
+    }
+
+    rows.push(muted_dock_help(&approval_bottom_border(width)));
+    rows.truncate(DOCK_RESERVED_ROWS);
+    rows
+}
+
+fn approval_preview_rows(summary: &str, width: usize) -> Vec<String> {
+    let candidates = summary
+        .lines()
+        .map(str::trim)
+        .filter(|line| {
+            !line.is_empty()
+                && !line.starts_with("approval required:")
+                && !line.starts_with("Type ")
+        })
+        .collect::<Vec<_>>();
+    let preview = candidates
+        .iter()
+        .find(|line| line.starts_with("command:") || line.starts_with("path:"))
+        .copied()
+        .or_else(|| candidates.first().copied());
+    preview
+        .into_iter()
+        .map(|line| truncate_display_text(line, width.saturating_sub(2)))
+        .collect()
+}
+
+fn approval_top_border(width: usize) -> String {
+    if width <= 2 {
+        return "─".repeat(width);
+    }
+    let title = "─ approval ";
+    let right = width.saturating_sub(2 + visible_len(title));
+    format!("╭{}{}╮", title, "─".repeat(right))
+}
+
+fn approval_bottom_border(width: usize) -> String {
+    if width <= 2 {
+        return "─".repeat(width);
+    }
+    let hint = " ↑/↓ Enter Esc ";
+    let hint_width = visible_len(hint);
+    if width <= hint_width + 2 {
+        return format!("╰{}╯", "─".repeat(width - 2));
+    }
+    let left = width.saturating_sub(hint_width + 2);
+    format!("╰{}{}╯", "─".repeat(left), hint)
+}
+
+fn approval_panel_content_row(text: &str, width: usize) -> String {
+    if width <= 2 {
+        return muted_dock_help(&truncate_display_text(text, width));
+    }
+    let inner_width = width - 2;
+    let content = truncate_display_text(text, inner_width);
+    muted_dock_help(&format!("│{}│", pad_display_width(&content, inner_width)))
 }
 
 fn first_slash_token(buffer: &str) -> Option<&str> {
@@ -1526,12 +1802,12 @@ fn is_sgr_reset(sequence: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        buffer_prefix, compose_dock_rows, compose_rendered_dock_rows, insert_at,
-        next_slash_completion, next_word_cursor, output_row, parse_forced_terminal_size,
+        approval_panel_rows, buffer_prefix, compose_dock_rows, compose_rendered_dock_rows,
+        insert_at, next_slash_completion, next_word_cursor, output_row, parse_forced_terminal_size,
         previous_word_cursor, prompt_echo_block_lines, remove_at, remove_before,
         remove_previous_word, slash_command_matches, slash_completion_panel_rows,
         submitted_prompt_echo_with_options, take_ansi_sequence, visible_len, visible_suffix,
-        DockedComposer, DOCK_RESERVED_ROWS,
+        ApprovalChoice, ApprovalModal, DockedComposer, DOCK_RESERVED_ROWS,
     };
 
     #[test]
@@ -1763,7 +2039,7 @@ mod tests {
     #[test]
     fn completion_panel_does_not_alter_input_cursor_position() {
         let panel = slash_completion_panel_rows("/r", None, 20);
-        let rows = compose_rendered_dock_rows("p> ", "/r", 2, 20, &panel);
+        let rows = compose_rendered_dock_rows("p> ", "/r", 2, 20, &panel, false);
 
         assert!(strip_ansi_for_test(&rows.lines[2]).starts_with("─"));
         assert_eq!(rows.cursor_row, 1);
@@ -1774,11 +2050,63 @@ mod tests {
     #[test]
     fn completion_panel_rows_are_capped_to_dock_reservation() {
         let panel = slash_completion_panel_rows("/", None, 80);
-        let rows = compose_rendered_dock_rows("p> ", "/", 1, 80, &panel);
+        let rows = compose_rendered_dock_rows("p> ", "/", 1, 80, &panel, false);
 
         assert_eq!(rows.lines.len(), DOCK_RESERVED_ROWS);
         assert_eq!(rows.cursor_row, 1);
         assert_eq!(rows.cursor_col, 4);
+    }
+
+    #[test]
+    fn approval_modal_renders_inside_dock_without_input_row() {
+        let modal = ApprovalModal {
+            tool: "run_shell".to_string(),
+            summary: "approval required: run_shell\ncwd: .\nreason: run tests\ncommand: cargo test --offline\nType yes run to approve, n to deny.\n".to_string(),
+            selected_index: 0,
+        };
+        let panel = approval_panel_rows(&modal, 56);
+        let rows = compose_rendered_dock_rows("p> ", "hidden", 6, 56, &panel, true);
+        let plain = strip_ansi_for_test(&rows.lines.join("\n"));
+
+        assert!(rows.lines.len() <= DOCK_RESERVED_ROWS);
+        assert!(!plain.contains("p> hidden"));
+        assert!(plain.contains("approval"));
+        assert!(plain.contains("run_shell requires approval"));
+        assert!(plain.contains("command: cargo test --offline"));
+        assert!(plain.contains("→ [1] Approve once"));
+        assert!(plain.contains("[2] Approve for this session"));
+    }
+
+    #[test]
+    fn approval_modal_selection_maps_to_session_choice() {
+        let composer = DockedComposer {
+            prompt: "p> ".to_string(),
+            buffer: String::new(),
+            cursor: 0,
+            history: Vec::new(),
+            history_index: None,
+            slash_completion_index: None,
+            slash_completion_prefix: None,
+            approval_modal: Some(ApprovalModal {
+                tool: "propose_patch".to_string(),
+                summary: "approval required: propose_patch\npath: src/input.rs\n".to_string(),
+                selected_index: 1,
+            }),
+            stream_buffer: String::new(),
+            status_active: false,
+            transcript_lines: Vec::new(),
+            transcript_view_offset: 0,
+            transcript_start_row: None,
+            transcript_cursor_row: None,
+            transcript_cursor_column: 0,
+            rendered_dock_rows: 0,
+            cursor_hidden: false,
+        };
+
+        assert_eq!(
+            composer.selected_approval_choice(),
+            Some(ApprovalChoice::ApproveForSession)
+        );
     }
 
     #[test]
