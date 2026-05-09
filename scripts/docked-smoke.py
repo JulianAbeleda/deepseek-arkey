@@ -180,9 +180,8 @@ def dock_prompt_visible(screen, name, prompt_fragment):
     return name in dock and prompt_fragment in dock and "›" in dock
 
 
-def dock_idle_prompt(screen):
-    dock = screen.dock_text()
-    return "›" in dock and "Enter send" in dock
+def dock_idle_prompt(screen, name):
+    return any(f"{name} [" in line and "›" in line for line in screen.dock_text().splitlines())
 
 
 def main():
@@ -229,14 +228,14 @@ def main():
             os.write(master, b"/sta\t")
             wait_for(lambda: dock_contains(screen, "/status"), master, screen, "slash command completion")
             os.write(master, b"\x03")
-            wait_for(lambda: dock_idle_prompt(screen), master, screen, "clear completed slash command")
+            wait_for(lambda: dock_idle_prompt(screen, args.name), master, screen, "clear completed slash command")
             os.write(master, b"one two")
             wait_for(lambda: dock_contains(screen, "one two"), master, screen, "editable draft in dock")
             os.write(master, b"\x1b[1;5D")
             os.write(master, b"X")
             wait_for(lambda: dock_contains(screen, "one Xtwo"), master, screen, "ctrl-left word movement")
             os.write(master, b"\x03")
-            wait_for(lambda: dock_idle_prompt(screen), master, screen, "clear word movement draft")
+            wait_for(lambda: dock_idle_prompt(screen, args.name), master, screen, "clear word movement draft")
             os.write(master, b"\x1b[200~line one\nline two\x1b[201~")
             wait_for(
                 lambda: dock_contains(screen, "line one") and dock_contains(screen, "line two"),

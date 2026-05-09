@@ -42,9 +42,7 @@ pub struct DockedComposer {
     rendered_dock_rows: usize,
 }
 
-pub struct RawModeSession {
-    reserved_rows: usize,
-}
+pub struct RawModeSession;
 
 impl InlineInput {
     pub fn new() -> Self {
@@ -648,13 +646,7 @@ impl RawModeSession {
     pub fn enable() -> Result<Self, String> {
         enable_raw_mode().map_err(|err| err.to_string())?;
         execute!(io::stdout(), EnableBracketedPaste).map_err(|err| err.to_string())?;
-        Ok(Self {
-            reserved_rows: DOCK_RESERVED_ROWS,
-        })
-    }
-
-    pub fn set_output_scroll_region(&self) -> Result<(), String> {
-        set_output_scroll_region(self.reserved_rows)
+        Ok(Self)
     }
 }
 
