@@ -9,6 +9,10 @@ use crossterm::event::{
 use crossterm::execute;
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode, size, Clear, ClearType};
 
+use crate::terminal_width::{
+    char_display_width, display_width, pad_display_width, wrap_plain_text,
+};
+
 pub enum InputAction {
     Submit(String),
     Exit,
@@ -786,13 +790,13 @@ fn submitted_prompt_echo_with_options(
 fn prompt_echo_block_lines(text: &str, width: usize, color_enabled: bool) -> Vec<String> {
     let marker_width = 2usize;
     let content_width = width.saturating_sub(marker_width + 2).max(10);
-    let wrapped = wrap_prompt_echo_text(text, content_width);
+    let wrapped = wrap_plain_text(text, content_width);
     let mut lines = Vec::with_capacity(wrapped.len().max(1) + 2);
 
     lines.push(prompt_echo_block_blank(width, color_enabled));
     for (index, line) in wrapped.into_iter().enumerate() {
         let marker = if index == 0 { "> " } else { "  " };
-        let content = pad_visible_width(&format!(" {line} "), width.saturating_sub(marker_width));
+        let content = pad_display_width(&format!(" {line} "), width.saturating_sub(marker_width));
         lines.push(format!(
             "{}{}",
             prompt_echo_marker(marker, color_enabled),
@@ -813,76 +817,6 @@ fn prompt_echo_marker(text: &str, color_enabled: bool) -> String {
 
 fn prompt_echo_block(text: &str, color_enabled: bool) -> String {
     style_prompt_echo_with_color("38;2;220;223;230;48;2;40;42;54", text, color_enabled)
-}
-
-fn wrap_prompt_echo_text(text: &str, width: usize) -> Vec<String> {
-    if text.is_empty() {
-        return vec![String::new()];
-    }
-
-    let mut lines = Vec::new();
-    let mut current = String::new();
-    for word in text.split_whitespace() {
-        if visible_len(word) > width {
-            if !current.is_empty() {
-                lines.push(std::mem::take(&mut current));
-            }
-            lines.extend(chunk_prompt_echo_word(word, width));
-            continue;
-        }
-
-        let candidate_len = if current.is_empty() {
-            visible_len(word)
-        } else {
-            visible_len(&current) + 1 + visible_len(word)
-        };
-
-        if candidate_len <= width {
-            if !current.is_empty() {
-                current.push(' ');
-            }
-            current.push_str(word);
-        } else {
-            lines.push(std::mem::take(&mut current));
-            current.push_str(word);
-        }
-    }
-
-    if !current.is_empty() {
-        lines.push(current);
-    }
-    lines
-}
-
-fn chunk_prompt_echo_word(word: &str, width: usize) -> Vec<String> {
-    let width = width.max(1);
-    let mut chunks = Vec::new();
-    let mut current = String::new();
-    let mut current_width = 0usize;
-
-    for ch in word.chars() {
-        let char_width = char_display_width(ch);
-        if current_width > 0 && current_width + char_width > width {
-            chunks.push(std::mem::take(&mut current));
-            current_width = 0;
-        }
-        current.push(ch);
-        current_width += char_width;
-    }
-
-    if !current.is_empty() {
-        chunks.push(current);
-    }
-    chunks
-}
-
-fn pad_visible_width(text: &str, width: usize) -> String {
-    let mut output = text.to_string();
-    let visible = visible_len(text);
-    if visible < width {
-        output.push_str(&" ".repeat(width - visible));
-    }
-    output
 }
 
 fn style_prompt_echo(code: &str, text: impl AsRef<str>) -> String {
@@ -1066,15 +1000,7 @@ fn append_visible_char(
 }
 
 fn visible_len(text: &str) -> usize {
-    let mut len = 0usize;
-    let mut chars = text.chars().peekable();
-    while let Some(ch) = chars.next() {
-        if take_ansi_sequence(ch, &mut chars).is_some() {
-            continue;
-        }
-        len += char_display_width(ch);
-    }
-    len
+    display_width(text)
 }
 
 fn terminal_width() -> usize {
@@ -1307,32 +1233,6 @@ fn is_sgr_reset(sequence: &str) -> bool {
     false
 }
 
-fn char_display_width(ch: char) -> usize {
-    if ch.is_control() {
-        0
-    } else if is_wide_char(ch) {
-        2
-    } else {
-        1
-    }
-}
-
-fn is_wide_char(ch: char) -> bool {
-    matches!(
-        ch as u32,
-        0x1100..=0x115f
-            | 0x2329..=0x232a
-            | 0x2e80..=0xa4cf
-            | 0xac00..=0xd7a3
-            | 0xf900..=0xfaff
-            | 0xfe10..=0xfe19
-            | 0xfe30..=0xfe6f
-            | 0xff00..=0xff60
-            | 0xffe0..=0xffe6
-            | 0x1f300..=0x1faff
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
@@ -1479,6 +1379,7 @@ mod tests {
 
         assert!(plain.contains(">  first line"));
         assert!(plain.contains(">  second line"));
+        assert!(!echo.contains("\x1b["));
         assert!(plain
             .lines()
             .all(|line| line.is_empty() || visible_len(line) == 32));

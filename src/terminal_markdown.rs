@@ -1,3 +1,5 @@
+use crate::terminal_width::{display_width, pad_display_width, wrap_plain_text};
+
 pub(crate) fn render_terminal_markdown(text: &str) -> String {
     // This renderer expects complete text, not incremental streaming chunks.
     let mut output = String::new();
@@ -177,7 +179,7 @@ fn format_table_row(row: &[String], widths: &[usize]) -> String {
     let wrapped = row
         .iter()
         .zip(widths)
-        .map(|(cell, width)| wrap_table_cell(cell, *width))
+        .map(|(cell, width)| wrap_plain_text(cell, *width))
         .collect::<Vec<_>>();
     let height = wrapped.iter().map(Vec::len).max().unwrap_or(1);
     let mut output = String::new();
@@ -208,112 +210,6 @@ fn format_table_rule(widths: &[usize]) -> String {
     }
     output.push('\n');
     output
-}
-
-fn wrap_table_cell(cell: &str, width: usize) -> Vec<String> {
-    let width = width.max(1);
-    let mut lines = Vec::new();
-    let mut current = String::new();
-    let mut current_width = 0usize;
-    for word in cell.split_whitespace() {
-        let word_width = display_width(word);
-        if word_width > width {
-            if !current.is_empty() {
-                lines.push(current);
-                current = String::new();
-                current_width = 0;
-            }
-            lines.extend(chunk_long_word(word, width));
-            continue;
-        }
-        let separator = usize::from(!current.is_empty());
-        if current_width + separator + word_width > width && !current.is_empty() {
-            lines.push(current);
-            current = String::new();
-            current_width = 0;
-        }
-        if !current.is_empty() {
-            current.push(' ');
-            current_width += 1;
-        }
-        current.push_str(word);
-        current_width += word_width;
-    }
-    if !current.is_empty() {
-        lines.push(current);
-    }
-    if lines.is_empty() {
-        lines.push(String::new());
-    }
-    lines
-}
-
-fn chunk_long_word(word: &str, width: usize) -> Vec<String> {
-    let mut chunks = Vec::new();
-    let mut current = String::new();
-    let mut current_width = 0usize;
-    for ch in word.chars() {
-        let ch_width = char_display_width(ch);
-        if current_width + ch_width > width && !current.is_empty() {
-            chunks.push(current);
-            current = String::new();
-            current_width = 0;
-        }
-        current.push(ch);
-        current_width += ch_width;
-    }
-    if !current.is_empty() {
-        chunks.push(current);
-    }
-    chunks
-}
-
-fn pad_display_width(text: &str, width: usize) -> String {
-    let len = display_width(text);
-    if len >= width {
-        return text.to_string();
-    }
-    format!("{text}{}", " ".repeat(width - len))
-}
-
-fn display_width(text: &str) -> usize {
-    let mut len = 0usize;
-    let mut chars = text.chars().peekable();
-    while let Some(ch) = chars.next() {
-        if ch == '\x1b' && chars.peek() == Some(&'[') {
-            chars.next();
-            for next in chars.by_ref() {
-                if ('@'..='~').contains(&next) {
-                    break;
-                }
-            }
-            continue;
-        }
-        len += char_display_width(ch);
-    }
-    len
-}
-
-fn char_display_width(ch: char) -> usize {
-    if ch.is_control() {
-        0
-    } else if matches!(
-        ch as u32,
-        0x1100..=0x115f
-            | 0x2329..=0x232a
-            | 0x2e80..=0xa4cf
-            | 0xac00..=0xd7a3
-            | 0xf900..=0xfaff
-            | 0xfe10..=0xfe19
-            | 0xfe30..=0xfe6f
-            | 0xff00..=0xff60
-            | 0xffe0..=0xffe6
-            | 0x1f300..=0x1faff
-    ) {
-        2
-    } else {
-        1
-    }
 }
 
 fn render_inline_code_and_urls(text: &str, bold_active: bool) -> String {
