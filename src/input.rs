@@ -21,10 +21,35 @@ pub enum InputAction {
 const DOCK_RESERVED_ROWS: usize = 7;
 const DOCK_VERTICAL_PADDING_ROWS: usize = 2;
 const DOCK_HELP_TEXT: &str = "Enter send · ? help · /model · /debug · /runtime · /end · /exit";
-const SLASH_COMMANDS: &[&str] = &[
-    "/chat", "/agent", "/root", "/model", "/debug", "/runtime", "/status", "/end", "/exit",
-    "/quit", "/help", "?",
+const SLASH_COMMANDS: &[SlashCommandSpec] = &[
+    SlashCommandSpec::new("/chat", "Switch to plain chat mode"),
+    SlashCommandSpec::new("/agent", "Switch to workspace agent mode"),
+    SlashCommandSpec::new("/root", "Show or set active workspace root"),
+    SlashCommandSpec::new("/model", "Show or switch DeepSeek model"),
+    SlashCommandSpec::new("/debug", "Toggle local debug backend"),
+    SlashCommandSpec::new("/runtime", "Show provider/debug runtime state"),
+    SlashCommandSpec::new("/status", "Show active session details"),
+    SlashCommandSpec::new("/end", "End the current session and clear context"),
+    SlashCommandSpec::new("/exit", "Exit without clearing context"),
+    SlashCommandSpec::new("/quit", "Exit without clearing context"),
+    SlashCommandSpec::new("/help", "Show this help"),
+    SlashCommandSpec::new("?", "Show this help"),
 ];
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SlashCommandSpec {
+    command: &'static str,
+    description: &'static str,
+}
+
+impl SlashCommandSpec {
+    const fn new(command: &'static str, description: &'static str) -> Self {
+        Self {
+            command,
+            description,
+        }
+    }
+}
 
 pub struct InlineInput {
     history: Vec<String>,
@@ -1015,7 +1040,7 @@ fn next_slash_completion(
         .unwrap_or(0);
     let (index, command) = matches[selected];
     Some(SlashCompletion {
-        command: command.to_string(),
+        command: command.command.to_string(),
         index,
         prefix: prefix.to_string(),
         token_end,
@@ -1033,19 +1058,19 @@ fn slash_completion_token(buffer: &str, cursor: usize) -> Option<(&str, usize)> 
     Some((token, token_end))
 }
 
-fn slash_command_match_entries(prefix: &str) -> Vec<(usize, &'static str)> {
+fn slash_command_match_entries(prefix: &str) -> Vec<(usize, SlashCommandSpec)> {
     SLASH_COMMANDS
         .iter()
         .copied()
         .enumerate()
-        .filter(|(_, command)| command.starts_with(prefix))
+        .filter(|(_, command)| command.command.starts_with(prefix))
         .collect()
 }
 
 fn slash_command_matches(prefix: &str) -> Vec<&'static str> {
     slash_command_match_entries(prefix)
         .into_iter()
-        .map(|(_, command)| command)
+        .map(|(_, command)| command.command)
         .collect()
 }
 
