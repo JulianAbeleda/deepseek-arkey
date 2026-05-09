@@ -254,7 +254,7 @@ impl DockedComposer {
             &self.prompt,
             &self.buffer,
             self.cursor,
-            self.slash_completion_footer().as_deref(),
+            &self.slash_completion_panel_rows(),
             self.rendered_dock_rows,
         )?;
         Ok(())
@@ -285,7 +285,7 @@ impl DockedComposer {
             &self.prompt,
             &self.buffer,
             self.cursor,
-            self.slash_completion_footer().as_deref(),
+            &self.slash_completion_panel_rows(),
             self.rendered_dock_rows,
         )?;
         execute!(io::stdout(), MoveTo(column, row)).map_err(|err| err.to_string())?;
@@ -577,8 +577,8 @@ impl DockedComposer {
         self.slash_completion_prefix = None;
     }
 
-    fn slash_completion_footer(&self) -> Option<String> {
-        slash_completion_footer(&self.buffer)
+    fn slash_completion_panel_rows(&self) -> Vec<String> {
+        slash_completion_panel_rows(&self.buffer, self.slash_completion_index, terminal_width())
     }
 
     fn scroll_transcript(&mut self, pages: usize) -> Result<(), String> {
@@ -772,10 +772,10 @@ fn render_dock_lines(
     prompt: &str,
     buffer: &str,
     cursor: usize,
-    footer: Option<&str>,
+    panel_rows: &[String],
     previous_rows: usize,
 ) -> Result<usize, String> {
-    let rows = compose_rendered_dock_rows(prompt, buffer, cursor, terminal_width(), footer);
+    let rows = compose_rendered_dock_rows(prompt, buffer, cursor, terminal_width(), panel_rows);
     let input_capacity = DOCK_RESERVED_ROWS.saturating_sub(DOCK_VERTICAL_PADDING_ROWS);
     let visible_rows = rows
         .lines
@@ -819,12 +819,13 @@ fn compose_rendered_dock_rows(
     buffer: &str,
     cursor: usize,
     width: usize,
-    footer: Option<&str>,
+    panel_rows: &[String],
 ) -> ComposedDockRows {
     let mut rows = compose_dock_rows(prompt, buffer, cursor, width);
     rows.lines.insert(0, String::new());
-    if let Some(footer) = footer {
-        rows.lines.push(muted_dock_help(footer));
+    let available_panel_rows = DOCK_RESERVED_ROWS.saturating_sub(rows.lines.len() + 1);
+    for row in panel_rows.iter().take(available_panel_rows) {
+        rows.lines.push(row.clone());
     }
     rows.lines.push(muted_dock_help(DOCK_HELP_TEXT));
     rows.cursor_row += 1;
@@ -1067,6 +1068,7 @@ fn slash_command_match_entries(prefix: &str) -> Vec<(usize, SlashCommandSpec)> {
         .collect()
 }
 
+#[cfg(test)]
 fn slash_command_matches(prefix: &str) -> Vec<&'static str> {
     slash_command_match_entries(prefix)
         .into_iter()
@@ -1074,13 +1076,83 @@ fn slash_command_matches(prefix: &str) -> Vec<&'static str> {
         .collect()
 }
 
-fn slash_completion_footer(buffer: &str) -> Option<String> {
-    let token = first_slash_token(buffer)?;
-    let matches = slash_command_matches(token);
+fn slash_completion_panel_rows(
+    buffer: &str,
+    selected_command_index: Option<usize>,
+    width: usize,
+) -> Vec<String> {
+    let width = width.max(1);
+    let Some(token) = first_slash_token(buffer) else {
+        return Vec::new();
+    };
+    let matches = slash_command_match_entries(token);
+    let mut rows = Vec::new();
+    rows.push(muted_dock_help(&"─".repeat(width)));
     if matches.is_empty() {
-        return Some("No slash command match".to_string());
+        rows.push(muted_dock_help(&pad_display_width(
+            "  No slash command match",
+            width,
+        )));
+        return rows;
     }
-    Some(format!("Tab complete  {}", matches.join("  ")))
+
+    let marker_width = 2usize;
+    let command_width = slash_panel_command_width(&matches, width, marker_width);
+    let gap_width = if width > marker_width + command_width + 6 {
+        3
+    } else {
+        1
+    };
+    let description_width = width.saturating_sub(marker_width + command_width + gap_width);
+
+    rows.extend(matches.into_iter().map(|(index, command)| {
+        slash_completion_panel_row(
+            command,
+            selected_command_index == Some(index),
+            marker_width,
+            command_width,
+            gap_width,
+            description_width,
+            width,
+        )
+    }));
+    rows
+}
+
+fn slash_panel_command_width(
+    matches: &[(usize, SlashCommandSpec)],
+    width: usize,
+    marker_width: usize,
+) -> usize {
+    let longest = matches
+        .iter()
+        .map(|(_, command)| visible_len(command.command))
+        .max()
+        .unwrap_or(0);
+    let usable_width = width.saturating_sub(marker_width);
+    longest.saturating_add(2).min(usable_width)
+}
+
+fn slash_completion_panel_row(
+    command: SlashCommandSpec,
+    selected: bool,
+    marker_width: usize,
+    command_width: usize,
+    gap_width: usize,
+    description_width: usize,
+    width: usize,
+) -> String {
+    let marker = if selected { "› " } else { "  " };
+    let command_text = truncate_display_text(command.command, command_width);
+    let description = truncate_display_text(command.description, description_width);
+    let text = format!(
+        "{}{}{}{}",
+        pad_display_width(marker, marker_width),
+        pad_display_width(&command_text, command_width),
+        " ".repeat(gap_width),
+        pad_display_width(&description, description_width)
+    );
+    muted_dock_help(&pad_display_width(&text, width))
 }
 
 fn first_slash_token(buffer: &str) -> Option<&str> {
@@ -1193,6 +1265,32 @@ fn append_visible_char(
 
 fn visible_len(text: &str) -> usize {
     display_width(text)
+}
+
+fn truncate_display_text(text: &str, width: usize) -> String {
+    if width == 0 {
+        return String::new();
+    }
+    let ellipsis = "...";
+    if visible_len(text) <= width {
+        return text.to_string();
+    }
+    if width <= visible_len(ellipsis) {
+        return ".".repeat(width);
+    }
+    let available = width - visible_len(ellipsis);
+    let mut out = String::new();
+    let mut used = 0usize;
+    for ch in text.chars() {
+        let ch_width = char_display_width(ch);
+        if used + ch_width > available {
+            break;
+        }
+        out.push(ch);
+        used += ch_width;
+    }
+    out.push_str(ellipsis);
+    out
 }
 
 fn terminal_width() -> usize {
@@ -1431,7 +1529,7 @@ mod tests {
         buffer_prefix, compose_dock_rows, compose_rendered_dock_rows, insert_at,
         next_slash_completion, next_word_cursor, output_row, parse_forced_terminal_size,
         previous_word_cursor, prompt_echo_block_lines, remove_at, remove_before,
-        remove_previous_word, slash_command_matches, slash_completion_footer,
+        remove_previous_word, slash_command_matches, slash_completion_panel_rows,
         submitted_prompt_echo_with_options, take_ansi_sequence, visible_len, visible_suffix,
         DockedComposer, DOCK_RESERVED_ROWS,
     };
@@ -1584,11 +1682,19 @@ mod tests {
     }
 
     #[test]
-    fn slash_draft_renders_footer_suggestions() {
-        assert_eq!(
-            slash_completion_footer("/r"),
-            Some("Tab complete  /root  /runtime".to_string())
-        );
+    fn slash_draft_renders_completion_panel_suggestions() {
+        let panel = slash_completion_panel_rows("/r", None, 48);
+        let plain = panel
+            .iter()
+            .map(|line| strip_ansi_for_test(line))
+            .collect::<Vec<_>>();
+
+        assert_eq!(plain.len(), 3);
+        assert!(plain[0].starts_with("─"));
+        assert!(plain[1].contains("/root"));
+        assert!(plain[1].contains("Show or set active workspace root"));
+        assert!(plain[2].contains("/runtime"));
+        assert!(plain[2].contains("Show provider/debug runtime state"));
         assert_eq!(slash_command_matches("/sta"), vec!["/status"]);
     }
 
@@ -1598,9 +1704,8 @@ mod tests {
         composer.buffer = "/h".to_string();
         composer.cursor = 2;
 
-        assert_eq!(
-            slash_completion_footer("/h"),
-            Some("Tab complete  /help".to_string())
+        assert!(
+            strip_ansi_for_test(&slash_completion_panel_rows("/h", None, 48)[1]).contains("/help")
         );
         assert!(composer.apply_slash_completion());
         assert_eq!(composer.buffer, "/help");
@@ -1613,9 +1718,8 @@ mod tests {
         composer.buffer = "/q".to_string();
         composer.cursor = 2;
 
-        assert_eq!(
-            slash_completion_footer("/q"),
-            Some("Tab complete  /quit".to_string())
+        assert!(
+            strip_ansi_for_test(&slash_completion_panel_rows("/q", None, 48)[1]).contains("/quit")
         );
         assert!(composer.apply_slash_completion());
         assert_eq!(composer.buffer, "/quit");
@@ -1623,29 +1727,58 @@ mod tests {
     }
 
     #[test]
-    fn no_match_slash_draft_renders_footer() {
-        assert_eq!(
-            slash_completion_footer("/zzz"),
-            Some("No slash command match".to_string())
-        );
+    fn no_match_slash_draft_renders_panel_message() {
+        let panel = slash_completion_panel_rows("/zzz", None, 32);
+
+        assert_eq!(panel.len(), 2);
+        assert!(strip_ansi_for_test(&panel[1]).contains("No slash command match"));
     }
 
     #[test]
-    fn footer_does_not_alter_input_cursor_position() {
-        let rows = compose_rendered_dock_rows(
-            "p> ",
-            "/r",
-            2,
-            20,
-            slash_completion_footer("/r").as_deref(),
-        );
+    fn slash_completion_panel_marks_selected_command() {
+        let mut composer = DockedComposer::new("prompt › ".to_string());
+        composer.buffer = "/r".to_string();
+        composer.cursor = 2;
 
-        assert_eq!(
-            strip_ansi_for_test(&rows.lines[2]),
-            "Tab complete  /root  /runtime"
-        );
+        assert!(composer.apply_slash_completion());
+        let panel = slash_completion_panel_rows("/r", composer.slash_completion_index, 48);
+        let plain = panel
+            .iter()
+            .map(|line| strip_ansi_for_test(line))
+            .collect::<Vec<_>>();
+
+        assert!(plain.iter().any(|line| line.starts_with("› /root")));
+        assert!(!plain.iter().any(|line| line.starts_with("› /runtime")));
+
+        assert!(composer.apply_slash_completion());
+        let panel = slash_completion_panel_rows("/r", composer.slash_completion_index, 48);
+        let plain = panel
+            .iter()
+            .map(|line| strip_ansi_for_test(line))
+            .collect::<Vec<_>>();
+
+        assert!(plain.iter().any(|line| line.starts_with("› /runtime")));
+    }
+
+    #[test]
+    fn completion_panel_does_not_alter_input_cursor_position() {
+        let panel = slash_completion_panel_rows("/r", None, 20);
+        let rows = compose_rendered_dock_rows("p> ", "/r", 2, 20, &panel);
+
+        assert!(strip_ansi_for_test(&rows.lines[2]).starts_with("─"));
         assert_eq!(rows.cursor_row, 1);
         assert_eq!(rows.cursor_col, 5);
+        assert!(DOCK_RESERVED_ROWS >= rows.lines.len());
+    }
+
+    #[test]
+    fn completion_panel_rows_are_capped_to_dock_reservation() {
+        let panel = slash_completion_panel_rows("/", None, 80);
+        let rows = compose_rendered_dock_rows("p> ", "/", 1, 80, &panel);
+
+        assert_eq!(rows.lines.len(), DOCK_RESERVED_ROWS);
+        assert_eq!(rows.cursor_row, 1);
+        assert_eq!(rows.cursor_col, 4);
     }
 
     #[test]
