@@ -181,7 +181,8 @@ def dock_prompt_visible(screen, name, prompt_fragment):
 
 
 def dock_idle_prompt(screen):
-    return screen.dock_text().rstrip().endswith("›")
+    dock = screen.dock_text()
+    return "›" in dock and "Enter send" in dock
 
 
 def main():

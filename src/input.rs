@@ -42,7 +42,9 @@ pub struct DockedComposer {
     rendered_dock_rows: usize,
 }
 
-pub struct RawModeSession;
+pub struct RawModeSession {
+    reserved_rows: usize,
+}
 
 impl InlineInput {
     pub fn new() -> Self {
@@ -375,7 +377,7 @@ impl DockedComposer {
         let had_status = self.take_status_active();
         let mut stdout = io::stdout();
         if had_status {
-            clear_rows_above_dock(&mut stdout, 1)?;
+            clear_rows_above_dock(&mut stdout, self.active_dock_rows(), 1)?;
         }
         self.move_to_transcript_cursor(&mut stdout)?;
         execute!(stdout, MoveToColumn(0), Clear(ClearType::CurrentLine))
@@ -400,7 +402,7 @@ impl DockedComposer {
         let had_status = self.take_status_active();
         let mut stdout = io::stdout();
         if had_status {
-            clear_rows_above_dock(&mut stdout, 1)?;
+            clear_rows_above_dock(&mut stdout, self.active_dock_rows(), 1)?;
         }
         self.move_to_transcript_cursor(&mut stdout)?;
         execute!(stdout, MoveToColumn(0), Clear(ClearType::CurrentLine))
@@ -420,7 +422,12 @@ impl DockedComposer {
             self.move_to_transcript_cursor(&mut stdout)?;
         }
         if self.status_active {
-            clear_transient_rows(&mut stdout, self.transcript_row(), 1)?;
+            clear_transient_rows(
+                &mut stdout,
+                self.active_dock_rows(),
+                self.transcript_row(),
+                1,
+            )?;
             self.move_to_transcript_cursor(&mut stdout)?;
             self.status_active = false;
         }
@@ -496,11 +503,11 @@ impl DockedComposer {
     }
 
     fn scroll_transcript(&mut self, pages: usize) -> Result<(), String> {
-        let page = transcript_view_height().max(1) * pages;
+        let page = transcript_view_height(self.active_dock_rows()).max(1) * pages;
         let max_offset = self
             .transcript_lines
             .len()
-            .saturating_sub(transcript_view_height());
+            .saturating_sub(transcript_view_height(self.active_dock_rows()));
         self.transcript_view_offset = self
             .transcript_view_offset
             .saturating_add(page)
@@ -509,7 +516,7 @@ impl DockedComposer {
     }
 
     fn scroll_transcript_down(&mut self, pages: usize) -> Result<(), String> {
-        let page = transcript_view_height().max(1) * pages;
+        let page = transcript_view_height(self.active_dock_rows()).max(1) * pages;
         self.transcript_view_offset = self.transcript_view_offset.saturating_sub(page);
         self.render_transcript_view()
     }
@@ -520,7 +527,7 @@ impl DockedComposer {
 
     fn render_transcript_view(&mut self) -> Result<(), String> {
         let mut stdout = io::stdout();
-        let height = transcript_view_height();
+        let height = transcript_view_height(self.active_dock_rows());
         for row in 0..height as u16 {
             execute!(stdout, MoveTo(0, row), Clear(ClearType::CurrentLine))
                 .map_err(|err| err.to_string())?;
@@ -565,12 +572,12 @@ impl DockedComposer {
     fn transcript_row(&self) -> u16 {
         self.transcript_cursor_row
             .or(self.transcript_start_row)
-            .unwrap_or_else(output_row)
-            .min(output_row())
+            .unwrap_or_else(|| output_row(self.active_dock_rows()))
+            .min(output_row(self.active_dock_rows()))
     }
 
     fn move_to_transcript_cursor(&mut self, stdout: &mut io::Stdout) -> Result<(), String> {
-        set_output_scroll_region(DOCK_RESERVED_ROWS)?;
+        set_output_scroll_region(self.active_dock_rows())?;
         let row = self.transcript_row();
         self.transcript_cursor_row = Some(row);
         execute!(stdout, MoveTo(0, row)).map_err(|err| err.to_string())
@@ -580,7 +587,7 @@ impl DockedComposer {
         let mut row = self.transcript_row();
         let mut column = self.transcript_cursor_column;
         let width = terminal_width().max(1);
-        let bottom = output_row();
+        let bottom = output_row(self.active_dock_rows());
         let mut chars = text.chars().peekable();
         while let Some(ch) = chars.next() {
             if ch == '\x1b' && take_ansi_sequence(ch, &mut chars).is_some() {
@@ -607,6 +614,10 @@ impl DockedComposer {
         }
         self.transcript_cursor_row = Some(row);
         self.transcript_cursor_column = column;
+    }
+
+    fn active_dock_rows(&self) -> usize {
+        self.rendered_dock_rows.max(1).min(DOCK_RESERVED_ROWS)
     }
 
     fn previous_history(&mut self) -> Option<String> {
@@ -637,11 +648,13 @@ impl RawModeSession {
     pub fn enable() -> Result<Self, String> {
         enable_raw_mode().map_err(|err| err.to_string())?;
         execute!(io::stdout(), EnableBracketedPaste).map_err(|err| err.to_string())?;
-        Ok(Self)
+        Ok(Self {
+            reserved_rows: DOCK_RESERVED_ROWS,
+        })
     }
 
     pub fn set_output_scroll_region(&self) -> Result<(), String> {
-        set_output_scroll_region(DOCK_RESERVED_ROWS)
+        set_output_scroll_region(self.reserved_rows)
     }
 }
 
@@ -708,6 +721,7 @@ fn render_dock_lines(
         .min(display_lines.len().saturating_sub(1));
     let cursor_col = rows.cursor_col.min(terminal_width().saturating_sub(1));
     let mut stdout = io::stdout();
+    set_output_scroll_region(display_lines.len())?;
     clear_dock_rows(&mut stdout, display_lines.len().max(previous_rows))?;
     for (index, line) in display_lines.iter().enumerate() {
         execute!(
@@ -996,12 +1010,13 @@ fn dock_row() -> u16 {
     terminal_rows().saturating_sub(1)
 }
 
-fn output_row() -> u16 {
-    terminal_rows().saturating_sub(DOCK_RESERVED_ROWS as u16 + 1)
+fn output_row(reserved_bottom_lines: usize) -> u16 {
+    let reserved = reserved_bottom_lines.max(1).min(DOCK_RESERVED_ROWS) as u16;
+    terminal_rows().saturating_sub(reserved + 1)
 }
 
-fn transcript_view_height() -> usize {
-    output_row() as usize + 1
+fn transcript_view_height(reserved_bottom_lines: usize) -> usize {
+    output_row(reserved_bottom_lines) as usize + 1
 }
 
 fn clear_dock_rows(stdout: &mut io::Stdout, rows: usize) -> Result<(), String> {
@@ -1017,11 +1032,15 @@ fn clear_dock_rows(stdout: &mut io::Stdout, rows: usize) -> Result<(), String> {
     Ok(())
 }
 
-fn clear_rows_above_dock(stdout: &mut io::Stdout, rows: usize) -> Result<(), String> {
+fn clear_rows_above_dock(
+    stdout: &mut io::Stdout,
+    reserved_bottom_lines: usize,
+    rows: usize,
+) -> Result<(), String> {
     if rows == 0 {
         return Ok(());
     }
-    let bottom = output_row();
+    let bottom = output_row(reserved_bottom_lines);
     let rows = rows.min(bottom as usize + 1);
     let start = bottom.saturating_add(1).saturating_sub(rows as u16);
     for row in start..=bottom {
@@ -1031,11 +1050,16 @@ fn clear_rows_above_dock(stdout: &mut io::Stdout, rows: usize) -> Result<(), Str
     Ok(())
 }
 
-fn clear_transient_rows(stdout: &mut io::Stdout, start: u16, rows: usize) -> Result<(), String> {
+fn clear_transient_rows(
+    stdout: &mut io::Stdout,
+    reserved_bottom_lines: usize,
+    start: u16,
+    rows: usize,
+) -> Result<(), String> {
     if rows == 0 {
         return Ok(());
     }
-    let bottom = output_row();
+    let bottom = output_row(reserved_bottom_lines);
     let end = start
         .saturating_add(rows as u16)
         .min(bottom.saturating_add(1));
@@ -1214,10 +1238,10 @@ fn is_wide_char(ch: char) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        buffer_prefix, compose_dock_rows, insert_at, next_word_cursor, parse_forced_terminal_size,
-        previous_word_cursor, remove_at, remove_before, remove_previous_word,
-        style_prompt_echo_with_color, submitted_prompt_echo, take_ansi_sequence, visible_len,
-        visible_suffix, DockedComposer, DOCK_RESERVED_ROWS,
+        buffer_prefix, compose_dock_rows, insert_at, next_word_cursor, output_row,
+        parse_forced_terminal_size, previous_word_cursor, remove_at, remove_before,
+        remove_previous_word, style_prompt_echo_with_color, submitted_prompt_echo,
+        take_ansi_sequence, visible_len, visible_suffix, DockedComposer, DOCK_RESERVED_ROWS,
     };
 
     #[test]
@@ -1313,6 +1337,24 @@ mod tests {
         assert_eq!(rows.lines.last().map(String::as_str), Some(""));
         assert_eq!(rows.cursor_row, 1);
         assert!(DOCK_RESERVED_ROWS >= rows.lines.len());
+    }
+
+    #[test]
+    fn dock_active_rows_follow_rendered_rows() {
+        let mut composer = DockedComposer::new("p> ".to_string());
+
+        assert_eq!(composer.active_dock_rows(), 1);
+
+        composer.rendered_dock_rows = 3;
+        assert_eq!(composer.active_dock_rows(), 3);
+
+        composer.rendered_dock_rows = DOCK_RESERVED_ROWS + 4;
+        assert_eq!(composer.active_dock_rows(), DOCK_RESERVED_ROWS);
+    }
+
+    #[test]
+    fn output_region_expands_when_dock_reservation_shrinks() {
+        assert!(output_row(3) > output_row(DOCK_RESERVED_ROWS));
     }
 
     #[test]
