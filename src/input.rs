@@ -777,7 +777,7 @@ fn submitted_prompt_echo_with_options(
 
     for line in submitted.split('\n') {
         if !block_lines.is_empty() {
-            block_lines.push(prompt_echo_block_blank(width, color_enabled));
+            block_lines.push(prompt_echo_plain_blank(width));
         }
         block_lines.extend(prompt_echo_block_lines(line, width, color_enabled));
     }
@@ -793,7 +793,7 @@ fn prompt_echo_block_lines(text: &str, width: usize, color_enabled: bool) -> Vec
     let wrapped = wrap_plain_text(text, content_width);
     let mut lines = Vec::with_capacity(wrapped.len().max(1) + 2);
 
-    lines.push(prompt_echo_block_blank(width, color_enabled));
+    lines.push(prompt_echo_plain_blank(width));
     for (index, line) in wrapped.into_iter().enumerate() {
         let marker = if index == 0 { "> " } else { "  " };
         let content = pad_display_width(&format!(" {line} "), width.saturating_sub(marker_width));
@@ -803,12 +803,12 @@ fn prompt_echo_block_lines(text: &str, width: usize, color_enabled: bool) -> Vec
             prompt_echo_block(&content, color_enabled)
         ));
     }
-    lines.push(prompt_echo_block_blank(width, color_enabled));
+    lines.push(prompt_echo_plain_blank(width));
     lines
 }
 
-fn prompt_echo_block_blank(width: usize, color_enabled: bool) -> String {
-    prompt_echo_block(&" ".repeat(width), color_enabled)
+fn prompt_echo_plain_blank(width: usize) -> String {
+    " ".repeat(width)
 }
 
 fn prompt_echo_marker(text: &str, color_enabled: bool) -> String {
@@ -1370,6 +1370,11 @@ mod tests {
         assert_eq!(lines[4], "");
         assert!(echo.contains("48;2;40;42;54"));
         assert!(echo.contains("\x1b[1;38;2;187;154;247;48;2;40;42;54m"));
+
+        let raw_lines = echo.lines().collect::<Vec<_>>();
+        assert!(!raw_lines[1].contains("48;2;40;42;54"));
+        assert!(raw_lines[2].contains("48;2;40;42;54"));
+        assert!(!raw_lines[3].contains("48;2;40;42;54"));
     }
 
     #[test]
@@ -1386,7 +1391,7 @@ mod tests {
     }
 
     #[test]
-    fn prompt_echo_block_wraps_and_pads_rows() {
+    fn prompt_echo_block_wraps_and_pads_content_rows() {
         let lines =
             prompt_echo_block_lines("this is a longer prompt that should wrap cleanly", 30, true);
         let plain = strip_ansi_for_test(&lines.join("\n"));
@@ -1396,7 +1401,9 @@ mod tests {
         assert!(lines
             .iter()
             .all(|line| visible_len(&strip_ansi_for_test(line)) == 30));
-        assert!(lines[0].contains("48;2;40;42;54"));
+        assert!(!lines[0].contains("48;2;40;42;54"));
+        assert!(lines[1].contains("48;2;40;42;54"));
+        assert!(!lines.last().unwrap().contains("48;2;40;42;54"));
     }
 
     #[test]
