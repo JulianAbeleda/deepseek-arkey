@@ -2,7 +2,7 @@ use std::io::{self, IsTerminal, Write};
 use std::iter::Peekable;
 use std::time::Duration;
 
-use crossterm::cursor::{MoveTo, MoveToColumn};
+use crossterm::cursor::{Hide, MoveTo, MoveToColumn, Show};
 use crossterm::event::{
     self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode, KeyModifiers,
 };
@@ -44,6 +44,7 @@ pub struct DockedComposer {
     transcript_cursor_row: Option<u16>,
     transcript_cursor_column: usize,
     rendered_dock_rows: usize,
+    cursor_hidden: bool,
 }
 
 pub struct RawModeSession;
@@ -203,6 +204,7 @@ impl DockedComposer {
             transcript_cursor_row: None,
             transcript_cursor_column: 0,
             rendered_dock_rows: 0,
+            cursor_hidden: false,
         }
     }
 
@@ -224,6 +226,22 @@ impl DockedComposer {
             self.cursor,
             self.rendered_dock_rows,
         )?;
+        Ok(())
+    }
+
+    pub fn hide_cursor(&mut self) -> Result<(), String> {
+        if !self.cursor_hidden {
+            execute!(io::stdout(), Hide).map_err(|err| err.to_string())?;
+            self.cursor_hidden = true;
+        }
+        Ok(())
+    }
+
+    pub fn show_cursor(&mut self) -> Result<(), String> {
+        if self.cursor_hidden {
+            execute!(io::stdout(), Show).map_err(|err| err.to_string())?;
+            self.cursor_hidden = false;
+        }
         Ok(())
     }
 
@@ -446,6 +464,7 @@ impl DockedComposer {
         let mut stdout = io::stdout();
         if !stream_had_content {
             self.reset_stream_state();
+            self.show_cursor()?;
             return self.render();
         }
         self.move_to_transcript_cursor(&mut stdout)?;
@@ -456,6 +475,7 @@ impl DockedComposer {
         }
         stdout.flush().map_err(|err| err.to_string())?;
         self.reset_stream_state();
+        self.show_cursor()?;
         self.render()
     }
 
@@ -656,6 +676,7 @@ impl RawModeSession {
 
 impl Drop for RawModeSession {
     fn drop(&mut self) {
+        let _ = execute!(io::stdout(), Show);
         let _ = execute!(io::stdout(), DisableBracketedPaste);
         let _ = reset_output_scroll_region();
         let _ = disable_raw_mode();
@@ -674,6 +695,7 @@ impl RawModeGuard {
 
 impl Drop for RawModeGuard {
     fn drop(&mut self) {
+        let _ = execute!(io::stdout(), Show);
         let _ = execute!(io::stdout(), DisableBracketedPaste);
         let _ = disable_raw_mode();
     }

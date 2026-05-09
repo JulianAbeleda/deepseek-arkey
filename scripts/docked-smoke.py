@@ -244,7 +244,12 @@ def main():
                 "bracketed paste multiline insert",
             )
             os.write(master, b"\r")
-            wait_for(lambda: screen.contains("context: scanning"), master, screen, "ContextScan row")
+            wait_for(
+                lambda: screen.contains("Loading ") or screen.contains(response_fragment),
+                master,
+                screen,
+                "Loading row or fast response",
+            )
             wait_for(lambda: screen.contains(response_fragment), master, screen, "ResponseRender", timeout=10.0)
             wait_for(lambda: dock_prompt_visible(screen, args.name, prompt_fragment), master, screen, "PromptResume dock")
             if not screen.contains(response_fragment):

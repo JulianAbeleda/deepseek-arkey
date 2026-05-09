@@ -198,16 +198,14 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
     let mut previous_selected_root: Option<PathBuf> = None;
     let mut switch_to_agent = false;
     loop {
-        let context_scan_ready = context_scan_started
-            .map(|started| started.elapsed() >= Duration::from_secs(1))
-            .unwrap_or(true);
-        if context_scan_ready && pending_approval.is_none() {
+        if pending_approval.is_none() {
             if let Some(receiver) = &in_flight {
                 let (result, streamed, approval) =
                     drain_turn_events(receiver, &mut composer, "response worker disconnected")?;
                 if let Some(approval) = approval {
                     pending_approval = Some(approval);
                     context_scan_started = None;
+                    composer.show_cursor()?;
                 }
                 if streamed {
                     context_scan_started = None;
@@ -221,6 +219,7 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
                             composer.finish_stream()?;
                         }
                         Err(err) => {
+                            composer.show_cursor()?;
                             composer.print_above(&format!("error: {err}\n"))?;
                         }
                     }
@@ -883,21 +882,13 @@ fn drain_turn_events(
 
 fn start_context_scan(composer: &mut DockedComposer) -> Result<Instant, String> {
     let started = Instant::now();
+    composer.hide_cursor()?;
     composer.status_above(&context_scan_status(started))?;
     Ok(started)
 }
 
 fn context_scan_status(started: Instant) -> String {
-    let elapsed = started.elapsed().min(Duration::from_secs(1));
-    let elapsed_tenths = (elapsed.as_millis() / 100).min(10);
-    let width = 12usize;
-    let filled = ((elapsed_tenths as usize * width) / 10).clamp(1, width);
-    format!(
-        "context: scanning [{}{}] {:.1}s",
-        "=".repeat(filled),
-        " ".repeat(width - filled),
-        elapsed.as_secs_f32()
-    )
+    format!("Loading {}s", started.elapsed().as_secs())
 }
 
 fn agent_route_confirmation(root: &Path) -> String {
@@ -2115,10 +2106,9 @@ mod tests {
     }
 
     #[test]
-    fn context_scan_status_has_loading_bar_and_timer() {
+    fn context_scan_status_shows_elapsed_loading_seconds() {
         let status = context_scan_status(Instant::now());
-        assert!(status.starts_with("context: scanning ["));
-        assert!(status.ends_with("s"));
+        assert_eq!(status, "Loading 0s");
         assert!(!status.ends_with('\n'));
     }
 }
