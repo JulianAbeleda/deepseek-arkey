@@ -148,6 +148,28 @@ def write_slow_second_call_fake_curl(directory):
     path.chmod(path.stat().st_mode | stat.S_IXUSR)
 
 
+def write_long_answer_fake_curl(directory):
+    path = Path(directory) / "curl"
+    lines = ["## Long Stream Budget"]
+    lines.extend(f"- budget line {index}" for index in range(220))
+    lines.append("final budget marker")
+    response = "\n".join(lines)
+    path.write_text(
+        textwrap.dedent(
+            f"""
+            #!/usr/bin/env python3
+            import json
+
+            print(json.dumps({{
+                "choices": [{{"message": {{"content": {json.dumps(response)}}}}}]
+            }}))
+            """
+        ).lstrip(),
+        encoding="utf-8",
+    )
+    path.chmod(path.stat().st_mode | stat.S_IXUSR)
+
+
 def visible_row_with(screen, text):
     for row, line in enumerate(screen.lines()):
         if text in line:
@@ -289,6 +311,89 @@ def run_progress_smoke(binary, name):
             os.close(master)
 
 
+def run_long_stream_budget_smoke(binary, name):
+    with tempfile.TemporaryDirectory(prefix=f"{name}-long-stream-budget-") as tmp:
+        tmp_path = Path(tmp)
+        home = tmp_path / "home"
+        workspace = tmp_path / "workspace"
+        fake_bin = tmp_path / "bin"
+        home.mkdir()
+        workspace.mkdir()
+        fake_bin.mkdir()
+        write_long_answer_fake_curl(fake_bin)
+
+        env = os.environ.copy()
+        env["HOME"] = str(home)
+        env["DEEPSEEK_API_KEY"] = "long-stream-budget-smoke-key"
+        env["DEEPSEEK_FORCE_TTY_SIZE"] = f"{COLS}x{ROWS}"
+        env["DEEPSEEK_RENDERED_STREAM_DELAY_MS"] = "60"
+        env["PATH"] = f"{fake_bin}{os.pathsep}{env.get('PATH', '')}"
+
+        master, proc = spawn_pty(binary, ["chat"], env, str(workspace), ROWS, COLS)
+        screen = Screen(ROWS, COLS)
+        first_seen_at = None
+        final_seen_at = None
+        saw_partial_stream = False
+
+        try:
+            wait_for(
+                lambda: prompt_visible(screen, name),
+                master,
+                screen,
+                "initial dock prompt",
+                timeout=10.0,
+            )
+
+            os.write(master, b"hello\r")
+            deadline = time.monotonic() + 6.0
+            while time.monotonic() < deadline:
+                read_available(master, screen, 0.01)
+                all_text = screen.all_text()
+                now = time.monotonic()
+                if first_seen_at is None and "Long Stream Budget" in all_text:
+                    first_seen_at = now
+                if first_seen_at is not None and "final budget marker" not in all_text:
+                    saw_partial_stream = True
+                if "final budget marker" in all_text:
+                    final_seen_at = now
+                    break
+
+            wait_for(
+                lambda: "final budget marker" in screen.all_text(),
+                master,
+                screen,
+                "long final answer",
+                timeout=6.0,
+            )
+            if final_seen_at is None:
+                final_seen_at = time.monotonic()
+
+            stream_elapsed = (
+                final_seen_at - first_seen_at if first_seen_at is not None else None
+            )
+            print(f"saw_long_partial_stream={saw_partial_stream}")
+            elapsed_label = f"{stream_elapsed:.3f}s" if stream_elapsed is not None else "none"
+            print(f"long_stream_elapsed={elapsed_label}")
+
+            if first_seen_at is None:
+                raise AssertionError("long answer never started rendering\n" + screen.dump())
+            if not saw_partial_stream:
+                raise AssertionError("long answer did not stream partially\n" + screen.dump())
+            if stream_elapsed is None or stream_elapsed > 3.0:
+                raise AssertionError(
+                    "long answer fake stream exceeded capped budget\n" + screen.dump()
+                )
+        finally:
+            if proc.poll() is None:
+                try:
+                    os.write(master, b"/exit\r")
+                    time.sleep(0.3)
+                except OSError:
+                    pass
+                proc.terminate()
+            os.close(master)
+
+
 def run_progress_timer_smoke(binary, name):
     with tempfile.TemporaryDirectory(prefix=f"{name}-progress-timer-") as tmp:
         tmp_path = Path(tmp)
@@ -375,6 +480,7 @@ def main():
 
     assert_source_contract(repo_root)
     run_progress_smoke(binary, args.name)
+    run_long_stream_budget_smoke(binary, args.name)
     run_progress_timer_smoke(binary, args.name)
 
     print(f"{args.name} phase15 progress dock smoke: ok")

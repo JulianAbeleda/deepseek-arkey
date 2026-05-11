@@ -29,6 +29,7 @@ enum TurnEvent {
 }
 
 const DEFAULT_RENDERED_MARKDOWN_STREAM_DELAY: Duration = Duration::from_millis(12);
+const DEFAULT_RENDERED_MARKDOWN_STREAM_MAX_DELAY: Duration = Duration::from_millis(1200);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum InteractiveMode {
@@ -914,12 +915,37 @@ fn rendered_markdown_stream_delay() -> Duration {
         .unwrap_or(DEFAULT_RENDERED_MARKDOWN_STREAM_DELAY)
 }
 
+fn rendered_markdown_effective_stream_delay(
+    chunks: &[String],
+    requested_delay: Duration,
+) -> Duration {
+    if requested_delay.is_zero() {
+        return Duration::ZERO;
+    }
+    let sleepable_chunks = chunks
+        .iter()
+        .take(chunks.len().saturating_sub(1))
+        .filter(|chunk| !chunk.trim().is_empty())
+        .count();
+    if sleepable_chunks == 0 {
+        return Duration::ZERO;
+    }
+    let capped_delay_millis =
+        DEFAULT_RENDERED_MARKDOWN_STREAM_MAX_DELAY.as_millis() / sleepable_chunks as u128;
+    if capped_delay_millis == 0 {
+        return Duration::ZERO;
+    }
+    let capped_delay = Duration::from_millis(capped_delay_millis as u64);
+    requested_delay.min(capped_delay)
+}
+
 fn stream_rendered_markdown(
     composer: &mut DockedComposer,
     rendered: &str,
     delay: Duration,
 ) -> Result<(), String> {
     let chunks = rendered_markdown_stream_chunks(rendered);
+    let delay = rendered_markdown_effective_stream_delay(&chunks, delay);
     let chunk_count = chunks.len();
     for (index, chunk) in chunks.iter().enumerate() {
         composer.stream_above(chunk)?;
@@ -1856,9 +1882,10 @@ mod tests {
         is_agent_task_choice, is_end_command, is_exit_command, is_workspace_agent_prompt,
         no_pending_agent_task_text, parse_agent_task_command, parse_debug_command,
         parse_model_command, parse_runtime_command, parse_shell_read_command,
-        rendered_markdown_stream_chunks, shell_pwd_text, split_markdown_table_lines,
-        task_root_for_prompt, terminal_agent_answer, terminal_stream_chunk_delay,
-        workspace_agent_root_for_prompt, RuntimeCommand, ShellReadCommand,
+        rendered_markdown_effective_stream_delay, rendered_markdown_stream_chunks, shell_pwd_text,
+        split_markdown_table_lines, task_root_for_prompt, terminal_agent_answer,
+        terminal_stream_chunk_delay, workspace_agent_root_for_prompt, RuntimeCommand,
+        ShellReadCommand,
     };
     use crate::agent;
     use crate::input::ApprovalChoice;
@@ -2170,6 +2197,45 @@ mod tests {
         assert_eq!(terminal_stream_chunk_delay("answer\n", delay), delay);
         assert_eq!(
             terminal_stream_chunk_delay("\n", delay),
+            std::time::Duration::ZERO
+        );
+    }
+
+    #[test]
+    fn rendered_markdown_effective_stream_delay_keeps_small_outputs_at_default() {
+        let chunks = rendered_markdown_stream_chunks("one\n\ntwo\nthree\n");
+        assert_eq!(
+            rendered_markdown_effective_stream_delay(&chunks, std::time::Duration::from_millis(12)),
+            std::time::Duration::from_millis(12)
+        );
+    }
+
+    #[test]
+    fn rendered_markdown_effective_stream_delay_caps_large_outputs() {
+        let rendered = (0..301)
+            .map(|index| format!("line {index}\n"))
+            .collect::<String>();
+        let chunks = rendered_markdown_stream_chunks(&rendered);
+        assert_eq!(
+            rendered_markdown_effective_stream_delay(&chunks, std::time::Duration::from_millis(12)),
+            std::time::Duration::from_millis(4)
+        );
+    }
+
+    #[test]
+    fn rendered_markdown_effective_stream_delay_can_disable_or_skip_sleep() {
+        assert_eq!(
+            rendered_markdown_effective_stream_delay(
+                &rendered_markdown_stream_chunks("one\n"),
+                std::time::Duration::ZERO
+            ),
+            std::time::Duration::ZERO
+        );
+        assert_eq!(
+            rendered_markdown_effective_stream_delay(
+                &rendered_markdown_stream_chunks("\n\n"),
+                std::time::Duration::from_millis(12)
+            ),
             std::time::Duration::ZERO
         );
     }
