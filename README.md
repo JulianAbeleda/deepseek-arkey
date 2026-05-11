@@ -4,14 +4,24 @@ Standalone Rust CLI for using DeepSeek from the terminal.
 
 Do not store API keys in this folder. Put secrets in your shell environment and expose them as environment variables.
 
-## Install
+## Quick Start
 
 ```bash
 cargo build --release
 cp target/release/deepseek ~/.local/bin/deepseek
+export DEEPSEEK_API_KEY="your_deepseek_api_key"
+deepseek login
 ```
 
 Make sure `~/.local/bin` is on `PATH`.
+
+For zsh persistence:
+
+```bash
+echo 'export DEEPSEEK_API_KEY="your_deepseek_api_key"' >> ~/.zshrc
+source ~/.zshrc
+deepseek login
+```
 
 ## Configuration
 

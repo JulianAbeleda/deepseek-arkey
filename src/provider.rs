@@ -17,6 +17,17 @@ pub const DEFAULT_SESSION_NAME: &str = "default";
 pub const SUPPORTED_MODELS: &[&str] = &["deepseek-v4-flash", "deepseek-v4-pro"];
 const API_URL: &str = "https://api.deepseek.com/chat/completions";
 const LOGIN_MAX_TOKENS: u32 = 128;
+const API_KEY_SETUP_HELP: &str = r#"DeepSeek API key is not set.
+
+Set it for the current shell:
+  export DEEPSEEK_API_KEY="your_deepseek_api_key"
+
+For zsh persistence:
+  echo 'export DEEPSEEK_API_KEY="your_deepseek_api_key"' >> ~/.zshrc
+  source ~/.zshrc
+
+Then verify:
+  deepseek login"#;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Message {
@@ -62,7 +73,7 @@ fn parse_api_key(value: Option<String>) -> Result<String, String> {
     value
         .map(|key| key.trim().to_string())
         .filter(|key| !key.is_empty())
-        .ok_or_else(|| format!("{ENV_KEY} is not set"))
+        .ok_or_else(|| API_KEY_SETUP_HELP.to_string())
 }
 
 pub fn login_check(model: &str) -> Result<(), String> {
@@ -526,12 +537,13 @@ mod tests {
 
     #[test]
     fn api_key_rejects_missing_and_blank_values() {
-        assert!(parse_api_key(None)
-            .unwrap_err()
-            .contains("DEEPSEEK_API_KEY"));
-        assert!(parse_api_key(Some(" \t\n ".to_string()))
-            .unwrap_err()
-            .contains("DEEPSEEK_API_KEY"));
+        let missing = parse_api_key(None).unwrap_err();
+        assert!(missing.contains("DeepSeek API key is not set"));
+        assert!(missing.contains("export DEEPSEEK_API_KEY"));
+        assert!(missing.contains("deepseek login"));
+
+        let blank = parse_api_key(Some(" \t\n ".to_string())).unwrap_err();
+        assert_eq!(blank, missing);
     }
 
     #[test]
