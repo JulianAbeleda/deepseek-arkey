@@ -1,4 +1,5 @@
 mod agent;
+mod cancel;
 mod cli;
 mod input;
 mod intent;

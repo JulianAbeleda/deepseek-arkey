@@ -20,6 +20,7 @@ Default checks are local/offline:
   - cargo build --offline --release
   - docked TTY smoke against target/release/deepseek
   - progress dock smoke
+  - dock cancellation smoke
   - persistent navigation smoke
 
 Options:
@@ -113,6 +114,9 @@ run python3 scripts/phase14-commit-audit-preflight-smoke.py --binary "$BINARY"
 
 section "Progress Dock Smoke"
 run python3 scripts/phase15-progress-dock-smoke.py --binary "$BINARY"
+
+section "Dock Cancellation Smoke"
+run python3 scripts/phase16-dock-cancel-smoke.py --binary "$BINARY"
 
 section "Persistent Navigation Smoke"
 run ./scripts/persistent-navigation-test.sh

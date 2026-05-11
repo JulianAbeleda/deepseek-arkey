@@ -1,8 +1,11 @@
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, Command, Output, Stdio};
+use std::thread;
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
+use crate::cancel::{CancellationToken, CANCELLED};
 use crate::safety::{cap_text, redact_text, DEFAULT_TEXT_CAP};
 
 pub const PROVIDER: &str = "DeepSeek";
@@ -87,6 +90,7 @@ pub fn chat(
             print!("{delta}");
             let _ = std::io::stdout().flush();
         },
+        None,
     )
 }
 
@@ -111,6 +115,7 @@ where
         true,
         false,
         on_delta,
+        None,
     )
 }
 
@@ -129,6 +134,27 @@ pub fn chat_quiet(
         false,
         false,
         |_| {},
+        None,
+    )
+}
+
+pub fn chat_quiet_cancelled(
+    messages: &[Message],
+    model: &str,
+    temperature: Option<f32>,
+    max_tokens: Option<u32>,
+    cancel: &CancellationToken,
+) -> Result<String, String> {
+    chat_impl(
+        messages,
+        model,
+        temperature,
+        max_tokens,
+        false,
+        false,
+        false,
+        |_| {},
+        Some(cancel),
     )
 }
 
@@ -141,10 +167,14 @@ fn chat_impl<F>(
     print_cache: bool,
     print_stream_trailing_newline: bool,
     on_delta: F,
+    cancel: Option<&CancellationToken>,
 ) -> Result<String, String>
 where
     F: FnMut(&str),
 {
+    if let Some(cancel) = cancel {
+        cancel.check()?;
+    }
     let key = api_key()?;
     let body = serde_json::to_string(&ChatRequest {
         model,
@@ -158,7 +188,11 @@ where
     if stream {
         return chat_streaming(&client, &key, body, print_stream_trailing_newline, on_delta);
     }
-    let output = client.post(&key, &body, false)?;
+    let output = if let Some(cancel) = cancel {
+        client.post_cancelled(&key, &body, false, cancel)?
+    } else {
+        client.post(&key, &body, false)?
+    };
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
         return Err(if stderr.is_empty() {
@@ -255,6 +289,16 @@ impl HttpClient for CurlHttpClient {
 }
 
 impl CurlHttpClient {
+    fn post_cancelled(
+        &self,
+        key: &str,
+        body: &str,
+        stream: bool,
+        cancel: &CancellationToken,
+    ) -> Result<Output, String> {
+        wait_with_cancel(self.spawn(&self.config(key, body, stream))?, cancel)
+    }
+
     fn spawn(&self, config: &str) -> Result<Child, String> {
         let mut child = self
             .command()
@@ -297,6 +341,22 @@ impl CurlHttpClient {
         ));
         config.push_str(&format!("data = \"{}\"\n", curl_quote(body)));
         config
+    }
+}
+
+fn wait_with_cancel(mut child: Child, cancel: &CancellationToken) -> Result<Output, String> {
+    loop {
+        if cancel.is_cancelled() {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(CANCELLED.to_string());
+        }
+        match child.try_wait().map_err(|err| err.to_string())? {
+            Some(_) => {
+                return child.wait_with_output().map_err(|err| err.to_string());
+            }
+            None => thread::sleep(Duration::from_millis(20)),
+        }
     }
 }
 

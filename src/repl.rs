@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 
 use crate::agent;
 use crate::agent::commit_audit::is_commit_audit_prompt;
+use crate::cancel::CancellationToken;
 use crate::input::{ApprovalChoice, DockedComposer, InlineInput, InputAction, RawModeSession};
 use crate::intent::{classify_intent, path_boundary_violation, recent_task_context, Intent};
 use crate::provider::{self, Message, DEFAULT_SESSION_NAME, PROVIDER};
@@ -40,6 +41,11 @@ pub(crate) enum InteractiveMode {
 struct PendingAgentTask {
     prompt: String,
     root: PathBuf,
+}
+
+struct InFlightTurn {
+    receiver: Receiver<TurnEvent>,
+    cancel: CancellationToken,
 }
 
 struct PendingDockApproval {
@@ -83,6 +89,7 @@ fn run_interactive_chat(model: &str, temperature: Option<f32>, stream: bool) -> 
         let line = match input.read_action(&prompt_text)? {
             InputAction::Submit(line) => line,
             InputAction::Approval(_) => continue,
+            InputAction::Cancel => continue,
             InputAction::Exit => break,
         };
         let prompt = line.trim();
@@ -193,7 +200,7 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
     let mut composer = DockedComposer::new(ui::prompt_text(&runtime_state.label(&current_model)));
     composer.set_transcript_start_row(transcript_start_row);
     composer.render()?;
-    let mut in_flight: Option<Receiver<TurnEvent>> = None;
+    let mut in_flight: Option<InFlightTurn> = None;
     let mut context_scan_started: Option<Instant> = None;
     let mut queued = VecDeque::<String>::new();
     let mut memory = Vec::<Message>::new();
@@ -207,9 +214,9 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
     let mut switch_to_agent = false;
     loop {
         if pending_approval.is_none() {
-            if let Some(receiver) = &in_flight {
+            if let Some(turn) = &in_flight {
                 let (result, streamed, approval) = drain_turn_events(
-                    receiver,
+                    &turn.receiver,
                     &mut composer,
                     "response worker disconnected",
                     context_scan_started,
@@ -289,6 +296,18 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
                     &mut session_approved_tools,
                 )?;
                 context_scan_started = Some(start_context_scan(&mut composer, &active_tool_steps)?);
+                continue;
+            }
+            InputAction::Cancel => {
+                if let Some(turn) = in_flight.take() {
+                    turn.cancel.cancel();
+                    context_scan_started = None;
+                    active_tool_steps.clear();
+                    queued.clear();
+                    composer.clear_progress_dock()?;
+                    composer.finish_stream()?;
+                    composer.print_above("cancelled current response\n")?;
+                }
                 continue;
             }
             InputAction::Exit => break,
@@ -672,6 +691,7 @@ fn run_interactive_agent(model: &str, temperature: Option<f32>) -> Result<(), St
         let line = match input.read_action(&prompt_text)? {
             InputAction::Submit(line) => line,
             InputAction::Approval(_) => continue,
+            InputAction::Cancel => continue,
             InputAction::Exit => break,
         };
         let prompt = line.trim();
@@ -744,8 +764,10 @@ fn spawn_prompt_turn(
     prompt: String,
     model: String,
     temperature: Option<f32>,
-) -> Receiver<TurnEvent> {
+) -> InFlightTurn {
     let (sender, receiver) = mpsc::channel();
+    let cancel = CancellationToken::new();
+    let worker_cancel = cancel.clone();
     let prior_messages = prior_messages.to_vec();
     thread::spawn(move || {
         let result = run_prompt_buffered_rendered(
@@ -754,10 +776,11 @@ fn spawn_prompt_turn(
             &model,
             temperature,
             sender.clone(),
+            worker_cancel,
         );
         let _ = sender.send(TurnEvent::Complete(result));
     });
-    receiver
+    InFlightTurn { receiver, cancel }
 }
 
 fn handle_dock_approval_choice(
@@ -818,7 +841,7 @@ fn spawn_docked_turn(
     model: String,
     temperature: Option<f32>,
     legacy_routing: bool,
-) -> Receiver<TurnEvent> {
+) -> InFlightTurn {
     if let Some(task) = parse_agent_task_command(&prompt) {
         if let Some(root) = task_root_for_prompt(task, selected_root) {
             if path_boundary_violation(task, &root).is_none() {
@@ -841,13 +864,22 @@ fn spawn_agent_turn(
     root: PathBuf,
     model: String,
     temperature: Option<f32>,
-) -> Receiver<TurnEvent> {
+) -> InFlightTurn {
     let (sender, receiver) = mpsc::channel();
+    let cancel = CancellationToken::new();
+    let worker_cancel = cancel.clone();
     thread::spawn(move || {
-        let result = run_agent_streaming(&prompt, root, &model, temperature, sender.clone());
+        let result = run_agent_streaming(
+            &prompt,
+            root,
+            &model,
+            temperature,
+            sender.clone(),
+            worker_cancel,
+        );
         let _ = sender.send(TurnEvent::Complete(result));
     });
-    receiver
+    InFlightTurn { receiver, cancel }
 }
 
 fn run_agent_streaming(
@@ -856,7 +888,9 @@ fn run_agent_streaming(
     model: &str,
     temperature: Option<f32>,
     sender: Sender<TurnEvent>,
+    cancel: CancellationToken,
 ) -> Result<(String, String), String> {
+    cancel.check()?;
     if runtime::load(model)?.backend == RuntimeBackend::Debug {
         let response = format!(
             "debug/manual agent backend root: {}\nmodel: {model}\nprompt: {prompt}\n",
@@ -865,7 +899,7 @@ fn run_agent_streaming(
         let _ = sender.send(TurnEvent::Delta(response.clone()));
         return Ok((prompt.to_string(), response));
     }
-    let outcome = agent::run_agent_quiet_cache_with_approval_handler(
+    let outcome = agent::run_agent_quiet_cache_with_approval_handler_cancelled(
         prompt,
         model,
         temperature,
@@ -881,6 +915,7 @@ fn run_agent_streaming(
                 .recv()
                 .unwrap_or(agent::ApprovalDecision::Deny)
         },
+        cancel,
     )?;
     let response = format_agent_answer(&outcome.answer);
     send_rendered_markdown_stream(&sender, &response);
@@ -1594,7 +1629,9 @@ fn run_prompt_buffered_rendered(
     model: &str,
     temperature: Option<f32>,
     sender: Sender<TurnEvent>,
+    cancel: CancellationToken,
 ) -> Result<(String, String), String> {
+    cancel.check()?;
     let runtime_state = runtime::load(model)?;
     let mut messages = prior_messages.to_vec();
     messages.push(provider::user_message(prompt));
@@ -1603,8 +1640,10 @@ fn run_prompt_buffered_rendered(
         let delay = runtime::debug_stream_delay();
         if let Some(delay) = delay {
             thread::sleep(delay);
+            cancel.check()?;
         }
         for delta in response.chars() {
+            cancel.check()?;
             let _ = sender.send(TurnEvent::Delta(delta.to_string()));
             if let Some(delay) = delay {
                 thread::sleep(delay);
@@ -1612,7 +1651,8 @@ fn run_prompt_buffered_rendered(
         }
         response
     } else {
-        let response = provider::chat_quiet(&messages, model, temperature, None)?;
+        let response =
+            provider::chat_quiet_cancelled(&messages, model, temperature, None, &cancel)?;
         send_rendered_markdown_stream(&sender, &response);
         response
     };

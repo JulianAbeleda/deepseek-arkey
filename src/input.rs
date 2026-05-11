@@ -5,6 +5,7 @@ use std::time::Duration;
 use crossterm::cursor::{Hide, MoveTo, MoveToColumn, Show};
 use crossterm::event::{
     self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode, KeyModifiers,
+    KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 use crossterm::execute;
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode, size, Clear, ClearType};
@@ -25,6 +26,7 @@ use slash::{next_slash_completion, slash_completion_panel_rows};
 pub enum InputAction {
     Submit(String),
     Approval(ApprovalChoice),
+    Cancel,
     Exit,
 }
 
@@ -35,7 +37,7 @@ enum ApprovalModalEvent {
 
 const DOCK_RESERVED_ROWS: usize = 7;
 const DOCK_VERTICAL_PADDING_ROWS: usize = 2;
-const DOCK_HELP_TEXT: &str = "Enter send · ? help · /model · /debug · /runtime · /end · /exit";
+const DOCK_HELP_TEXT: &str = "Enter send · Alt/Shift+Enter newline · Esc stop · ? help · /exit";
 const SLASH_COMMANDS: &[SlashCommandSpec] = &[
     SlashCommandSpec::new("/chat", "Switch to plain chat mode"),
     SlashCommandSpec::new("/agent", "Switch to workspace agent mode"),
@@ -367,6 +369,7 @@ impl DockedComposer {
                 Ok(None)
             }
             Event::Key(key) => match key.code {
+                KeyCode::Esc => Ok(Some(InputAction::Cancel)),
                 KeyCode::Enter => {
                     if key.modifiers.contains(KeyModifiers::SHIFT)
                         || key.modifiers.contains(KeyModifiers::ALT)
@@ -853,7 +856,12 @@ impl DockedComposer {
 impl RawModeSession {
     pub fn enable() -> Result<Self, String> {
         enable_raw_mode().map_err(|err| err.to_string())?;
-        execute!(io::stdout(), EnableBracketedPaste).map_err(|err| err.to_string())?;
+        execute!(
+            io::stdout(),
+            EnableBracketedPaste,
+            PushKeyboardEnhancementFlags(keyboard_enhancement_flags())
+        )
+        .map_err(|err| err.to_string())?;
         Ok(Self)
     }
 }
@@ -861,6 +869,7 @@ impl RawModeSession {
 impl Drop for RawModeSession {
     fn drop(&mut self) {
         let _ = execute!(io::stdout(), Show);
+        let _ = execute!(io::stdout(), PopKeyboardEnhancementFlags);
         let _ = execute!(io::stdout(), DisableBracketedPaste);
         let _ = reset_output_scroll_region();
         let _ = disable_raw_mode();
@@ -872,7 +881,12 @@ struct RawModeGuard;
 impl RawModeGuard {
     fn enable() -> Result<Self, String> {
         enable_raw_mode().map_err(|err| err.to_string())?;
-        execute!(io::stdout(), EnableBracketedPaste).map_err(|err| err.to_string())?;
+        execute!(
+            io::stdout(),
+            EnableBracketedPaste,
+            PushKeyboardEnhancementFlags(keyboard_enhancement_flags())
+        )
+        .map_err(|err| err.to_string())?;
         Ok(Self)
     }
 }
@@ -880,9 +894,16 @@ impl RawModeGuard {
 impl Drop for RawModeGuard {
     fn drop(&mut self) {
         let _ = execute!(io::stdout(), Show);
+        let _ = execute!(io::stdout(), PopKeyboardEnhancementFlags);
         let _ = execute!(io::stdout(), DisableBracketedPaste);
         let _ = disable_raw_mode();
     }
+}
+
+fn keyboard_enhancement_flags() -> KeyboardEnhancementFlags {
+    KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+        | KeyboardEnhancementFlags::REPORT_EVENT_TYPES
+        | KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES
 }
 
 fn render_line(prompt: &str, buffer: &str, cursor: usize) -> Result<(), String> {
@@ -1528,12 +1549,22 @@ fn is_sgr_reset(sequence: &str) -> bool {
 mod tests {
     use super::{
         approval_panel_rows, buffer_prefix, compose_dock_rows, compose_rendered_dock_rows,
-        insert_at, next_slash_completion, next_word_cursor, output_row, parse_forced_terminal_size,
-        previous_word_cursor, progress_panel_rows, prompt_echo_block_lines, remove_at,
-        remove_before, remove_previous_word, slash_command_matches, slash_completion_panel_rows,
-        submitted_prompt_echo_with_options, take_ansi_sequence, visible_len, visible_suffix,
-        ApprovalChoice, ApprovalModal, DockedComposer, DOCK_RESERVED_ROWS,
+        insert_at, keyboard_enhancement_flags, next_slash_completion, next_word_cursor, output_row,
+        parse_forced_terminal_size, previous_word_cursor, progress_panel_rows,
+        prompt_echo_block_lines, remove_at, remove_before, remove_previous_word,
+        slash_command_matches, slash_completion_panel_rows, submitted_prompt_echo_with_options,
+        take_ansi_sequence, visible_len, visible_suffix, ApprovalChoice, ApprovalModal,
+        DockedComposer, DOCK_RESERVED_ROWS,
     };
+    use crossterm::event::KeyboardEnhancementFlags;
+
+    #[test]
+    fn keyboard_enhancement_flags_enable_modified_enter_reporting() {
+        let flags = keyboard_enhancement_flags();
+        assert!(flags.contains(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES));
+        assert!(flags.contains(KeyboardEnhancementFlags::REPORT_EVENT_TYPES));
+        assert!(flags.contains(KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES));
+    }
 
     #[test]
     fn edits_at_cursor() {

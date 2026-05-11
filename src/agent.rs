@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use crate::cancel::CancellationToken;
 use crate::provider::{self, assistant_message, system_message, user_message, Message};
 use crate::safety::{cap_text, redact_text};
 
@@ -129,6 +130,7 @@ pub fn run_agent_final_only(
         ApprovalMode::Interactive,
         |_| {},
         |_| ApprovalDecision::Deny,
+        None,
         |messages, model, temperature| provider::chat_quiet(messages, model, temperature, None),
     )
 }
@@ -150,10 +152,12 @@ pub fn run_agent_with_approval_handler(
         approval_mode,
         &mut on_step,
         &mut on_approval,
+        None,
         |messages, model, temperature| provider::chat(messages, model, temperature, None, false),
     )
 }
 
+#[allow(dead_code)]
 pub fn run_agent_quiet_cache_with_approval_handler(
     task: &str,
     model: &str,
@@ -171,7 +175,34 @@ pub fn run_agent_quiet_cache_with_approval_handler(
         approval_mode,
         &mut on_step,
         &mut on_approval,
+        None,
         |messages, model, temperature| provider::chat_quiet(messages, model, temperature, None),
+    )
+}
+
+pub fn run_agent_quiet_cache_with_approval_handler_cancelled(
+    task: &str,
+    model: &str,
+    temperature: Option<f32>,
+    config: AgentConfig,
+    approval_mode: ApprovalMode,
+    mut on_step: impl FnMut(AgentStep),
+    mut on_approval: impl FnMut(ApprovalRequest) -> ApprovalDecision,
+    cancel: CancellationToken,
+) -> Result<AgentOutcome, String> {
+    let chat_cancel = cancel.clone();
+    run_agent_with_chat_handler(
+        task,
+        model,
+        temperature,
+        config,
+        approval_mode,
+        &mut on_step,
+        &mut on_approval,
+        Some(cancel),
+        move |messages, model, temperature| {
+            provider::chat_quiet_cancelled(messages, model, temperature, None, &chat_cancel)
+        },
     )
 }
 
@@ -183,6 +214,7 @@ fn run_agent_with_chat_handler(
     approval_mode: ApprovalMode,
     mut on_step: impl FnMut(AgentStep),
     mut on_approval: impl FnMut(ApprovalRequest) -> ApprovalDecision,
+    cancel: Option<CancellationToken>,
     mut chat: impl FnMut(&[Message], &str, Option<f32>) -> Result<String, String>,
 ) -> Result<AgentOutcome, String> {
     let workspace = Workspace::new(config.root)?;
@@ -197,7 +229,9 @@ fn run_agent_with_chat_handler(
     }];
 
     for step in 1..=config.max_steps {
+        check_cancelled(&cancel)?;
         let mut raw = chat(&messages, model, temperature)?;
+        check_cancelled(&cancel)?;
         let mut redacted_raw =
             append_assistant_transcript_entry(&mut transcript, "assistant", &raw);
         let mut parsed = match parse_decision_with_metadata(&raw) {
@@ -206,7 +240,9 @@ fn run_agent_with_chat_handler(
                 append_parse_failure_retry_note(&mut transcript, &err);
                 messages.push(assistant_message(redacted_raw.clone()));
                 messages.push(user_message(decision_retry_prompt()));
+                check_cancelled(&cancel)?;
                 raw = chat(&messages, model, temperature)?;
+                check_cancelled(&cancel)?;
                 redacted_raw =
                     append_assistant_transcript_entry(&mut transcript, "assistant_retry", &raw);
                 match parse_decision_with_metadata(&raw) {
@@ -228,7 +264,9 @@ fn run_agent_with_chat_handler(
             append_no_action_retry_note(&mut transcript);
             messages.push(assistant_message(redacted_raw.clone()));
             messages.push(user_message(decision_retry_prompt()));
+            check_cancelled(&cancel)?;
             raw = chat(&messages, model, temperature)?;
+            check_cancelled(&cancel)?;
             redacted_raw =
                 append_assistant_transcript_entry(&mut transcript, "assistant_retry", &raw);
             parsed = match parse_decision_with_metadata(&raw) {
@@ -298,7 +336,9 @@ fn run_agent_with_chat_handler(
             } else {
                 approval_mode
             };
+            check_cancelled(&cancel)?;
             let result = execute_tool(&workspace, tool, tool_approval_mode);
+            check_cancelled(&cancel)?;
             let result_text = cap_text(
                 &redact_text(&sanitize_tool_observation(&result)),
                 MAX_TOOL_CHARS,
@@ -452,6 +492,14 @@ fn no_action_fallback_outcome(
         steps,
         transcript_path,
     })
+}
+
+fn check_cancelled(cancel: &Option<CancellationToken>) -> Result<(), String> {
+    if let Some(cancel) = cancel {
+        cancel.check()
+    } else {
+        Ok(())
+    }
 }
 
 fn approval_request(step: usize, call: &ToolCall) -> Option<ApprovalRequest> {
@@ -688,6 +736,7 @@ mod tests {
 
     use serde_json::json;
 
+    use crate::cancel::CancellationToken;
     use crate::provider::PROVIDER_STATE_DIR;
 
     use super::workspace::Workspace;
@@ -1012,6 +1061,7 @@ I will list the files now."#,
             ApprovalMode::Deny,
             |_| {},
             |_| ApprovalDecision::Deny,
+            None,
             |_, _, _| Ok(responses.pop_front().unwrap()),
         )
         .unwrap();
@@ -1041,6 +1091,7 @@ I will list the files now."#,
             ApprovalMode::Deny,
             |_| {},
             |_| ApprovalDecision::Deny,
+            None,
             |_, _, _| Ok(responses.pop_front().unwrap()),
         )
         .unwrap();
@@ -1067,6 +1118,7 @@ I will list the files now."#,
             ApprovalMode::Deny,
             |_| {},
             |_| ApprovalDecision::Deny,
+            None,
             |_, _, _| Ok(responses.pop_front().unwrap()),
         )
         .unwrap_err();
@@ -1099,6 +1151,7 @@ I will list the files now."#,
             ApprovalMode::Deny,
             |_| {},
             |_| ApprovalDecision::Deny,
+            None,
             |_, _, _| Ok(responses.pop_front().unwrap()),
         )
         .unwrap_err();
@@ -1133,6 +1186,7 @@ I will list the files now."#,
             ApprovalMode::Deny,
             |_| {},
             |_| ApprovalDecision::Deny,
+            None,
             |_, _, _| Ok(responses.pop_front().unwrap()),
         )
         .unwrap();
@@ -1171,6 +1225,7 @@ I will list the files now."#,
             ApprovalMode::Deny,
             |step| steps.push(step),
             |_| ApprovalDecision::Deny,
+            None,
             |_, _, _| Ok(responses.pop_front().unwrap()),
         )
         .unwrap();
@@ -1180,6 +1235,33 @@ I will list the files now."#,
         assert_eq!(steps[0].tool, "list_files");
         assert_eq!(steps[1].label(), "1.2");
         assert_eq!(steps[1].tool, "read_file");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn cancelled_agent_stops_before_chat_call() {
+        let root = std::env::temp_dir().join(format!(
+            "deepseek-agent-cancel-before-chat-test-{}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+
+        let err = super::run_agent_with_chat_handler(
+            "test",
+            "model",
+            None,
+            AgentConfig::new(root.clone(), 3),
+            ApprovalMode::Deny,
+            |_| {},
+            |_| ApprovalDecision::Deny,
+            Some(cancel),
+            |_, _, _| panic!("chat should not run after cancellation"),
+        )
+        .unwrap_err();
+
+        assert_eq!(err, crate::cancel::CANCELLED);
         let _ = fs::remove_dir_all(root);
     }
 
