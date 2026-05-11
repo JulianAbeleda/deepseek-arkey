@@ -13,6 +13,8 @@ active-session.json
 .deepseek/
 
 # Local development planning and audit notes
+docs/*handoff*
+scripts/*dogfood*
 structure/*
 !structure/Development/
 structure/Development/*

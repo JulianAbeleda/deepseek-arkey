@@ -88,7 +88,7 @@ Working checklist for the standalone Rust DeepSeek CLI.
 
 ## Validation Notes
 
-- 2026-05-01: `deepseek login` succeeded after sourcing `~/.zsh_secrets`.
+- 2026-05-01: `deepseek login` succeeded after loading the API key from the shell environment.
 - 2026-05-01: `deepseek --no-session -p "Say exactly: DEEPSEEK_OK"` returned exactly `DEEPSEEK_OK`.
 - 2026-05-01: `deepseek login` initially failed because the 16-token health-check budget was exhausted by reasoning output; fixed by raising the login check budget to 128 tokens.
 - 2026-05-01: `deepseek --no-session --model deepseek-v4-flash -p "Say exactly: DEEPSEEK_OK"` returned exactly `DEEPSEEK_OK` with the installed binary.
@@ -96,7 +96,7 @@ Working checklist for the standalone Rust DeepSeek CLI.
 - 2026-05-01: `deepseek --no-session --stream -p "Count from 1 to 3, one number per line."` streamed successfully.
 - 2026-05-01: `/model` is handled locally and no longer falls through to the provider as a prompt.
 - 2026-05-01: Default and `/model` help updated to current DeepSeek V4 IDs: `deepseek-v4-flash` and `deepseek-v4-pro`; legacy `deepseek-chat` / `deepseek-reasoner` documented as retiring on 2026-07-24.
-- 2026-05-01: `deepseek agent --root /Users/julianabeleda/env/deepseek --max-steps 4 Inspect README.md and answer with the default model documented there.` inspected the repo read-only and returned `deepseek-v4-flash`.
+- 2026-05-01: `deepseek agent --root . --max-steps 4 Inspect README.md and answer with the default model documented there.` inspected the repo read-only and returned `deepseek-v4-flash`.
 - 2026-05-01: Agent protocol uses nested `thought` / `tool` / `final_answer` / `blocked` JSON, local transcripts, and resilient tool error observations.
 - 2026-05-01: `run_shell` added as an approval-gated agent tool; non-interactive runs deny by default.
 - 2026-05-01: `propose_patch` added as an approval-gated exact single-file text replacement tool; non-interactive runs deny by default.
@@ -191,7 +191,7 @@ Validation notes:
   - `f0239a7 [ui] Cover routing audit gaps`
   - `783b13b [ui] Accept short agent route confirmation`
   - `5699a02 [ui] Route env folder tasks`
-- [x] Consolidate Kimi-style routing direction into `structure/Development/kimi-routing-context.md`.
+- [x] Consolidate model-decided routing direction into local development notes.
 - [x] Remove the broad root-level `SCOPE.md` draft.
 
 Validation notes:
@@ -204,7 +204,7 @@ Validation notes:
 ## Phase 11: Kimi-Style Docked Agent Direction
 
 - Source of truth: `structure/Development/kimi-routing-context.md`
-- [x] Consolidate the Kimi-style design direction into one local handoff note.
+- [x] Consolidate the model-decided routing direction into one local handoff note.
 - [x] Remove the broad root-level `SCOPE.md` draft from the working tree.
 - [x] Add async docked agent execution so tool steps and final answers render through the dock instead of stdout handoff.
 - [x] Make model-decided routing the default baseline.
@@ -228,7 +228,7 @@ Validation notes:
 ## Phase 12: Dock-Native Approval First Slice
 
 - Scope: `docs/phase12-dock-approval-scope.md`
-- Handoff: `structure/Development/session-handoff.md`
+- Handoff: local ignored development note.
 - [x] Implement dock-native approval requests in DeepSeek first.
 - [x] Preserve explicit agent mode `yes run` and `yes apply` prompts.
 - [x] Add dock-native approval requests for `run_shell` and `propose_patch`.
@@ -296,8 +296,8 @@ Validation notes:
 Phase 8 smoke commands:
 
 ```bash
-deepseek agent --root /Users/julianabeleda/env/deepseek --max-steps 4 "Inspect README.md and answer with the default model documented there."
-deepseek agent --root /Users/julianabeleda/env/deepseek --max-steps 4 "Request run_shell with command 'pwd', cwd '.', reason 'denied smoke', then report the result."
-deepseek agent --root /Users/julianabeleda/env/deepseek --max-steps 4 "Request propose_patch on README.md replacing 'Standalone Rust CLI' with 'Standalone Rust CLI', reason 'denied smoke', then report the result."
-deepseek agent --root /Users/julianabeleda/env/deepseek transcript latest
+deepseek agent --root . --max-steps 4 "Inspect README.md and answer with the default model documented there."
+deepseek agent --root . --max-steps 4 "Request run_shell with command 'pwd', cwd '.', reason 'denied smoke', then report the result."
+deepseek agent --root . --max-steps 4 "Request propose_patch on README.md replacing 'Standalone Rust CLI' with 'Standalone Rust CLI', reason 'denied smoke', then report the result."
+deepseek agent --root . transcript latest
 ```

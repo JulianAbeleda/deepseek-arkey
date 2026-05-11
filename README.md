@@ -99,3 +99,7 @@ Live provider smoke requires `DEEPSEEK_API_KEY` and network access:
 ```bash
 python3 scripts/live-docked-routing-smoke.py --binary target/release/deepseek
 ```
+
+## License
+
+MIT. See [LICENSE](LICENSE).

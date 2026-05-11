@@ -855,19 +855,19 @@ mod tests {
     #[test]
     fn repairs_trailing_characters_in_openai_tool_arguments_string() {
         let decision = parse_decision(
-            r#"{"content":null,"tool_calls":[{"id":"call_1","type":"function","function":{"name":"inspect_tree","arguments":"{\"depth\":2,\"path\":\"pkos_v0.2\"}}"}}]}"#,
+            r#"{"content":null,"tool_calls":[{"id":"call_1","type":"function","function":{"name":"inspect_tree","arguments":"{\"depth\":2,\"path\":\"sample_repo\"}}"}}]}"#,
         )
         .unwrap();
         let tool = decision.tool.unwrap();
         assert_eq!(tool.name, "inspect_tree");
         assert_eq!(tool.arguments["depth"], 2);
-        assert_eq!(tool.arguments["path"], "pkos_v0.2");
+        assert_eq!(tool.arguments["path"], "sample_repo");
     }
 
     #[test]
     fn records_trailing_arguments_repair_metadata() {
         let parsed = parse_decision_with_metadata(
-            r#"{"content":null,"tool_calls":[{"id":"call_1","type":"function","function":{"name":"inspect_tree","arguments":"{\"depth\":2,\"path\":\"pkos_v0.2\"}}"}}]}"#,
+            r#"{"content":null,"tool_calls":[{"id":"call_1","type":"function","function":{"name":"inspect_tree","arguments":"{\"depth\":2,\"path\":\"sample_repo\"}}"}}]}"#,
         )
         .unwrap();
         assert_eq!(parsed.repairs, vec!["arguments_trailing_json"]);

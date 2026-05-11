@@ -395,12 +395,12 @@ mod tests {
             "deepseek-navigation-base-test-{}",
             std::process::id()
         ));
-        let child = root.join("v1_DNU");
+        let child = root.join("sample_project");
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&child).unwrap();
 
         assert_eq!(
-            parse_navigation_request_from("cd into v1_DNU", Some(&root))
+            parse_navigation_request_from("cd into sample_project", Some(&root))
                 .unwrap()
                 .as_deref(),
             Some(child.canonicalize().unwrap().as_path())
