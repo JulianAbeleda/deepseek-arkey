@@ -164,6 +164,8 @@ def main():
                 screen,
                 "dock after scan",
             )
+            if screen.contains("agent step 1: list_files"):
+                raise AssertionError(f"tool step persisted after final answer\n{screen.dump()}")
             assert_not_legacy_handoff(screen)
 
             os.write(master, b"try a shell command\r")

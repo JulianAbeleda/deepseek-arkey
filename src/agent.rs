@@ -61,6 +61,23 @@ pub struct ApprovalRequest {
     pub summary: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentStep {
+    pub step: usize,
+    pub item: Option<usize>,
+    pub total: usize,
+    pub tool: String,
+}
+
+impl AgentStep {
+    pub fn label(&self) -> String {
+        match self.item {
+            Some(item) => format!("{}.{}", self.step, item),
+            None => self.step.to_string(),
+        }
+    }
+}
+
 pub fn run_agent(
     task: &str,
     model: &str,
@@ -73,8 +90,8 @@ pub fn run_agent(
         temperature,
         config,
         ApprovalMode::Interactive,
-        |step, tool| {
-            eprintln!("agent step {step}: {tool}");
+        |step| {
+            eprintln!("agent step {}: {}", step.label(), step.tool);
         },
     )
 }
@@ -85,7 +102,7 @@ pub fn run_agent_with_options(
     temperature: Option<f32>,
     config: AgentConfig,
     approval_mode: ApprovalMode,
-    on_step: impl FnMut(usize, &str),
+    on_step: impl FnMut(AgentStep),
 ) -> Result<AgentOutcome, String> {
     run_agent_with_approval_handler(
         task,
@@ -110,7 +127,7 @@ pub fn run_agent_final_only(
         temperature,
         config,
         ApprovalMode::Interactive,
-        |_, _| {},
+        |_| {},
         |_| ApprovalDecision::Deny,
         |messages, model, temperature| provider::chat_quiet(messages, model, temperature, None),
     )
@@ -122,7 +139,7 @@ pub fn run_agent_with_approval_handler(
     temperature: Option<f32>,
     config: AgentConfig,
     approval_mode: ApprovalMode,
-    mut on_step: impl FnMut(usize, &str),
+    mut on_step: impl FnMut(AgentStep),
     mut on_approval: impl FnMut(ApprovalRequest) -> ApprovalDecision,
 ) -> Result<AgentOutcome, String> {
     run_agent_with_chat_handler(
@@ -143,7 +160,7 @@ pub fn run_agent_quiet_cache_with_approval_handler(
     temperature: Option<f32>,
     config: AgentConfig,
     approval_mode: ApprovalMode,
-    mut on_step: impl FnMut(usize, &str),
+    mut on_step: impl FnMut(AgentStep),
     mut on_approval: impl FnMut(ApprovalRequest) -> ApprovalDecision,
 ) -> Result<AgentOutcome, String> {
     run_agent_with_chat_handler(
@@ -164,7 +181,7 @@ fn run_agent_with_chat_handler(
     temperature: Option<f32>,
     config: AgentConfig,
     approval_mode: ApprovalMode,
-    mut on_step: impl FnMut(usize, &str),
+    mut on_step: impl FnMut(AgentStep),
     mut on_approval: impl FnMut(ApprovalRequest) -> ApprovalDecision,
     mut chat: impl FnMut(&[Message], &str, Option<f32>) -> Result<String, String>,
 ) -> Result<AgentOutcome, String> {
@@ -260,8 +277,14 @@ fn run_agent_with_chat_handler(
             return Err(fail_no_action_with_transcript(&workspace.root, &transcript));
         }
         let mut result_sections = Vec::new();
+        let total_tools = tools.len();
         for (index, tool) in tools.iter().enumerate() {
-            on_step(step, &tool.name);
+            on_step(AgentStep {
+                step,
+                item: (total_tools > 1).then_some(index + 1),
+                total: total_tools,
+                tool: tool.name.clone(),
+            });
             let tool_approval_mode = if approval_mode == ApprovalMode::External {
                 match approval_request(step, tool) {
                     Some(request) => match on_approval(request) {
@@ -691,6 +714,30 @@ mod tests {
     }
 
     #[test]
+    fn agent_step_label_uses_substeps_only_for_batches() {
+        assert_eq!(
+            super::AgentStep {
+                step: 1,
+                item: None,
+                total: 1,
+                tool: "list_files".to_string(),
+            }
+            .label(),
+            "1"
+        );
+        assert_eq!(
+            super::AgentStep {
+                step: 2,
+                item: Some(1),
+                total: 2,
+                tool: "read_file".to_string(),
+            }
+            .label(),
+            "2.1"
+        );
+    }
+
+    #[test]
     fn system_prompt_includes_markdown_final_answer_style() {
         let prompt = system_prompt(std::path::Path::new("/tmp/workspace"));
         assert!(prompt.contains("Final answer style:"));
@@ -963,7 +1010,7 @@ I will list the files now."#,
             None,
             AgentConfig::new(root.clone(), 3),
             ApprovalMode::Deny,
-            |_, _| {},
+            |_| {},
             |_| ApprovalDecision::Deny,
             |_, _, _| Ok(responses.pop_front().unwrap()),
         )
@@ -992,7 +1039,7 @@ I will list the files now."#,
             None,
             AgentConfig::new(root.clone(), 3),
             ApprovalMode::Deny,
-            |_, _| {},
+            |_| {},
             |_| ApprovalDecision::Deny,
             |_, _, _| Ok(responses.pop_front().unwrap()),
         )
@@ -1018,7 +1065,7 @@ I will list the files now."#,
             None,
             AgentConfig::new(root.clone(), 3),
             ApprovalMode::Deny,
-            |_, _| {},
+            |_| {},
             |_| ApprovalDecision::Deny,
             |_, _, _| Ok(responses.pop_front().unwrap()),
         )
@@ -1050,7 +1097,7 @@ I will list the files now."#,
             None,
             AgentConfig::new(root.clone(), 3),
             ApprovalMode::Deny,
-            |_, _| {},
+            |_| {},
             |_| ApprovalDecision::Deny,
             |_, _, _| Ok(responses.pop_front().unwrap()),
         )
@@ -1084,7 +1131,7 @@ I will list the files now."#,
             None,
             AgentConfig::new(root.clone(), 3),
             ApprovalMode::Deny,
-            |_, _| {},
+            |_| {},
             |_| ApprovalDecision::Deny,
             |_, _, _| Ok(responses.pop_front().unwrap()),
         )
@@ -1100,6 +1147,39 @@ I will list the files now."#,
             .unwrap()
             .1;
         assert!(summary.contains("final: blocked: model returned no actionable decision"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn multi_tool_response_reports_substeps() {
+        let root = std::env::temp_dir().join(format!(
+            "deepseek-agent-substep-test-{}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("README.md"), "fixture").unwrap();
+        let mut responses = VecDeque::from([
+            r#"{"content":null,"tool_calls":[{"id":"call_1","type":"function","function":{"name":"list_files","arguments":"{\"path\":\".\"}"}},{"id":"call_2","type":"function","function":{"name":"read_file","arguments":"{\"path\":\"README.md\"}"}}]}"#.to_string(),
+            r#"{"content":"done","tool_calls":null}"#.to_string(),
+        ]);
+        let mut steps = Vec::new();
+        let outcome = super::run_agent_with_chat_handler(
+            "test",
+            "model",
+            None,
+            AgentConfig::new(root.clone(), 3),
+            ApprovalMode::Deny,
+            |step| steps.push(step),
+            |_| ApprovalDecision::Deny,
+            |_, _, _| Ok(responses.pop_front().unwrap()),
+        )
+        .unwrap();
+        assert_eq!(outcome.answer, "done");
+        assert_eq!(steps.len(), 2);
+        assert_eq!(steps[0].label(), "1.1");
+        assert_eq!(steps[0].tool, "list_files");
+        assert_eq!(steps[1].label(), "1.2");
+        assert_eq!(steps[1].tool, "read_file");
         let _ = fs::remove_dir_all(root);
     }
 

@@ -82,6 +82,7 @@ pub struct DockedComposer {
     approval_modal: Option<ApprovalModal>,
     stream_buffer: String,
     status_active: bool,
+    status_rows: usize,
     transcript_lines: Vec<String>,
     transcript_view_offset: usize,
     transcript_start_row: Option<u16>,
@@ -245,6 +246,7 @@ impl DockedComposer {
             approval_modal: None,
             stream_buffer: String::new(),
             status_active: false,
+            status_rows: 0,
             transcript_lines: Vec::new(),
             transcript_view_offset: 0,
             transcript_start_row: None,
@@ -495,10 +497,11 @@ impl DockedComposer {
 
     pub fn print_above(&mut self, text: &str) -> Result<(), String> {
         self.snap_transcript_to_bottom();
+        let status_rows = self.status_rows;
         let had_status = self.take_status_active();
         let mut stdout = io::stdout();
         if had_status {
-            clear_rows_above_dock(&mut stdout, self.active_dock_rows(), 1)?;
+            clear_rows_above_dock(&mut stdout, self.active_dock_rows(), status_rows)?;
         }
         self.move_to_transcript_cursor(&mut stdout)?;
         execute!(stdout, MoveToColumn(0), Clear(ClearType::CurrentLine))
@@ -520,19 +523,25 @@ impl DockedComposer {
     }
 
     pub fn status_above(&mut self, text: &str) -> Result<(), String> {
+        let status_rows = self.status_rows;
         let had_status = self.take_status_active();
         let mut stdout = io::stdout();
         if had_status {
-            clear_rows_above_dock(&mut stdout, self.active_dock_rows(), 1)?;
+            clear_rows_above_dock(&mut stdout, self.active_dock_rows(), status_rows)?;
         }
         self.move_to_transcript_cursor(&mut stdout)?;
         execute!(stdout, MoveToColumn(0), Clear(ClearType::CurrentLine))
             .map_err(|err| err.to_string())?;
-        if let Some(line) = text.lines().next() {
+        let lines = text.lines().collect::<Vec<_>>();
+        for (index, line) in lines.iter().enumerate() {
+            if index > 0 {
+                write!(stdout, "\r\n").map_err(|err| err.to_string())?;
+            }
             write!(stdout, "{line}").map_err(|err| err.to_string())?;
         }
         stdout.flush().map_err(|err| err.to_string())?;
         self.status_active = true;
+        self.status_rows = lines.len().max(1);
         self.render_preserving_cursor()
     }
 
@@ -547,10 +556,11 @@ impl DockedComposer {
                 &mut stdout,
                 self.active_dock_rows(),
                 self.transcript_row(),
-                1,
+                self.status_rows,
             )?;
             self.move_to_transcript_cursor(&mut stdout)?;
             self.status_active = false;
+            self.status_rows = 0;
         }
         write_raw_lines(&mut stdout, text)?;
         stdout.flush().map_err(|err| err.to_string())?;
@@ -583,6 +593,7 @@ impl DockedComposer {
     fn reset_stream_state(&mut self) {
         self.stream_buffer.clear();
         self.status_active = false;
+        self.status_rows = 0;
     }
 
     fn take_status_active(&mut self) -> bool {
@@ -1831,9 +1842,11 @@ mod tests {
         assert_eq!(composer.stream_buffer, "hello");
         assert!(!composer.status_active);
         composer.status_active = true;
+        composer.status_rows = 3;
         composer.reset_stream_state();
         assert!(composer.stream_buffer.is_empty());
         assert!(!composer.status_active);
+        assert_eq!(composer.status_rows, 0);
         assert_eq!(composer.buffer, "draft");
     }
 
@@ -1841,8 +1854,10 @@ mod tests {
     fn composer_status_state_is_consumed_before_rewrite() {
         let mut composer = DockedComposer::new("prompt › ".to_string());
         composer.status_active = true;
+        composer.status_rows = 2;
         assert!(composer.take_status_active());
         assert!(!composer.status_active);
+        assert_eq!(composer.status_rows, 0);
         assert!(!composer.take_status_active());
     }
 
