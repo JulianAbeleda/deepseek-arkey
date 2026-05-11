@@ -899,16 +899,15 @@ fn drain_turn_events(
 > {
     let mut chunk = String::new();
     let mut complete = None;
-    let mut activity = false;
+    let mut answer_streamed = false;
     let mut approval = None;
     loop {
         match receiver.try_recv() {
             Ok(TurnEvent::Delta(delta)) => {
-                activity = true;
+                answer_streamed = true;
                 chunk.push_str(&delta);
             }
             Ok(TurnEvent::ToolStep(step)) => {
-                activity = true;
                 if !chunk.is_empty() {
                     composer.stream_above(&chunk)?;
                     chunk.clear();
@@ -919,7 +918,6 @@ fn drain_turn_events(
                 }
             }
             Ok(TurnEvent::ApprovalRequest(request, reply)) => {
-                activity = true;
                 if !chunk.is_empty() {
                     composer.stream_above(&chunk)?;
                     chunk.clear();
@@ -940,8 +938,9 @@ fn drain_turn_events(
     }
     if !chunk.is_empty() {
         composer.stream_above(&chunk)?;
+        answer_streamed = true;
     }
-    Ok((complete, activity, approval))
+    Ok((complete, answer_streamed, approval))
 }
 
 fn start_context_scan(

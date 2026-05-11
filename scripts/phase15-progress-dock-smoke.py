@@ -105,6 +105,38 @@ def write_slow_fake_curl(directory):
     path.chmod(path.stat().st_mode | stat.S_IXUSR)
 
 
+def write_slow_second_call_fake_curl(directory):
+    path = Path(directory) / "curl"
+    path.write_text(
+        textwrap.dedent(
+            r"""
+            #!/usr/bin/env python3
+            import json
+            import sys
+            import time
+
+            config = sys.stdin.read()
+
+            if "Tool result for step 1" in config:
+                time.sleep(4.0)
+                decision = {"final_answer": "files listed after slow continuation"}
+            else:
+                time.sleep(1.0)
+                decision = {
+                    "thought": "listing files as requested",
+                    "tool": {"name": "list_files", "arguments": {"path": "."}},
+                }
+
+            print(json.dumps({
+                "choices": [{"message": {"content": json.dumps(decision)}}]
+            }))
+            """
+        ).lstrip(),
+        encoding="utf-8",
+    )
+    path.chmod(path.stat().st_mode | stat.S_IXUSR)
+
+
 def visible_row_with(screen, text):
     for row, line in enumerate(screen.lines()):
         if text in line:
@@ -237,6 +269,81 @@ def run_progress_smoke(binary, name):
             os.close(master)
 
 
+def run_progress_timer_smoke(binary, name):
+    with tempfile.TemporaryDirectory(prefix=f"{name}-progress-timer-") as tmp:
+        tmp_path = Path(tmp)
+        home = tmp_path / "home"
+        workspace = tmp_path / "workspace"
+        fake_bin = tmp_path / "bin"
+        home.mkdir()
+        workspace.mkdir()
+        fake_bin.mkdir()
+        (workspace / "hello.txt").write_text("hello\n", encoding="utf-8")
+        write_slow_second_call_fake_curl(fake_bin)
+
+        env = os.environ.copy()
+        env["HOME"] = str(home)
+        env["DEEPSEEK_API_KEY"] = "progress-timer-smoke-key"
+        env["DEEPSEEK_FORCE_TTY_SIZE"] = f"{COLS}x{ROWS}"
+        env["PATH"] = f"{fake_bin}{os.pathsep}{env.get('PATH', '')}"
+
+        master, proc = spawn_pty(binary, ["chat"], env, str(workspace), ROWS, COLS)
+        screen = Screen(ROWS, COLS)
+        loading_values = []
+        saw_tool_step = False
+
+        try:
+            wait_for(
+                lambda: prompt_visible(screen, name),
+                master,
+                screen,
+                "initial dock prompt",
+                timeout=10.0,
+            )
+
+            os.write(master, b"list files\r")
+            deadline = time.monotonic() + 8.0
+            while time.monotonic() < deadline:
+                read_available(master, screen, 0.1)
+                dock = screen.dock_text()
+                if "agent step 1: list_files" in dock:
+                    saw_tool_step = True
+                if saw_tool_step:
+                    for line in screen.lines():
+                        if "Loading " in line:
+                            value = line.strip()
+                            if not loading_values or loading_values[-1] != value:
+                                loading_values.append(value)
+                if "files listed after slow continuation" in screen.all_text():
+                    break
+
+            wait_for(
+                lambda: "files listed after slow continuation" in screen.all_text(),
+                master,
+                screen,
+                "slow continuation final answer",
+                timeout=10.0,
+            )
+
+            print(f"saw_tool_step_before_slow_wait={saw_tool_step}")
+            print("loading_values_after_tool_step=" + ",".join(loading_values))
+            if not saw_tool_step:
+                raise AssertionError("tool step never appeared before slow continuation")
+            if len(set(loading_values)) < 3:
+                raise AssertionError(
+                    "Loading timer did not continue ticking after tool step\n" + screen.dump()
+                )
+        finally:
+            if proc.poll() is None:
+                try:
+                    os.write(master, b"/exit\r")
+                    time.sleep(0.3)
+                except OSError:
+                    pass
+                proc.terminate()
+            os.close(master)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--binary", default=None, help="DeepSeek binary to test.")
@@ -248,6 +355,7 @@ def main():
 
     assert_source_contract(repo_root)
     run_progress_smoke(binary, args.name)
+    run_progress_timer_smoke(binary, args.name)
 
     print(f"{args.name} phase15 progress dock smoke: ok")
 
