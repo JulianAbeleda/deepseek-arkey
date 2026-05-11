@@ -1,6 +1,8 @@
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 
+use crate::agent::commit_audit::is_commit_audit_prompt;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Intent {
     Chat,
@@ -115,20 +117,6 @@ fn is_task_prompt(prompt: &str, has_recent_task_context: bool) -> bool {
         ]
         .iter()
         .any(|phrase| prompt.starts_with(phrase))
-}
-
-pub(crate) fn is_commit_audit_prompt(prompt: &str) -> bool {
-    let normalized = normalize_prompt(prompt);
-    let words = normalized.split_whitespace().collect::<Vec<_>>();
-    words.contains(&"audit")
-        && words.contains(&"commit")
-        && (words.iter().any(|word| is_commit_ref(word))
-            || starts_with_phrase(&normalized, "audit this commit"))
-}
-
-fn is_commit_ref(word: &str) -> bool {
-    word == "head"
-        || (word.len() >= 7 && word.len() <= 40 && word.chars().all(|ch| ch.is_ascii_hexdigit()))
 }
 
 fn has_task_phrase(prompt: &str) -> bool {

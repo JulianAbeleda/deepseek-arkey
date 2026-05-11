@@ -17,10 +17,10 @@ pub(super) fn prepare_task(task: &str, root: &Path) -> String {
 
 fn commit_audit_target(task: &str) -> Option<String> {
     let normalized = normalize_task(task);
-    let words = normalized.split_whitespace().collect::<Vec<_>>();
-    if !words.contains(&"audit") || !words.contains(&"commit") {
+    if !is_commit_audit_prompt(&normalized) {
         return None;
     }
+    let words = normalized.split_whitespace().collect::<Vec<_>>();
     words
         .iter()
         .copied()
@@ -35,6 +35,19 @@ fn commit_audit_target(task: &str) -> Option<String> {
         .or_else(|| Some("HEAD".to_string()))
 }
 
+pub(crate) fn is_commit_audit_prompt(prompt: &str) -> bool {
+    let normalized = normalize_task(prompt);
+    let words = normalized.split_whitespace().collect::<Vec<_>>();
+    words.contains(&"audit")
+        && words.contains(&"commit")
+        && (words.iter().any(|word| is_commit_ref(word))
+            || normalized
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .windows(3)
+                .any(|window| window == ["audit", "this", "commit"]))
+}
+
 fn normalize_task(task: &str) -> String {
     task.chars()
         .map(|ch| {
@@ -47,7 +60,7 @@ fn normalize_task(task: &str) -> String {
         .collect::<String>()
 }
 
-fn is_commit_ref(word: &str) -> bool {
+pub(crate) fn is_commit_ref(word: &str) -> bool {
     word == "head"
         || (word.len() >= 7 && word.len() <= 40 && word.chars().all(|ch| ch.is_ascii_hexdigit()))
 }
@@ -76,7 +89,7 @@ fn collect_git_evidence(root: &Path, target: &str) -> String {
         .map(|(label, output)| {
             format!(
                 "## {label}\n\n{}",
-                redact_text(&cap_text(&output, MAX_GIT_OUTPUT_CHARS))
+                cap_text(&redact_text(&output), MAX_GIT_OUTPUT_CHARS)
             )
         })
         .collect::<Vec<_>>()
@@ -97,7 +110,9 @@ fn run_git(root: &Path, args: &[&str]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{commit_audit_target, prepare_task};
+    use std::fs;
+
+    use super::{commit_audit_target, is_commit_audit_prompt, prepare_task};
 
     #[test]
     fn detects_commit_audit_targets() {
@@ -117,6 +132,10 @@ mod tests {
             commit_audit_target("audit this commit"),
             Some("HEAD".to_string())
         );
+        assert_eq!(
+            commit_audit_target("can you audit this commit"),
+            Some("HEAD".to_string())
+        );
     }
 
     #[test]
@@ -124,6 +143,11 @@ mod tests {
         assert_eq!(commit_audit_target("show commit 3ca875a"), None);
         assert_eq!(commit_audit_target("audit this repo"), None);
         assert_eq!(commit_audit_target("3ca875a is latest"), None);
+        assert_eq!(
+            commit_audit_target("audit our commit signing workflow"),
+            None
+        );
+        assert!(!is_commit_audit_prompt("audit our commit signing workflow"));
     }
 
     #[test]
@@ -133,5 +157,21 @@ mod tests {
         assert!(task.contains("Resolved commit target: HEAD"));
         assert!(task.contains("Local git evidence collected before model review:"));
         assert!(task.contains("Do not ask the user to paste the diff"));
+    }
+
+    #[test]
+    fn prepared_task_reports_non_git_evidence_failures() {
+        let root = std::env::temp_dir().join(format!(
+            "deepseek-commit-audit-non-git-{}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let task = prepare_task("audit commit HEAD", &root);
+        let _ = fs::remove_dir_all(&root);
+
+        assert!(task.contains("Resolved commit target: HEAD"));
+        assert!(task.contains("git status --short --branch"));
+        assert!(task.contains("git show --stat --patch --find-renames"));
+        assert!(task.contains("status: exit status: 128") || task.contains("not a git repository"));
     }
 }

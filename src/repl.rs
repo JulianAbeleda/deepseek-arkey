@@ -6,10 +6,9 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::agent;
+use crate::agent::commit_audit::is_commit_audit_prompt;
 use crate::input::{ApprovalChoice, DockedComposer, InlineInput, InputAction, RawModeSession};
-use crate::intent::{
-    classify_intent, is_commit_audit_prompt, path_boundary_violation, recent_task_context, Intent,
-};
+use crate::intent::{classify_intent, path_boundary_violation, recent_task_context, Intent};
 use crate::provider::{self, Message, DEFAULT_SESSION_NAME, PROVIDER};
 use crate::runtime::{self, RuntimeBackend};
 use crate::session::{self, SessionState};

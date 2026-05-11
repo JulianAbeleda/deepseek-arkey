@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use crate::provider::{self, assistant_message, system_message, user_message, Message};
 use crate::safety::{cap_text, redact_text};
 
-mod commit_audit;
+pub(crate) mod commit_audit;
 mod decision;
 mod read_tools;
 mod transcript;
