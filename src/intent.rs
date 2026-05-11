@@ -20,6 +20,12 @@ pub(crate) fn classify_intent(
     if is_clarify_prompt(&normalized) {
         return Intent::Clarify;
     }
+    if is_commit_audit_prompt(&normalized) {
+        return workspace_root
+            .is_some()
+            .then_some(Intent::Task)
+            .unwrap_or(Intent::Clarify);
+    }
     if is_chat_prompt(&normalized) {
         return Intent::Chat;
     }
@@ -109,6 +115,20 @@ fn is_task_prompt(prompt: &str, has_recent_task_context: bool) -> bool {
         ]
         .iter()
         .any(|phrase| prompt.starts_with(phrase))
+}
+
+pub(crate) fn is_commit_audit_prompt(prompt: &str) -> bool {
+    let normalized = normalize_prompt(prompt);
+    let words = normalized.split_whitespace().collect::<Vec<_>>();
+    words.contains(&"audit")
+        && words.contains(&"commit")
+        && (words.iter().any(|word| is_commit_ref(word))
+            || starts_with_phrase(&normalized, "audit this commit"))
+}
+
+fn is_commit_ref(word: &str) -> bool {
+    word == "head"
+        || (word.len() >= 7 && word.len() <= 40 && word.chars().all(|ch| ch.is_ascii_hexdigit()))
 }
 
 fn has_task_phrase(prompt: &str) -> bool {
@@ -370,6 +390,18 @@ mod tests {
             classify_intent("implement a logout button", false, Some(root)),
             Intent::Task
         );
+        assert_eq!(
+            classify_intent("audit commit 3ca875a", false, Some(root)),
+            Intent::Task
+        );
+        assert_eq!(
+            classify_intent(
+                "3ca875a — [repo] Close analysis followups < can you audit this commit",
+                false,
+                Some(root)
+            ),
+            Intent::Task
+        );
     }
 
     #[test]
@@ -408,6 +440,10 @@ mod tests {
         );
         assert_eq!(
             classify_intent("scan the config", false, None),
+            Intent::Clarify
+        );
+        assert_eq!(
+            classify_intent("audit commit 3ca875a", false, None),
             Intent::Clarify
         );
     }

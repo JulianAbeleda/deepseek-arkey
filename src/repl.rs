@@ -7,7 +7,9 @@ use std::time::{Duration, Instant};
 
 use crate::agent;
 use crate::input::{ApprovalChoice, DockedComposer, InlineInput, InputAction, RawModeSession};
-use crate::intent::{classify_intent, path_boundary_violation, recent_task_context, Intent};
+use crate::intent::{
+    classify_intent, is_commit_audit_prompt, path_boundary_violation, recent_task_context, Intent,
+};
 use crate::provider::{self, Message, DEFAULT_SESSION_NAME, PROVIDER};
 use crate::runtime::{self, RuntimeBackend};
 use crate::session::{self, SessionState};
@@ -1410,6 +1412,9 @@ fn is_workspace_agent_prompt(prompt: &str) -> bool {
     if normalized.contains("main branch") {
         return false;
     }
+    if is_commit_audit_prompt(&normalized) {
+        return true;
+    }
     let first = normalized.split_whitespace().next().unwrap_or("");
     if matches!(
         first,
@@ -1889,6 +1894,8 @@ mod tests {
             "what is this repo trying to do",
             "deny shell command",
             "approve patch edit",
+            "audit commit 3ca875a",
+            "3ca875a — [repo] Close analysis followups < can you audit this commit",
         ] {
             assert_eq!(
                 workspace_agent_root_for_prompt(prompt, Some(selected)),

@@ -108,6 +108,7 @@ run python3 scripts/docked-smoke.py --binary "$BINARY" --entrypoint chat
 
 section "Commit Audit Approval Smoke"
 run python3 scripts/phase13-commit-audit-approval-smoke.py --binary "$BINARY"
+run python3 scripts/phase14-commit-audit-preflight-smoke.py --binary "$BINARY"
 
 section "Persistent Navigation Smoke"
 run ./scripts/persistent-navigation-test.sh

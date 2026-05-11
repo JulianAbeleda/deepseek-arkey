@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use crate::provider::{self, assistant_message, system_message, user_message, Message};
 use crate::safety::{cap_text, redact_text};
 
+mod commit_audit;
 mod decision;
 mod read_tools;
 mod transcript;
@@ -168,13 +169,14 @@ fn run_agent_with_chat_handler(
     mut chat: impl FnMut(&[Message], &str, Option<f32>) -> Result<String, String>,
 ) -> Result<AgentOutcome, String> {
     let workspace = Workspace::new(config.root)?;
+    let prepared_task = commit_audit::prepare_task(task, &workspace.root);
     let mut messages = vec![
         system_message(system_prompt(&workspace.root)),
-        user_message(format!("Task: {}", redact_text(task))),
+        user_message(format!("Task: {}", redact_text(&prepared_task))),
     ];
     let mut transcript = vec![TranscriptEntry {
         role: "task".to_string(),
-        content: redact_text(task),
+        content: redact_text(&prepared_task),
     }];
 
     for step in 1..=config.max_steps {
