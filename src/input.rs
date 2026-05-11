@@ -80,6 +80,7 @@ pub struct DockedComposer {
     slash_completion_index: Option<usize>,
     slash_completion_prefix: Option<String>,
     approval_modal: Option<ApprovalModal>,
+    progress_rows: Vec<String>,
     stream_buffer: String,
     status_active: bool,
     status_rows: usize,
@@ -244,6 +245,7 @@ impl DockedComposer {
             slash_completion_index: None,
             slash_completion_prefix: None,
             approval_modal: None,
+            progress_rows: Vec::new(),
             stream_buffer: String::new(),
             status_active: false,
             status_rows: 0,
@@ -271,7 +273,12 @@ impl DockedComposer {
     pub fn render(&mut self) -> Result<(), String> {
         let approval_rows = self.approval_panel_rows();
         let panel_rows = if approval_rows.is_empty() {
-            self.slash_completion_panel_rows()
+            let slash_rows = self.slash_completion_panel_rows();
+            if slash_rows.is_empty() {
+                self.progress_rows.clone()
+            } else {
+                slash_rows
+            }
         } else {
             approval_rows
         };
@@ -325,7 +332,12 @@ impl DockedComposer {
             .min(terminal_width().saturating_sub(1)) as u16;
         let approval_rows = self.approval_panel_rows();
         let panel_rows = if approval_rows.is_empty() {
-            self.slash_completion_panel_rows()
+            let slash_rows = self.slash_completion_panel_rows();
+            if slash_rows.is_empty() {
+                self.progress_rows.clone()
+            } else {
+                slash_rows
+            }
         } else {
             approval_rows
         };
@@ -545,8 +557,23 @@ impl DockedComposer {
         self.render_preserving_cursor()
     }
 
+    pub fn progress_dock(&mut self, text: &str) -> Result<(), String> {
+        self.progress_rows = progress_panel_rows(text, terminal_width());
+        self.hide_cursor()?;
+        self.render_preserving_cursor()
+    }
+
+    pub fn clear_progress_dock(&mut self) -> Result<(), String> {
+        if self.progress_rows.is_empty() {
+            return Ok(());
+        }
+        self.progress_rows.clear();
+        self.render_preserving_cursor()
+    }
+
     pub fn stream_above(&mut self, text: &str) -> Result<(), String> {
         self.snap_transcript_to_bottom();
+        self.progress_rows.clear();
         let mut stdout = io::stdout();
         if self.stream_buffer.is_empty() {
             self.move_to_transcript_cursor(&mut stdout)?;
@@ -594,6 +621,7 @@ impl DockedComposer {
         self.stream_buffer.clear();
         self.status_active = false;
         self.status_rows = 0;
+        self.progress_rows.clear();
     }
 
     fn take_status_active(&mut self) -> bool {
@@ -957,6 +985,19 @@ fn compose_rendered_dock_rows(
 
 fn muted_dock_help(text: &str) -> String {
     style_prompt_echo("90", text)
+}
+
+fn progress_panel_rows(text: &str, width: usize) -> Vec<String> {
+    let width = width.max(1);
+    text.lines()
+        .take(DOCK_RESERVED_ROWS.saturating_sub(DOCK_VERTICAL_PADDING_ROWS))
+        .map(|line| {
+            muted_dock_help(&pad_display_width(
+                &truncate_display_text(line, width),
+                width,
+            ))
+        })
+        .collect()
 }
 
 fn newline() -> Result<(), String> {
@@ -1482,8 +1523,8 @@ mod tests {
     use super::{
         approval_panel_rows, buffer_prefix, compose_dock_rows, compose_rendered_dock_rows,
         insert_at, next_slash_completion, next_word_cursor, output_row, parse_forced_terminal_size,
-        previous_word_cursor, prompt_echo_block_lines, remove_at, remove_before,
-        remove_previous_word, slash_command_matches, slash_completion_panel_rows,
+        previous_word_cursor, progress_panel_rows, prompt_echo_block_lines, remove_at,
+        remove_before, remove_previous_word, slash_command_matches, slash_completion_panel_rows,
         submitted_prompt_echo_with_options, take_ansi_sequence, visible_len, visible_suffix,
         ApprovalChoice, ApprovalModal, DockedComposer, DOCK_RESERVED_ROWS,
     };
@@ -1859,6 +1900,20 @@ mod tests {
         assert!(!composer.status_active);
         assert_eq!(composer.status_rows, 0);
         assert!(!composer.take_status_active());
+    }
+
+    #[test]
+    fn progress_panel_rows_are_capped_and_padded() {
+        let rows = progress_panel_rows("Loading 1s\n\nagent step 1: list_files", 32);
+        assert_eq!(rows.len(), 3);
+        let plain = rows
+            .iter()
+            .map(|row| strip_ansi_for_test(row))
+            .collect::<Vec<_>>();
+        assert_eq!(plain[0].trim_end(), "Loading 1s");
+        assert_eq!(plain[1].trim_end(), "");
+        assert_eq!(plain[2].trim_end(), "agent step 1: list_files");
+        assert!(plain.iter().all(|row| visible_len(row) == 32));
     }
 
     #[test]

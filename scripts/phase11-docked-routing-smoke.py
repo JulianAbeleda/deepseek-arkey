@@ -5,7 +5,8 @@ This validates the Kimi-style baseline path without a live provider:
 
 - natural-language prompts in a safe workspace go through the agent loop
 - final answers render above the existing dock
-- tool steps render above the existing dock
+- loading and tool steps render inside the dock while work is active
+- loading and tool steps do not persist after the final answer
 - no Phase 10 `agent task:` stdout handoff or route-confirmation block appears
 """
 
@@ -164,6 +165,8 @@ def main():
                 screen,
                 "dock after scan",
             )
+            if screen.contains("Loading "):
+                raise AssertionError(f"loading status persisted after final answer\n{screen.dump()}")
             if screen.contains("agent step 1: list_files"):
                 raise AssertionError(f"tool step persisted after final answer\n{screen.dump()}")
             assert_not_legacy_handoff(screen)

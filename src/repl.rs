@@ -243,6 +243,7 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
                         }
                         Err(err) => {
                             composer.show_cursor()?;
+                            composer.clear_progress_dock()?;
                             composer.print_above(&format!("error: {err}\n"))?;
                         }
                     }
@@ -264,7 +265,7 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
         }
         if in_flight.is_some() && pending_approval.is_none() {
             if let Some(started) = context_scan_started {
-                composer.status_above(&context_scan_status(started, &active_tool_steps))?;
+                composer.progress_dock(&context_scan_status(started, &active_tool_steps))?;
             }
         }
         let Some(action) = composer.poll_action(Duration::from_millis(50))? else {
@@ -914,7 +915,7 @@ fn drain_turn_events(
                 }
                 active_tool_steps.push(step);
                 if let Some(started) = progress_started {
-                    composer.status_above(&context_scan_status(started, active_tool_steps))?;
+                    composer.progress_dock(&context_scan_status(started, active_tool_steps))?;
                 }
             }
             Ok(TurnEvent::ApprovalRequest(request, reply)) => {
@@ -949,7 +950,7 @@ fn start_context_scan(
 ) -> Result<Instant, String> {
     let started = Instant::now();
     composer.hide_cursor()?;
-    composer.status_above(&context_scan_status(started, tool_steps))?;
+    composer.progress_dock(&context_scan_status(started, tool_steps))?;
     Ok(started)
 }
 
