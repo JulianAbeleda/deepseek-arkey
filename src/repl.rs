@@ -22,10 +22,13 @@ use crate::workspace::{
 
 enum TurnEvent {
     Delta(String),
+    RenderedMarkdown(String),
     ToolStep(agent::AgentStep),
     ApprovalRequest(agent::ApprovalRequest, Sender<agent::ApprovalDecision>),
     Complete(Result<(String, String), String>),
 }
+
+const DEFAULT_RENDERED_MARKDOWN_STREAM_DELAY: Duration = Duration::from_millis(12);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum InteractiveMode {
@@ -879,8 +882,55 @@ fn run_agent_streaming(
         },
     )?;
     let response = format_agent_answer(&outcome.answer);
-    let _ = sender.send(TurnEvent::Delta(render_terminal_markdown(&response)));
+    send_rendered_markdown_stream(&sender, &response);
     Ok((prompt.to_string(), response))
+}
+
+fn send_rendered_markdown_stream(sender: &Sender<TurnEvent>, markdown: &str) {
+    let rendered = render_terminal_markdown(markdown);
+    let _ = sender.send(TurnEvent::RenderedMarkdown(rendered));
+}
+
+fn rendered_markdown_stream_chunks(rendered: &str) -> Vec<String> {
+    if rendered.is_empty() {
+        return Vec::new();
+    }
+    rendered.split_inclusive('\n').map(str::to_string).collect()
+}
+
+fn terminal_stream_chunk_delay(chunk: &str, base_delay: Duration) -> Duration {
+    if chunk.trim().is_empty() {
+        Duration::ZERO
+    } else {
+        base_delay
+    }
+}
+
+fn rendered_markdown_stream_delay() -> Duration {
+    std::env::var("DEEPSEEK_RENDERED_STREAM_DELAY_MS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .map(Duration::from_millis)
+        .unwrap_or(DEFAULT_RENDERED_MARKDOWN_STREAM_DELAY)
+}
+
+fn stream_rendered_markdown(
+    composer: &mut DockedComposer,
+    rendered: &str,
+    delay: Duration,
+) -> Result<(), String> {
+    let chunks = rendered_markdown_stream_chunks(rendered);
+    let chunk_count = chunks.len();
+    for (index, chunk) in chunks.iter().enumerate() {
+        composer.stream_above(chunk)?;
+        if index + 1 < chunk_count {
+            let chunk_delay = terminal_stream_chunk_delay(chunk, delay);
+            if !chunk_delay.is_zero() {
+                thread::sleep(chunk_delay);
+            }
+        }
+    }
+    Ok(())
 }
 
 fn drain_turn_events(
@@ -906,6 +956,14 @@ fn drain_turn_events(
             Ok(TurnEvent::Delta(delta)) => {
                 answer_streamed = true;
                 chunk.push_str(&delta);
+            }
+            Ok(TurnEvent::RenderedMarkdown(rendered)) => {
+                if !chunk.is_empty() {
+                    composer.stream_above(&chunk)?;
+                    chunk.clear();
+                }
+                stream_rendered_markdown(composer, &rendered, rendered_markdown_stream_delay())?;
+                answer_streamed = true;
             }
             Ok(TurnEvent::ToolStep(step)) => {
                 if !chunk.is_empty() {
@@ -1529,7 +1587,7 @@ fn run_prompt_buffered_rendered(
         response
     } else {
         let response = provider::chat_quiet(&messages, model, temperature, None)?;
-        let _ = sender.send(TurnEvent::Delta(render_terminal_markdown(&response)));
+        send_rendered_markdown_stream(&sender, &response);
         response
     };
     Ok((prompt.to_string(), response))
@@ -1560,7 +1618,7 @@ fn run_prompt_with_memory(
         response
     } else if let Some(sender) = sender {
         let response = provider::chat_quiet(&messages, model, temperature, None)?;
-        let _ = sender.send(TurnEvent::Delta(render_terminal_markdown(&response)));
+        send_rendered_markdown_stream(&sender, &response);
         response
     } else {
         provider::chat(&messages, model, temperature, None, stream)?
@@ -1797,8 +1855,9 @@ mod tests {
         context_scan_status, format_agent_answer, is_agent_task_cancel_choice,
         is_agent_task_choice, is_end_command, is_exit_command, is_workspace_agent_prompt,
         no_pending_agent_task_text, parse_agent_task_command, parse_debug_command,
-        parse_model_command, parse_runtime_command, parse_shell_read_command, shell_pwd_text,
-        split_markdown_table_lines, task_root_for_prompt, terminal_agent_answer,
+        parse_model_command, parse_runtime_command, parse_shell_read_command,
+        rendered_markdown_stream_chunks, shell_pwd_text, split_markdown_table_lines,
+        task_root_for_prompt, terminal_agent_answer, terminal_stream_chunk_delay,
         workspace_agent_root_for_prompt, RuntimeCommand, ShellReadCommand,
     };
     use crate::agent;
@@ -2092,6 +2151,26 @@ mod tests {
         assert_eq!(
             strip_ansi_for_test(&rendered),
             "Important Result\n\nuse the run_shell tool\n\nSee https://example.com.\n"
+        );
+    }
+
+    #[test]
+    fn rendered_markdown_stream_chunks_preserve_line_boundaries() {
+        assert_eq!(
+            rendered_markdown_stream_chunks("one\n\nthree\n"),
+            vec!["one\n", "\n", "three\n"]
+        );
+        assert_eq!(rendered_markdown_stream_chunks("tail"), vec!["tail"]);
+        assert!(rendered_markdown_stream_chunks("").is_empty());
+    }
+
+    #[test]
+    fn terminal_stream_chunk_delay_skips_blank_lines() {
+        let delay = std::time::Duration::from_millis(12);
+        assert_eq!(terminal_stream_chunk_delay("answer\n", delay), delay);
+        assert_eq!(
+            terminal_stream_chunk_delay("\n", delay),
+            std::time::Duration::ZERO
         );
     }
 

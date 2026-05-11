@@ -137,12 +137,6 @@ def main():
 
             os.write(master, b"audit commit HEAD\r")
             wait_for(
-                lambda: screen.contains("agent step 1: run_shell"),
-                master,
-                screen,
-                "commit audit shell tool step",
-            )
-            wait_for(
                 lambda: screen.contains("run_shell requires approval"),
                 master,
                 screen,

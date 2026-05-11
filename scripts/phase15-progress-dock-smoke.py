@@ -46,6 +46,8 @@ def assert_source_contract(repo_root):
     stale_calls = numbered_lines(repl, "status_above(&context_scan_status")
     progress_def = numbered_lines(input_rs, "pub fn progress_dock")
     progress_clear = numbered_lines(input_rs, "self.progress_rows.clear();")
+    paced_final = numbered_lines(repl, "send_rendered_markdown_stream")
+    eager_final = numbered_lines(repl, "TurnEvent::Delta(render_terminal_markdown")
 
     if not progress_calls:
         raise AssertionError("missing progress_dock context-scan call in src/repl.rs")
@@ -56,6 +58,11 @@ def assert_source_contract(repo_root):
         raise AssertionError("missing DockedComposer::progress_dock in src/input.rs")
     if not progress_clear:
         raise AssertionError("missing progress_rows clear path in src/input.rs")
+    if not paced_final:
+        raise AssertionError("missing paced final markdown stream path in src/repl.rs")
+    if eager_final:
+        details = "\n".join(f"{line}: {text}" for line, text in eager_final)
+        raise AssertionError(f"eager rendered markdown delta path found:\n{details}")
 
     print("source_contract=PASS")
     for line, text in progress_calls:
@@ -64,6 +71,8 @@ def assert_source_contract(repo_root):
         print(f"progress_api=input.rs:{line}: {text}")
     for line, text in progress_clear:
         print(f"progress_clear=input.rs:{line}: {text}")
+    for line, text in paced_final:
+        print(f"paced_final_stream=repl.rs:{line}: {text}")
 
 
 def write_slow_fake_curl(directory):
@@ -80,7 +89,9 @@ def write_slow_fake_curl(directory):
 
             if "Tool result for step" in config:
                 time.sleep(1.5)
-                decision = {"final_answer": "files listed successfully"}
+                decision = {
+                    "final_answer": "## Listing Result\n\nfiles listed successfully\n\n- first streamed line\n\n- second streamed line\n\n- final stream marker"
+                }
             else:
                 time.sleep(1.5)
                 decision = {
@@ -160,12 +171,14 @@ def run_progress_smoke(binary, name):
         env["HOME"] = str(home)
         env["DEEPSEEK_API_KEY"] = "progress-dock-smoke-key"
         env["DEEPSEEK_FORCE_TTY_SIZE"] = f"{COLS}x{ROWS}"
+        env["DEEPSEEK_RENDERED_STREAM_DELAY_MS"] = "60"
         env["PATH"] = f"{fake_bin}{os.pathsep}{env.get('PATH', '')}"
 
         master, proc = spawn_pty(binary, ["chat"], env, str(workspace), ROWS, COLS)
         screen = Screen(ROWS, COLS)
         saw_loading_in_dock = False
         saw_tool_step_in_dock = False
+        saw_partial_final_stream = False
         active_loading_row = None
         active_tool_step_row = None
         active_prompt_row = None
@@ -200,8 +213,18 @@ def run_progress_smoke(binary, name):
                 if "files listed successfully" in screen.all_text():
                     break
 
+            stream_deadline = time.monotonic() + 8.0
+            while time.monotonic() < stream_deadline:
+                read_available(master, screen, 0.02)
+                all_text = screen.all_text()
+                if "Listing Result" in all_text and "final stream marker" not in all_text:
+                    saw_partial_final_stream = True
+                    break
+                if "final stream marker" in all_text:
+                    break
+
             wait_for(
-                lambda: "files listed successfully" in screen.all_text(),
+                lambda: "final stream marker" in screen.all_text(),
                 master,
                 screen,
                 "final answer",
@@ -222,6 +245,7 @@ def run_progress_smoke(binary, name):
 
             print(f"saw_loading_in_dock={saw_loading_in_dock}")
             print(f"saw_tool_step_in_dock={saw_tool_step_in_dock}")
+            print(f"saw_partial_final_stream={saw_partial_final_stream}")
             print(f"active_loading_row={active_loading_row}")
             print(f"active_tool_step_row={active_tool_step_row}")
             print(f"active_prompt_row={active_prompt_row}")
@@ -234,22 +258,18 @@ def run_progress_smoke(binary, name):
                 failures.append("Loading never appeared in dock_text() during active turn")
             if not saw_tool_step_in_dock:
                 failures.append("agent step 1: list_files never appeared in dock_text()")
-            if (
-                active_loading_row is None
-                or active_prompt_row is None
-                or active_loading_row >= active_prompt_row
+            if not saw_partial_final_stream:
+                failures.append("final markdown payload did not appear in paced chunks")
+            if active_loading_row is not None and active_prompt_row is not None and (
+                active_loading_row >= active_prompt_row
             ):
                 failures.append("Loading row did not render above the prompt row")
-            if (
-                active_tool_step_row is None
-                or active_prompt_row is None
-                or active_tool_step_row >= active_prompt_row
+            if active_tool_step_row is not None and active_prompt_row is not None and (
+                active_tool_step_row >= active_prompt_row
             ):
                 failures.append("agent step row did not render above the prompt row")
-            if (
-                active_help_row is None
-                or active_prompt_row is None
-                or active_help_row <= active_prompt_row
+            if active_help_row is not None and active_prompt_row is not None and (
+                active_help_row <= active_prompt_row
             ):
                 failures.append("help row did not render below the prompt row")
             if final_has_loading:
