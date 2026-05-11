@@ -115,6 +115,7 @@ if ((FULL)); then
   run python3 scripts/phase10-scope-probe.py --binary "$BINARY" --name deepseek --model deepseek-v4-flash
   run python3 scripts/phase11-docked-routing-smoke.py --binary "$BINARY"
   run python3 scripts/phase12-dock-approval-smoke.py --binary "$BINARY"
+  run python3 scripts/claude-audit-approval-debug.py --binary "$BINARY"
 fi
 
 if ((LIVE)); then
