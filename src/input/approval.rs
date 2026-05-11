@@ -176,3 +176,84 @@ fn approval_panel_content_row(text: &str, width: usize) -> String {
     let content = truncate_display_text(text, inner_width);
     muted_dock_help(&format!("│{}│", pad_display_width(&content, inner_width)))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn key(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    fn ctrl(code: char) -> KeyEvent {
+        KeyEvent::new(KeyCode::Char(code), KeyModifiers::CONTROL)
+    }
+
+    #[test]
+    fn approval_modal_key_actions_map_shortcuts() {
+        let modal = ApprovalModal::new("run_shell".to_string(), String::new());
+
+        assert_eq!(
+            modal.key_action(key(KeyCode::Char('1'))),
+            ApprovalKeyAction::Choose(ApprovalChoice::ApproveOnce)
+        );
+        assert_eq!(
+            modal.key_action(key(KeyCode::Char('2'))),
+            ApprovalKeyAction::Choose(ApprovalChoice::ApproveForSession)
+        );
+        assert_eq!(
+            modal.key_action(key(KeyCode::Char('3'))),
+            ApprovalKeyAction::Choose(ApprovalChoice::Reject)
+        );
+        assert_eq!(
+            modal.key_action(key(KeyCode::Esc)),
+            ApprovalKeyAction::Choose(ApprovalChoice::Reject)
+        );
+        assert_eq!(
+            modal.key_action(ctrl('c')),
+            ApprovalKeyAction::Choose(ApprovalChoice::Reject)
+        );
+        assert_eq!(
+            modal.key_action(ctrl('d')),
+            ApprovalKeyAction::Choose(ApprovalChoice::Reject)
+        );
+    }
+
+    #[test]
+    fn approval_modal_key_actions_move_and_choose_selection() {
+        let mut modal = ApprovalModal::new("propose_patch".to_string(), String::new());
+
+        assert_eq!(
+            modal.key_action(key(KeyCode::Down)),
+            ApprovalKeyAction::MoveSelection(1)
+        );
+        assert_eq!(
+            modal.key_action(key(KeyCode::Up)),
+            ApprovalKeyAction::MoveSelection(-1)
+        );
+
+        modal.move_selection(1);
+        assert_eq!(
+            modal.key_action(key(KeyCode::Enter)),
+            ApprovalKeyAction::Choose(ApprovalChoice::ApproveForSession)
+        );
+    }
+
+    #[test]
+    fn approval_modal_key_actions_ignore_or_pass_through() {
+        let modal = ApprovalModal::new("run_shell".to_string(), String::new());
+
+        assert_eq!(
+            modal.key_action(key(KeyCode::PageUp)),
+            ApprovalKeyAction::PassThrough
+        );
+        assert_eq!(
+            modal.key_action(key(KeyCode::PageDown)),
+            ApprovalKeyAction::PassThrough
+        );
+        assert_eq!(
+            modal.key_action(key(KeyCode::Char('x'))),
+            ApprovalKeyAction::Ignore
+        );
+    }
+}

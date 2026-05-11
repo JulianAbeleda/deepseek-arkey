@@ -58,7 +58,6 @@ pub struct ApprovalRequest {
     pub step: usize,
     pub tool: String,
     pub summary: String,
-    pub approve_phrase: String,
 }
 
 pub fn run_agent(
@@ -454,7 +453,6 @@ fn approval_request(step: usize, call: &ToolCall) -> Option<ApprovalRequest> {
                 summary: format!(
                     "approval required: run_shell\ncwd: {cwd}\nreason: {reason}\ncommand: {command}\nType yes run to approve, n to deny.\n"
                 ),
-                approve_phrase: "yes run".to_string(),
             })
         }
         "propose_patch" => {
@@ -484,7 +482,6 @@ fn approval_request(step: usize, call: &ToolCall) -> Option<ApprovalRequest> {
                 summary: format!(
                     "approval required: propose_patch\npath: {path}\nreason: {reason}\n--- find ---\n{find}\n--- replace ---\n{replace}\nType yes apply to approve, n to deny.\n"
                 ),
-                approve_phrase: "yes apply".to_string(),
             })
         }
         _ => None,
@@ -1153,7 +1150,6 @@ I will list the files now."#,
         let request = super::approval_request(2, &call).unwrap();
         assert_eq!(request.step, 2);
         assert_eq!(request.tool, "run_shell");
-        assert_eq!(request.approve_phrase, "yes run");
         assert!(request.summary.contains("command: pwd"));
     }
 
@@ -1253,7 +1249,6 @@ I will list the files now."#,
         .unwrap();
         assert_eq!(request.step, 2);
         assert_eq!(request.tool, "propose_patch");
-        assert_eq!(request.approve_phrase, "yes apply");
         assert!(request.summary.contains("approval required: propose_patch"));
         assert!(request.summary.contains("path: note.txt"));
         assert!(request.summary.contains("reason: test patch approval"));

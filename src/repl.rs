@@ -207,6 +207,10 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
                 if let Some(approval) = approval {
                     context_scan_started = None;
                     if session_approved_tools.contains(&approval.request.tool) {
+                        composer.status_above(&format!(
+                            "approval: auto-approved {} for session",
+                            approval.request.tool
+                        ))?;
                         let _ = approval.reply.send(agent::ApprovalDecision::Approve);
                         context_scan_started = Some(start_context_scan(&mut composer)?);
                     } else {
@@ -743,18 +747,18 @@ fn handle_dock_approval_choice(
     match choice {
         ApprovalChoice::ApproveOnce => {
             let _ = approval.reply.send(decision);
-            composer.status_above(&format!("approval: approved {}", approval.request.tool))?;
+            composer.print_above(&format!("approval: approved {}\n", approval.request.tool))?;
         }
         ApprovalChoice::ApproveForSession => {
             let _ = approval.reply.send(decision);
-            composer.status_above(&format!(
-                "approval: approved {} for session",
+            composer.print_above(&format!(
+                "approval: approved {} for session\n",
                 approval.request.tool
             ))?;
         }
         ApprovalChoice::Reject => {
-            let _ = approval.reply.send(agent::ApprovalDecision::Deny);
-            composer.status_above(&format!("approval: denied {}", approval.request.tool))?;
+            let _ = approval.reply.send(decision);
+            composer.print_above(&format!("approval: denied {}\n", approval.request.tool))?;
         }
     }
     Ok(())
