@@ -972,15 +972,21 @@ fn compose_rendered_dock_rows(
             cursor_col: 0,
         };
     }
-    let mut rows = compose_dock_rows(prompt, buffer, cursor, width);
-    rows.lines.insert(0, String::new());
-    let available_panel_rows = DOCK_RESERVED_ROWS.saturating_sub(rows.lines.len() + 1);
+    let input_rows = compose_dock_rows(prompt, buffer, cursor, width);
+    let mut lines = vec![String::new()];
+    let available_panel_rows =
+        DOCK_RESERVED_ROWS.saturating_sub(lines.len() + input_rows.lines.len() + 1);
     for row in panel_rows.iter().take(available_panel_rows) {
-        rows.lines.push(row.clone());
+        lines.push(row.clone());
     }
-    rows.lines.push(muted_dock_help(DOCK_HELP_TEXT));
-    rows.cursor_row += 1;
-    rows
+    let input_start_row = lines.len();
+    lines.extend(input_rows.lines);
+    lines.push(muted_dock_help(DOCK_HELP_TEXT));
+    ComposedDockRows {
+        lines,
+        cursor_row: input_start_row + input_rows.cursor_row,
+        cursor_col: input_rows.cursor_col,
+    }
 }
 
 fn muted_dock_help(text: &str) -> String {
@@ -1760,8 +1766,13 @@ mod tests {
         let panel = slash_completion_panel_rows("/r", None, 20);
         let rows = compose_rendered_dock_rows("p> ", "/r", 2, 20, &panel, false);
 
-        assert!(strip_ansi_for_test(&rows.lines[2]).starts_with("─"));
-        assert_eq!(rows.cursor_row, 1);
+        assert!(strip_ansi_for_test(&rows.lines[1]).starts_with("─"));
+        let prompt_row = rows
+            .lines
+            .iter()
+            .position(|line| strip_ansi_for_test(line).starts_with("p> /r"))
+            .unwrap();
+        assert_eq!(rows.cursor_row, prompt_row);
         assert_eq!(rows.cursor_col, 5);
         assert!(DOCK_RESERVED_ROWS >= rows.lines.len());
     }
@@ -1772,7 +1783,12 @@ mod tests {
         let rows = compose_rendered_dock_rows("p> ", "/", 1, 80, &panel, false);
 
         assert_eq!(rows.lines.len(), DOCK_RESERVED_ROWS);
-        assert_eq!(rows.cursor_row, 1);
+        let prompt_row = rows
+            .lines
+            .iter()
+            .position(|line| strip_ansi_for_test(line).starts_with("p> /"))
+            .unwrap();
+        assert_eq!(rows.cursor_row, prompt_row);
         assert_eq!(rows.cursor_col, 4);
     }
 
@@ -1914,6 +1930,39 @@ mod tests {
         assert_eq!(plain[1].trim_end(), "");
         assert_eq!(plain[2].trim_end(), "agent step 1: list_files");
         assert!(plain.iter().all(|row| visible_len(row) == 32));
+    }
+
+    #[test]
+    fn progress_dock_rows_render_above_prompt() {
+        let panel = progress_panel_rows("Loading 1s\n\nagent step 1: list_files", 48);
+        let rows = compose_rendered_dock_rows("deepseek [model] › ", "", 0, 48, &panel, false);
+        let plain = rows
+            .lines
+            .iter()
+            .map(|row| strip_ansi_for_test(row))
+            .collect::<Vec<_>>();
+
+        let loading_row = plain
+            .iter()
+            .position(|row| row.trim_end() == "Loading 1s")
+            .unwrap();
+        let step_row = plain
+            .iter()
+            .position(|row| row.trim_end() == "agent step 1: list_files")
+            .unwrap();
+        let prompt_row = plain
+            .iter()
+            .position(|row| row.starts_with("deepseek [model] ›"))
+            .unwrap();
+        let help_row = plain
+            .iter()
+            .position(|row| row.contains("Enter send"))
+            .unwrap();
+
+        assert!(loading_row < prompt_row);
+        assert!(step_row < prompt_row);
+        assert_eq!(loading_row + 2, step_row);
+        assert!(prompt_row < help_row);
     }
 
     #[test]

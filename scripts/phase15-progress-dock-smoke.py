@@ -105,6 +105,13 @@ def write_slow_fake_curl(directory):
     path.chmod(path.stat().st_mode | stat.S_IXUSR)
 
 
+def visible_row_with(screen, text):
+    for row, line in enumerate(screen.lines()):
+        if text in line:
+            return row
+    return None
+
+
 def run_progress_smoke(binary, name):
     with tempfile.TemporaryDirectory(prefix=f"{name}-progress-dock-") as tmp:
         tmp_path = Path(tmp)
@@ -127,6 +134,10 @@ def run_progress_smoke(binary, name):
         screen = Screen(ROWS, COLS)
         saw_loading_in_dock = False
         saw_tool_step_in_dock = False
+        active_loading_row = None
+        active_tool_step_row = None
+        active_prompt_row = None
+        active_help_row = None
 
         try:
             wait_for(
@@ -145,8 +156,13 @@ def run_progress_smoke(binary, name):
                 dock = screen.dock_text()
                 if "Loading " in dock:
                     saw_loading_in_dock = True
+                    active_loading_row = visible_row_with(screen, "Loading ")
                 if "agent step 1: list_files" in dock:
                     saw_tool_step_in_dock = True
+                    active_tool_step_row = visible_row_with(screen, "agent step 1: list_files")
+                if saw_loading_in_dock or saw_tool_step_in_dock:
+                    active_prompt_row = visible_row_with(screen, f"{name} [")
+                    active_help_row = visible_row_with(screen, "Enter send")
                 if saw_loading_in_dock and saw_tool_step_in_dock:
                     break
                 if "files listed successfully" in screen.all_text():
@@ -174,6 +190,10 @@ def run_progress_smoke(binary, name):
 
             print(f"saw_loading_in_dock={saw_loading_in_dock}")
             print(f"saw_tool_step_in_dock={saw_tool_step_in_dock}")
+            print(f"active_loading_row={active_loading_row}")
+            print(f"active_tool_step_row={active_tool_step_row}")
+            print(f"active_prompt_row={active_prompt_row}")
+            print(f"active_help_row={active_help_row}")
             print(f"final_has_loading={final_has_loading}")
             print(f"final_has_tool_step={final_has_tool_step}")
 
@@ -182,6 +202,24 @@ def run_progress_smoke(binary, name):
                 failures.append("Loading never appeared in dock_text() during active turn")
             if not saw_tool_step_in_dock:
                 failures.append("agent step 1: list_files never appeared in dock_text()")
+            if (
+                active_loading_row is None
+                or active_prompt_row is None
+                or active_loading_row >= active_prompt_row
+            ):
+                failures.append("Loading row did not render above the prompt row")
+            if (
+                active_tool_step_row is None
+                or active_prompt_row is None
+                or active_tool_step_row >= active_prompt_row
+            ):
+                failures.append("agent step row did not render above the prompt row")
+            if (
+                active_help_row is None
+                or active_prompt_row is None
+                or active_help_row <= active_prompt_row
+            ):
+                failures.append("help row did not render below the prompt row")
             if final_has_loading:
                 failures.append("'Loading ' persisted in all_text() after final answer")
             if final_has_tool_step:
