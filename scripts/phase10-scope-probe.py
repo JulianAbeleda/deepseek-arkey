@@ -16,148 +16,29 @@ Sections map 1:1 to the scope doc:
   H  Root selection
 """
 import argparse
-import codecs
-import fcntl
 import json
 import os
-import pty
 import re
-import select
-import struct
 import subprocess
 import sys
 import tempfile
-import termios
 import time
 from pathlib import Path
 
-# ---------- terminal emulator ----------
-class Screen:
-    def __init__(self, rows, cols):
-        self.rows = rows
-        self.cols = cols
-        self.cells = [[" "] * cols for _ in range(rows)]
-        self.row = 0
-        self.col = 0
-        self.scroll_top = 0
-        self.scroll_bottom = rows - 1
-        self.decoder = codecs.getincrementaldecoder("utf-8")("ignore")
-        self.scroll_region_set = False
-        self.full_clears = 0
-        self.saved_position = None
-
-    def feed(self, data: str):
-        i = 0
-        while i < len(data):
-            ch = data[i]
-            if ch == "\x1b":
-                i = self._escape(data, i + 1); continue
-            if ch == "\r": self.col = 0
-            elif ch == "\n": self._linefeed()
-            elif ch == "\b": self.col = max(0, self.col - 1)
-            elif ch >= " ": self._put(ch)
-            i += 1
-
-    def _put(self, ch):
-        if self.col >= self.cols:
-            self.col = 0; self._linefeed()
-        self.cells[self.row][self.col] = ch
-        self.col += 1
-
-    def _linefeed(self):
-        if self.row == self.scroll_bottom:
-            del self.cells[self.scroll_top]
-            self.cells.insert(self.scroll_bottom, [" "] * self.cols)
-        else:
-            self.row = min(self.rows - 1, self.row + 1)
-
-    def _escape(self, data, i):
-        if i >= len(data): return i
-        if data[i] == "7":
-            self.saved_position = (self.row, self.col)
-            return i + 1
-        if data[i] == "8":
-            if self.saved_position is not None:
-                self.row, self.col = self.saved_position
-            return i + 1
-        if data[i] != "[": return i + 1
-        i += 1; start = i
-        while i < len(data) and not ("@" <= data[i] <= "~"):
-            i += 1
-        if i >= len(data): return i
-        params = data[start:i]; final = data[i]
-        nums = []
-        for part in params.split(";"):
-            if part == "" or part.startswith("?"): continue
-            try: nums.append(int(part))
-            except ValueError: pass
-        if final in ("H", "f"):
-            r = nums[0] if nums and nums[0] else 1
-            c = nums[1] if len(nums) > 1 and nums[1] else 1
-            self.row = max(0, min(self.rows - 1, r - 1))
-            self.col = max(0, min(self.cols - 1, c - 1))
-        elif final == "G":
-            c = nums[0] if nums and nums[0] else 1
-            self.col = max(0, min(self.cols - 1, c - 1))
-        elif final == "K":
-            mode = nums[0] if nums else 0
-            if mode in (0, 2):
-                for c in range(self.col, self.cols): self.cells[self.row][c] = " "
-        elif final == "J" and (nums and nums[0] == 2):
-            self.full_clears += 1
-            self.cells = [[" "] * self.cols for _ in range(self.rows)]
-            self.row = 0; self.col = 0
-        elif final == "r":
-            if len(nums) >= 2:
-                self.scroll_top = max(0, nums[0] - 1)
-                self.scroll_bottom = max(self.scroll_top, min(self.rows - 1, nums[1] - 1))
-                self.scroll_region_set = True
-            else:
-                self.scroll_top = 0; self.scroll_bottom = self.rows - 1
-                self.scroll_region_set = False
-            self.row = 0; self.col = 0
-        return i + 1
-
-    def line(self, r): return "".join(self.cells[r]).rstrip()
-    def bottom(self): return self.line(self.rows - 1)
-    def all_text(self): return "\n".join(self.line(r) for r in range(self.rows))
-    def dump(self): return "\n".join(f"{r:02d}|{self.line(r)}" for r in range(self.rows))
+from smoke_lib import Screen, read_available, spawn_pty, wait_for_bool
 
 
 # ---------- PTY helpers ----------
 def drain(fd, screen, seconds, raw=None):
-    end = time.monotonic() + seconds
-    while time.monotonic() < end:
-        ready, _, _ = select.select([fd], [], [], 0.02)
-        if not ready: continue
-        try: chunk = os.read(fd, 4096)
-        except OSError: break
-        if not chunk: break
-        if raw is not None: raw.append(chunk)
-        decoded = screen.decoder.decode(chunk)
-        screen.feed(decoded)
-        if "\x1b[6n" in decoded:
-            os.write(fd, f"\x1b[{screen.row + 1};{screen.col + 1}R".encode())
+    read_available(fd, screen, seconds, raw=raw)
 
 
 def wait_for(predicate, fd, screen, timeout=4.0, raw=None):
-    end = time.monotonic() + timeout
-    while time.monotonic() < end:
-        drain(fd, screen, 0.05, raw=raw)
-        if predicate(): return True
-    return False
+    return wait_for_bool(predicate, fd, screen, timeout=timeout, raw=raw)
 
 
 def spawn(binary, args, env, rows, cols, cwd=None):
-    master, slave = pty.openpty()
-    fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
-    proc = subprocess.Popen(
-        [binary, *args],
-        stdin=slave, stdout=slave, stderr=slave,
-        env=env, cwd=cwd, close_fds=True,
-    )
-    os.close(slave)
-    return master, proc
+    return spawn_pty(binary, args, env, cwd, rows, cols)
 
 
 # ---------- result tracking ----------

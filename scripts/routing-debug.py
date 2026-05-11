@@ -5,160 +5,21 @@ This is intended for external auditors: run it against a built or installed
 binary and paste the PASS/FAIL output into the review.
 """
 import argparse
-import codecs
-import fcntl
 import os
-import pty
-import select
 import shutil
-import struct
 import subprocess
 import tempfile
-import termios
-import time
 from pathlib import Path
+
+from smoke_lib import Screen, read_available, spawn_pty, wait_for as wait_for_common
 
 
 ROWS = 28
 COLS = 100
 
 
-class Screen:
-    def __init__(self, rows=ROWS, cols=COLS):
-        self.rows = rows
-        self.cols = cols
-        self.cells = [[" "] * cols for _ in range(rows)]
-        self.history = []
-        self.row = 0
-        self.col = 0
-        self.scroll_top = 0
-        self.scroll_bottom = rows - 1
-        self.decoder = codecs.getincrementaldecoder("utf-8")("ignore")
-
-    def feed(self, data):
-        index = 0
-        while index < len(data):
-            ch = data[index]
-            if ch == "\x1b":
-                index = self._escape(data, index + 1)
-                continue
-            if ch == "\r":
-                self.col = 0
-            elif ch == "\n":
-                self._linefeed()
-            elif ch == "\b":
-                self.col = max(0, self.col - 1)
-            elif ch >= " ":
-                self._put(ch)
-            index += 1
-
-    def contains(self, text):
-        return text in self.text()
-
-    def text(self):
-        return "\n".join(self.history + [self.line(row) for row in range(self.rows)])
-
-    def line(self, row):
-        return "".join(self.cells[row]).rstrip()
-
-    def bottom(self):
-        return self.line(self.rows - 1)
-
-    def dump(self):
-        return "\n".join(f"{row:02d}|{self.line(row)}" for row in range(self.rows))
-
-    def _put(self, ch):
-        if self.col >= self.cols:
-            self.col = 0
-            self._linefeed()
-        self.cells[self.row][self.col] = ch
-        self.col += 1
-
-    def _linefeed(self):
-        if self.row == self.scroll_bottom:
-            self.history.append("".join(self.cells[self.scroll_top]).rstrip())
-            del self.cells[self.scroll_top]
-            self.cells.insert(self.scroll_bottom, [" "] * self.cols)
-        else:
-            self.row = min(self.rows - 1, self.row + 1)
-
-    def _escape(self, data, index):
-        if index >= len(data):
-            return index
-        if data[index] != "[":
-            return index + 1
-        index += 1
-        start = index
-        while index < len(data) and not ("@" <= data[index] <= "~"):
-            index += 1
-        if index >= len(data):
-            return index
-        params = data[start:index]
-        final = data[index]
-        nums = []
-        for part in params.split(";"):
-            if part == "" or part.startswith("?"):
-                continue
-            try:
-                nums.append(int(part))
-            except ValueError:
-                pass
-        if final in ("H", "f"):
-            row = nums[0] if nums and nums[0] else 1
-            col = nums[1] if len(nums) > 1 and nums[1] else 1
-            self.row = max(0, min(self.rows - 1, row - 1))
-            self.col = max(0, min(self.cols - 1, col - 1))
-        elif final == "G":
-            col = nums[0] if nums and nums[0] else 1
-            self.col = max(0, min(self.cols - 1, col - 1))
-        elif final == "J":
-            mode = nums[0] if nums else 0
-            if mode == 2:
-                self.cells = [[" "] * self.cols for _ in range(self.rows)]
-                self.row = 0
-                self.col = 0
-        elif final == "K":
-            mode = nums[0] if nums else 0
-            if mode in (0, 2):
-                for col in range(self.col, self.cols):
-                    self.cells[self.row][col] = " "
-        elif final == "r":
-            if len(nums) >= 2:
-                self.scroll_top = max(0, nums[0] - 1)
-                self.scroll_bottom = max(self.scroll_top, min(self.rows - 1, nums[1] - 1))
-            else:
-                self.scroll_top = 0
-                self.scroll_bottom = self.rows - 1
-            self.row = 0
-            self.col = 0
-        return index + 1
-
-
-def read_available(fd, screen, timeout=0.05):
-    end = time.monotonic() + timeout
-    while time.monotonic() < end:
-        ready, _, _ = select.select([fd], [], [], 0.02)
-        if not ready:
-            continue
-        try:
-            chunk = os.read(fd, 4096)
-        except OSError:
-            return
-        if not chunk:
-            return
-        text = screen.decoder.decode(chunk)
-        screen.feed(text)
-        if "\x1b[6n" in text:
-            os.write(fd, f"\x1b[{screen.row + 1};{screen.col + 1}R".encode())
-
-
 def wait_for(fd, screen, predicate, label, timeout=5.0):
-    end = time.monotonic() + timeout
-    while time.monotonic() < end:
-        read_available(fd, screen)
-        if predicate():
-            return
-    raise AssertionError(f"timed out waiting for {label}\n{screen.dump()}")
+    wait_for_common(predicate, fd, screen, label, timeout=timeout)
 
 
 def resolve_binary(name, binary_arg):
@@ -186,19 +47,8 @@ def enable_debug(binary, env):
 
 
 def spawn_chat(binary, env, cwd):
-    master, slave = pty.openpty()
-    fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", ROWS, COLS, 0, 0))
-    proc = subprocess.Popen(
-        [binary, "chat"],
-        stdin=slave,
-        stdout=slave,
-        stderr=slave,
-        env=env,
-        cwd=cwd,
-        close_fds=True,
-    )
-    os.close(slave)
-    return master, proc, Screen()
+    master, proc = spawn_pty(binary, ["chat"], env, cwd, ROWS, COLS)
+    return master, proc, Screen(ROWS, COLS)
 
 
 def run_prompt(binary, env, name, cwd, prompt, setup_commands=None):

@@ -57,6 +57,9 @@ impl ApprovalModal {
             KeyCode::Char('1') => ApprovalKeyAction::Choose(ApprovalChoice::ApproveOnce),
             KeyCode::Char('2') => ApprovalKeyAction::Choose(ApprovalChoice::ApproveForSession),
             KeyCode::Char('3') => ApprovalKeyAction::Choose(ApprovalChoice::Reject),
+            KeyCode::Char('n') | KeyCode::Char('N') => {
+                ApprovalKeyAction::Choose(ApprovalChoice::Reject)
+            }
             KeyCode::Esc => ApprovalKeyAction::Choose(ApprovalChoice::Reject),
             KeyCode::Char('c') | KeyCode::Char('d')
                 if key.modifiers.contains(KeyModifiers::CONTROL) =>
@@ -203,6 +206,14 @@ mod tests {
         );
         assert_eq!(
             modal.key_action(key(KeyCode::Char('3'))),
+            ApprovalKeyAction::Choose(ApprovalChoice::Reject)
+        );
+        assert_eq!(
+            modal.key_action(key(KeyCode::Char('n'))),
+            ApprovalKeyAction::Choose(ApprovalChoice::Reject)
+        );
+        assert_eq!(
+            modal.key_action(key(KeyCode::Char('N'))),
             ApprovalKeyAction::Choose(ApprovalChoice::Reject)
         );
         assert_eq!(
