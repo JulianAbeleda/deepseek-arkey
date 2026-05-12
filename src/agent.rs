@@ -33,6 +33,39 @@ impl AgentConfig {
     }
 }
 
+pub struct AgentRunOptions {
+    pub config: AgentConfig,
+    pub approval_mode: ApprovalMode,
+    pub quiet_cache: bool,
+    pub cancel: Option<CancellationToken>,
+}
+
+impl AgentRunOptions {
+    pub fn new(config: AgentConfig) -> Self {
+        Self {
+            config,
+            approval_mode: ApprovalMode::Interactive,
+            quiet_cache: false,
+            cancel: None,
+        }
+    }
+
+    pub fn approval_mode(mut self, approval_mode: ApprovalMode) -> Self {
+        self.approval_mode = approval_mode;
+        self
+    }
+
+    pub fn quiet_cache(mut self, quiet_cache: bool) -> Self {
+        self.quiet_cache = quiet_cache;
+        self
+    }
+
+    pub fn cancel(mut self, cancel: CancellationToken) -> Self {
+        self.cancel = Some(cancel);
+        self
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct AgentOutcome {
     pub answer: String,
@@ -85,33 +118,14 @@ pub fn run_agent(
     temperature: Option<f32>,
     config: AgentConfig,
 ) -> Result<AgentOutcome, String> {
-    run_agent_with_options(
+    run_agent_with_handlers(
         task,
         model,
         temperature,
-        config,
-        ApprovalMode::Interactive,
+        AgentRunOptions::new(config),
         |step| {
             eprintln!("agent step {}: {}", step.label(), step.tool);
         },
-    )
-}
-
-pub fn run_agent_with_options(
-    task: &str,
-    model: &str,
-    temperature: Option<f32>,
-    config: AgentConfig,
-    approval_mode: ApprovalMode,
-    on_step: impl FnMut(AgentStep),
-) -> Result<AgentOutcome, String> {
-    run_agent_with_approval_handler(
-        task,
-        model,
-        temperature,
-        config,
-        approval_mode,
-        on_step,
         |_| ApprovalDecision::Deny,
     )
 }
@@ -122,74 +136,30 @@ pub fn run_agent_final_only(
     temperature: Option<f32>,
     config: AgentConfig,
 ) -> Result<AgentOutcome, String> {
-    run_agent_with_chat_handler(
+    run_agent_with_handlers(
         task,
         model,
         temperature,
-        config,
-        ApprovalMode::Interactive,
+        AgentRunOptions::new(config).quiet_cache(true),
         |_| {},
         |_| ApprovalDecision::Deny,
-        None,
-        |messages, model, temperature| provider::chat_quiet(messages, model, temperature, None),
     )
 }
 
-pub fn run_agent_with_approval_handler(
+pub fn run_agent_with_handlers(
     task: &str,
     model: &str,
     temperature: Option<f32>,
-    config: AgentConfig,
-    approval_mode: ApprovalMode,
+    options: AgentRunOptions,
     mut on_step: impl FnMut(AgentStep),
     mut on_approval: impl FnMut(ApprovalRequest) -> ApprovalDecision,
 ) -> Result<AgentOutcome, String> {
-    run_agent_with_chat_handler(
-        task,
-        model,
-        temperature,
+    let AgentRunOptions {
         config,
         approval_mode,
-        &mut on_step,
-        &mut on_approval,
-        None,
-        |messages, model, temperature| provider::chat(messages, model, temperature, None, false),
-    )
-}
-
-#[allow(dead_code)]
-pub fn run_agent_quiet_cache_with_approval_handler(
-    task: &str,
-    model: &str,
-    temperature: Option<f32>,
-    config: AgentConfig,
-    approval_mode: ApprovalMode,
-    mut on_step: impl FnMut(AgentStep),
-    mut on_approval: impl FnMut(ApprovalRequest) -> ApprovalDecision,
-) -> Result<AgentOutcome, String> {
-    run_agent_with_chat_handler(
-        task,
-        model,
-        temperature,
-        config,
-        approval_mode,
-        &mut on_step,
-        &mut on_approval,
-        None,
-        |messages, model, temperature| provider::chat_quiet(messages, model, temperature, None),
-    )
-}
-
-pub fn run_agent_quiet_cache_with_approval_handler_cancelled(
-    task: &str,
-    model: &str,
-    temperature: Option<f32>,
-    config: AgentConfig,
-    approval_mode: ApprovalMode,
-    mut on_step: impl FnMut(AgentStep),
-    mut on_approval: impl FnMut(ApprovalRequest) -> ApprovalDecision,
-    cancel: CancellationToken,
-) -> Result<AgentOutcome, String> {
+        quiet_cache,
+        cancel,
+    } = options;
     let chat_cancel = cancel.clone();
     run_agent_with_chat_handler(
         task,
@@ -199,9 +169,15 @@ pub fn run_agent_quiet_cache_with_approval_handler_cancelled(
         approval_mode,
         &mut on_step,
         &mut on_approval,
-        Some(cancel),
+        cancel,
         move |messages, model, temperature| {
-            provider::chat_quiet_cancelled(messages, model, temperature, None, &chat_cancel)
+            if let Some(cancel) = chat_cancel.as_ref() {
+                provider::chat_quiet_cancelled(messages, model, temperature, None, cancel)
+            } else if quiet_cache {
+                provider::chat_quiet(messages, model, temperature, None)
+            } else {
+                provider::chat(messages, model, temperature, None, false)
+            }
         },
     )
 }

@@ -911,12 +911,14 @@ fn run_agent_streaming(
         let _ = sender.send(TurnEvent::Delta(response.clone()));
         return Ok((prompt.to_string(), response));
     }
-    let outcome = agent::run_agent_quiet_cache_with_approval_handler_cancelled(
+    let outcome = agent::run_agent_with_handlers(
         prompt,
         model,
         temperature,
-        agent::AgentConfig::new(root, agent::DEFAULT_MAX_STEPS),
-        agent::ApprovalMode::External,
+        agent::AgentRunOptions::new(agent::AgentConfig::new(root, agent::DEFAULT_MAX_STEPS))
+            .approval_mode(agent::ApprovalMode::External)
+            .quiet_cache(true)
+            .cancel(cancel),
         |step| {
             let _ = sender.send(TurnEvent::ToolStep(step));
         },
@@ -927,7 +929,6 @@ fn run_agent_streaming(
                 .recv()
                 .unwrap_or(agent::ApprovalDecision::Deny)
         },
-        cancel,
     )?;
     let response = format_agent_answer(&outcome.answer);
     send_rendered_markdown_stream(&sender, &response);

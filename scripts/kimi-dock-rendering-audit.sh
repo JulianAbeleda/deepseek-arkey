@@ -49,7 +49,7 @@ printf '\n-- src/workspace.rs navigation/root helpers --\n'
 grep -nE 'update_selected_root_from|clean_navigation_target|trim_navigation_punctuation|looks_like_path_target|relative_navigation_supports' src/workspace.rs || true
 
 printf '\n-- src/repl.rs docked navigation/rendering/quiet cache --\n'
-grep -nE 'is_cd_previous_request|parse_navigation_request_from|update_selected_root_from|run_agent_quiet_cache_with_approval_handler|chat_with_delta_quiet_cache|render_terminal_markdown' src/repl.rs || true
+grep -nE 'is_cd_previous_request|parse_navigation_request_from|update_selected_root_from|run_agent_with_handlers|chat_with_delta_quiet_cache|render_terminal_markdown' src/repl.rs || true
 
 printf '\n-- src/input.rs dock/prompt spacing --\n'
 grep -nE 'DOCK_RESERVED_ROWS|DOCK_VERTICAL_PADDING_ROWS|print_above|render_dock_lines|dock_reserves_vertical_padding_rows' src/input.rs || true
@@ -58,7 +58,7 @@ printf '\n-- src/terminal_markdown.rs table rendering --\n'
 grep -nE 'render_table_block|MAX_TABLE_CELL_WIDTH|is_table_row|format_table_row|format_table_rule|wrap_table_cell|display_width|renders_aligned_markdown_tables' src/terminal_markdown.rs || true
 
 printf '\n-- src/provider.rs and src/agent.rs quiet cache helpers --\n'
-grep -nE 'chat_with_delta_quiet_cache|run_agent_quiet_cache_with_approval_handler' src/provider.rs src/agent.rs || true
+grep -nE 'chat_with_delta_quiet_cache|run_agent_with_handlers' src/provider.rs src/agent.rs || true
 
 section "Validation Commands"
 cat <<'COMMANDS'
