@@ -301,6 +301,12 @@ mod tests {
             .map(std::path::PathBuf::from)
             .unwrap();
         let env_root = home.join("env");
+        let isolated_root = std::env::temp_dir().join(format!(
+            "deepseek-navigation-isolated-test-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&isolated_root);
+        fs::create_dir_all(&isolated_root).unwrap();
         if env_root.is_dir() {
             assert_eq!(
                 parse_navigation_request("go to my env folder and stay there")
@@ -327,19 +333,25 @@ mod tests {
                 Some(env_root.canonicalize().unwrap().as_path())
             );
             assert_eq!(
-                parse_navigation_request("enter the deepseek repo").unwrap(),
+                parse_navigation_request_from("enter the deepseek repo", Some(&isolated_root))
+                    .unwrap(),
                 None
             );
             assert_eq!(
-                parse_navigation_request("navigate into deepseek").unwrap(),
+                parse_navigation_request_from("navigate into deepseek", Some(&isolated_root))
+                    .unwrap(),
                 None
             );
             assert_eq!(
-                parse_navigation_request("open the minimax repo").unwrap(),
+                parse_navigation_request_from("open the minimax repo", Some(&isolated_root))
+                    .unwrap(),
                 None
             );
-            assert!(parse_navigation_request("cd into minimax").is_err());
+            assert!(
+                parse_navigation_request_from("cd into minimax", Some(&isolated_root)).is_err()
+            );
         }
+        let _ = fs::remove_dir_all(&isolated_root);
         assert_eq!(
             parse_navigation_request("go through downloads").unwrap(),
             None

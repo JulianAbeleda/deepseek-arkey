@@ -163,6 +163,12 @@ def main():
 
             os.write(master, b"inspect shell denial gate\r")
             wait_for(
+                lambda: screen.contains("agent step 1: run_shell"),
+                master,
+                screen,
+                "shell denial tool step",
+            )
+            wait_for(
                 lambda: screen.contains("run_shell requires approval"),
                 master,
                 screen,
@@ -193,6 +199,12 @@ def main():
 
             os.write(master, b"inspect shell approval gate\r")
             wait_for(
+                lambda: screen.contains("agent step 1: run_shell"),
+                master,
+                screen,
+                "shell approval tool step",
+            )
+            wait_for(
                 lambda: screen.contains("run_shell requires approval")
                 and screen.contains("command: printf PHASE12_APPROVED"),
                 master,
@@ -215,6 +227,12 @@ def main():
             assert_not_legacy_handoff(screen)
 
             os.write(master, b"inspect patch denial gate\r")
+            wait_for(
+                lambda: screen.contains("agent step 1: propose_patch"),
+                master,
+                screen,
+                "patch denial tool step",
+            )
             wait_for(
                 lambda: screen.contains("propose_patch requires approval")
                 and screen.contains("path: README.md"),
@@ -241,6 +259,12 @@ def main():
             assert_not_legacy_handoff(screen)
 
             os.write(master, b"inspect patch approval gate\r")
+            wait_for(
+                lambda: screen.contains("agent step 1: propose_patch"),
+                master,
+                screen,
+                "patch approval tool step",
+            )
             wait_for(
                 lambda: screen.contains("propose_patch requires approval")
                 and screen.contains("path: README.md"),
