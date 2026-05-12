@@ -260,14 +260,23 @@ mod tests {
 
     impl TestDir {
         fn new(name: &str) -> Self {
-            let unique = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos();
-            let path = std::env::temp_dir()
-                .join(format!("deepseek-{name}-{}-{unique}", std::process::id()));
-            fs::create_dir_all(&path).unwrap();
-            Self { path }
+            let base = std::env::temp_dir();
+            for attempt in 0..100 {
+                let unique = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos();
+                let path = base.join(format!(
+                    "deepseek-{name}-{}-{unique}-{attempt}",
+                    std::process::id()
+                ));
+                match fs::create_dir(&path) {
+                    Ok(()) => return Self { path },
+                    Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                    Err(err) => panic!("failed to create test dir {}: {err}", path.display()),
+                }
+            }
+            panic!("failed to create unique test dir for {name}");
         }
 
         fn path(&self) -> &Path {
@@ -281,9 +290,13 @@ mod tests {
 
     impl Drop for TestDir {
         fn drop(&mut self) {
-            fs::remove_dir_all(&self.path).unwrap_or_else(|err| {
-                panic!("failed to remove test dir {}: {err}", self.path.display())
-            });
+            if let Err(err) = fs::remove_dir_all(&self.path) {
+                if std::thread::panicking() {
+                    eprintln!("failed to remove test dir {}: {err}", self.path.display());
+                } else {
+                    panic!("failed to remove test dir {}: {err}", self.path.display());
+                }
+            }
         }
     }
 
