@@ -18,16 +18,12 @@ use crate::terminal_markdown::render_terminal_markdown;
 use crate::ui;
 use crate::workspace::{
     effective_workspace_root, infer_natural_root, parse_navigation_request_from,
-    parse_root_command, path_boundary_clarify_text, root_status, update_selected_root,
-    update_selected_root_from,
+    path_boundary_clarify_text, root_status, update_selected_root, update_selected_root_from,
 };
 
 mod commands;
 
-use commands::{
-    execute_runtime_command, is_end_command, is_exit_command, parse_agent_task_command,
-    parse_debug_command, parse_model_command, parse_runtime_command,
-};
+use commands::execute_runtime_command;
 
 enum TurnEvent {
     Delta(String),
@@ -107,8 +103,17 @@ fn run_interactive_chat(model: &str, temperature: Option<f32>, stream: bool) -> 
         if let Some(command) = commands::parse_chat_command(prompt) {
             match command {
                 commands::ChatCommand::Exit => break,
+                commands::ChatCommand::End => {
+                    let _ = session::delete()?;
+                    ui::print_session_ended();
+                    break;
+                }
                 commands::ChatCommand::Help => {
                     ui::print_help(&current_model);
+                    continue;
+                }
+                commands::ChatCommand::ChatMode => {
+                    println!("mode: chat");
                     continue;
                 }
                 commands::ChatCommand::SwitchToAgent => {
@@ -129,42 +134,37 @@ fn run_interactive_chat(model: &str, temperature: Option<f32>, stream: bool) -> 
                     )?;
                     continue;
                 }
-                _ => {}
-            }
-        }
-        if prompt == "/status" {
-            ui::print_status(&current_model)?;
-            continue;
-        }
-        if let Some(command) = parse_runtime_command(prompt) {
-            println!("{}", execute_runtime_command(&current_model, command)?);
-            continue;
-        }
-        if let Some(mode) = parse_debug_command(prompt) {
-            let output = match mode {
-                Some(mode) => runtime::debug_result(&current_model, Some(mode), false)?,
-                None => runtime::toggle_debug_result(&current_model)?,
-            };
-            println!("{output}");
-            continue;
-        }
-        if let Some(next_model) = parse_model_command(prompt) {
-            match next_model {
-                Some(next_model) => {
-                    current_model = next_model.to_string();
-                    update_active_session_model(&current_model)?;
-                    let runtime_state = runtime::load(&current_model)?.with_model(&current_model);
-                    runtime::save(&runtime_state)?;
-                    ui::print_model_set(&current_model);
+                commands::ChatCommand::Status => {
+                    ui::print_status(&current_model)?;
+                    continue;
                 }
-                None => ui::print_model_help(&current_model),
+                commands::ChatCommand::Root(_) => {}
+                commands::ChatCommand::Runtime(command) => {
+                    println!("{}", execute_runtime_command(&current_model, command)?);
+                    continue;
+                }
+                commands::ChatCommand::Debug(mode) => {
+                    let output = match mode {
+                        Some(mode) => runtime::debug_result(&current_model, Some(mode), false)?,
+                        None => runtime::toggle_debug_result(&current_model)?,
+                    };
+                    println!("{output}");
+                    continue;
+                }
+                commands::ChatCommand::Model(next_model) => {
+                    if let Some(next_model) = next_model {
+                        current_model = next_model.to_string();
+                        update_active_session_model(&current_model)?;
+                        let runtime_state =
+                            runtime::load(&current_model)?.with_model(&current_model);
+                        runtime::save(&runtime_state)?;
+                        ui::print_model_set(&current_model);
+                    } else {
+                        ui::print_model_help(&current_model);
+                    }
+                    continue;
+                }
             }
-            continue;
-        }
-        if is_end_command(prompt) {
-            let _ = session::delete()?;
-            ui::print_session_ended();
-            break;
         }
         match run_prompt_with_memory(
             &mut memory,
@@ -331,22 +331,130 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
         if pending_approval.is_some() {
             continue;
         }
-        if is_exit_command(prompt) {
-            break;
-        }
-        if matches!(prompt, "?" | "/help") {
-            composer.print_above(&ui::interactive_help(&current_model))?;
-            continue;
-        }
-        if prompt == "/chat" {
-            pending_agent_task = None;
-            composer.print_above("mode: chat\n")?;
-            continue;
-        }
-        if prompt == "/agent" {
-            composer.print_above("switching to agent mode\n")?;
-            switch_to_agent = true;
-            break;
+        if let Some(command) = commands::parse_chat_command(prompt) {
+            match command {
+                commands::ChatCommand::Exit => break,
+                commands::ChatCommand::End => {
+                    let _ = session::delete()?;
+                    composer.print_above("session ended\n")?;
+                    break;
+                }
+                commands::ChatCommand::Help => {
+                    composer.print_above(&ui::interactive_help(&current_model))?;
+                    continue;
+                }
+                commands::ChatCommand::ChatMode => {
+                    pending_agent_task = None;
+                    composer.print_above("mode: chat\n")?;
+                    continue;
+                }
+                commands::ChatCommand::SwitchToAgent => {
+                    composer.print_above("switching to agent mode\n")?;
+                    switch_to_agent = true;
+                    break;
+                }
+                commands::ChatCommand::DirectAgentTask(task) => {
+                    if in_flight.is_some() {
+                        queued.push_back(prompt.to_string());
+                        composer.print_above(&format!("queued: {} prompt(s)\n", queued.len()))?;
+                        continue;
+                    }
+                    let Some(root) = task_root_for_prompt(task, selected_root.as_deref()) else {
+                        composer.print_above(&clarify_route_text())?;
+                        pending_agent_task = None;
+                        continue;
+                    };
+                    if let Some(path) = path_boundary_violation(task, &root) {
+                        composer.print_above(&path_boundary_clarify_text(&root, &path))?;
+                        pending_agent_task = None;
+                        continue;
+                    }
+                    active_tool_steps.clear();
+                    context_scan_started =
+                        Some(start_context_scan(&mut composer, &active_tool_steps)?);
+                    in_flight = Some(spawn_agent_turn(
+                        task.to_string(),
+                        root,
+                        current_model.clone(),
+                        temperature,
+                    ));
+                    continue;
+                }
+                commands::ChatCommand::Status => {
+                    composer.print_above(&interactive_chat_status(
+                        &current_model,
+                        effective_workspace_root(selected_root.as_deref()).as_deref(),
+                        selected_root.is_some(),
+                        approved_agent_root.as_deref(),
+                        memory.len() / 2,
+                    )?)?;
+                    continue;
+                }
+                commands::ChatCommand::Root(root_arg) => {
+                    let output = match root_arg {
+                        Some(root_arg) => {
+                            match update_selected_root_from(root_arg, selected_root.as_deref())
+                                .or_else(|_| update_selected_root(root_arg))
+                            {
+                                Ok(next_root) => {
+                                    if selected_root != next_root {
+                                        previous_selected_root = selected_root.clone();
+                                    }
+                                    selected_root = next_root;
+                                    approved_agent_root = None;
+                                    clear_session_agent_root()?;
+                                    save_selected_root(selected_root.as_deref())?;
+                                    pending_agent_task = None;
+                                    root_status(
+                                        effective_workspace_root(selected_root.as_deref())
+                                            .as_deref(),
+                                        selected_root.is_some(),
+                                    )
+                                }
+                                Err(err) => format!("root error: {err}\n"),
+                            }
+                        }
+                        None => root_status(
+                            effective_workspace_root(selected_root.as_deref()).as_deref(),
+                            selected_root.is_some(),
+                        ),
+                    };
+                    composer.print_above(&output)?;
+                    continue;
+                }
+                commands::ChatCommand::Runtime(command) => {
+                    let output = execute_runtime_command(&current_model, command)?;
+                    runtime_state = runtime::load(&current_model)?;
+                    composer.print_above(&output)?;
+                    continue;
+                }
+                commands::ChatCommand::Debug(mode) => {
+                    let output = match mode {
+                        Some(mode) => runtime::debug_result(&current_model, Some(mode), false)?,
+                        None => runtime::toggle_debug_result(&current_model)?,
+                    };
+                    runtime_state = runtime::load(&current_model)?;
+                    composer.set_prompt(ui::prompt_text(&runtime_state.label(&current_model)))?;
+                    composer.print_above(&output)?;
+                    continue;
+                }
+                commands::ChatCommand::Model(next_model) => {
+                    match next_model {
+                        Some(next_model) => {
+                            current_model = next_model.to_string();
+                            update_active_session_model(&current_model)?;
+                            runtime_state = runtime_state.with_model(current_model.clone());
+                            runtime::save(&runtime_state)?;
+                            composer.set_prompt(ui::prompt_text(
+                                &runtime_state.label(&current_model),
+                            ))?;
+                            composer.print_above(&format!("model set: {current_model}\n"))?;
+                        }
+                        None => composer.print_above(&ui::model_help(&current_model))?,
+                    }
+                    continue;
+                }
+            }
         }
         if is_cd_previous_request(prompt) {
             let Some(previous_root) = previous_selected_root.take() else {
@@ -381,32 +489,6 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
                 continue;
             }
         }
-        if let Some(task) = parse_agent_task_command(prompt) {
-            if in_flight.is_some() {
-                queued.push_back(prompt.to_string());
-                composer.print_above(&format!("queued: {} prompt(s)\n", queued.len()))?;
-                continue;
-            }
-            let Some(root) = task_root_for_prompt(task, selected_root.as_deref()) else {
-                composer.print_above(&clarify_route_text())?;
-                pending_agent_task = None;
-                continue;
-            };
-            if let Some(path) = path_boundary_violation(task, &root) {
-                composer.print_above(&path_boundary_clarify_text(&root, &path))?;
-                pending_agent_task = None;
-                continue;
-            }
-            active_tool_steps.clear();
-            context_scan_started = Some(start_context_scan(&mut composer, &active_tool_steps)?);
-            in_flight = Some(spawn_agent_turn(
-                task.to_string(),
-                root,
-                current_model.clone(),
-                temperature,
-            ));
-            continue;
-        }
         if is_agent_task_choice(prompt) {
             if let Some(task) = pending_agent_task.take() {
                 approve_session_agent_root(&task.root)?;
@@ -435,82 +517,6 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
                 composer.print_above(&no_pending_agent_task_text())?;
             }
             continue;
-        }
-        if prompt == "/status" {
-            composer.print_above(&interactive_chat_status(
-                &current_model,
-                effective_workspace_root(selected_root.as_deref()).as_deref(),
-                selected_root.is_some(),
-                approved_agent_root.as_deref(),
-                memory.len() / 2,
-            )?)?;
-            continue;
-        }
-        if let Some(root_arg) = parse_root_command(prompt) {
-            let output = match root_arg {
-                Some(root_arg) => {
-                    match update_selected_root_from(root_arg, selected_root.as_deref())
-                        .or_else(|_| update_selected_root(root_arg))
-                    {
-                        Ok(next_root) => {
-                            if selected_root != next_root {
-                                previous_selected_root = selected_root.clone();
-                            }
-                            selected_root = next_root;
-                            approved_agent_root = None;
-                            clear_session_agent_root()?;
-                            save_selected_root(selected_root.as_deref())?;
-                            pending_agent_task = None;
-                            root_status(
-                                effective_workspace_root(selected_root.as_deref()).as_deref(),
-                                selected_root.is_some(),
-                            )
-                        }
-                        Err(err) => format!("root error: {err}\n"),
-                    }
-                }
-                None => root_status(
-                    effective_workspace_root(selected_root.as_deref()).as_deref(),
-                    selected_root.is_some(),
-                ),
-            };
-            composer.print_above(&output)?;
-            continue;
-        }
-        if let Some(command) = parse_runtime_command(prompt) {
-            let output = execute_runtime_command(&current_model, command)?;
-            runtime_state = runtime::load(&current_model)?;
-            composer.print_above(&output)?;
-            continue;
-        }
-        if let Some(mode) = parse_debug_command(prompt) {
-            let output = match mode {
-                Some(mode) => runtime::debug_result(&current_model, Some(mode), false)?,
-                None => runtime::toggle_debug_result(&current_model)?,
-            };
-            runtime_state = runtime::load(&current_model)?;
-            composer.set_prompt(ui::prompt_text(&runtime_state.label(&current_model)))?;
-            composer.print_above(&output)?;
-            continue;
-        }
-        if let Some(next_model) = parse_model_command(prompt) {
-            match next_model {
-                Some(next_model) => {
-                    current_model = next_model.to_string();
-                    update_active_session_model(&current_model)?;
-                    runtime_state = runtime_state.with_model(current_model.clone());
-                    runtime::save(&runtime_state)?;
-                    composer.set_prompt(ui::prompt_text(&runtime_state.label(&current_model)))?;
-                    composer.print_above(&format!("model set: {current_model}\n"))?;
-                }
-                None => composer.print_above(&ui::model_help(&current_model))?,
-            }
-            continue;
-        }
-        if is_end_command(prompt) {
-            let _ = session::delete()?;
-            composer.print_above("session ended\n")?;
-            break;
         }
         if let Some(command) = parse_shell_read_command(prompt) {
             match command {
@@ -710,50 +716,57 @@ fn run_interactive_agent(model: &str, temperature: Option<f32>) -> Result<(), St
         if prompt.is_empty() {
             continue;
         }
-        if is_exit_command(prompt) {
-            break;
-        }
-        if matches!(prompt, "?" | "/help") {
-            print!("{}", ui::agent_help(&current_model, &root));
-            continue;
-        }
-        if prompt == "/chat" {
-            run_interactive_chat(&current_model, temperature, false)?;
-            break;
-        }
-        if prompt == "/status" {
-            print!("{}", interactive_agent_status(&current_model, &root)?);
-            continue;
-        }
-        if let Some(command) = parse_runtime_command(prompt) {
-            println!("{}", execute_runtime_command(&current_model, command)?);
-            continue;
-        }
-        if let Some(mode) = parse_debug_command(prompt) {
-            let output = match mode {
-                Some(mode) => runtime::debug_result(&current_model, Some(mode), false)?,
-                None => runtime::toggle_debug_result(&current_model)?,
-            };
-            println!("{output}");
-            continue;
-        }
-        if let Some(next_model) = parse_model_command(prompt) {
-            match next_model {
-                Some(next_model) => {
-                    current_model = next_model.to_string();
-                    update_active_session_model(&current_model)?;
-                    let runtime_state = runtime::load(&current_model)?.with_model(&current_model);
-                    runtime::save(&runtime_state)?;
-                    ui::print_model_set(&current_model);
+        if let Some(command) = commands::parse_chat_command(prompt) {
+            match command {
+                commands::ChatCommand::Exit => break,
+                commands::ChatCommand::End => {
+                    let _ = session::delete()?;
+                    ui::print_session_ended();
+                    break;
                 }
-                None => ui::print_model_help(&current_model),
+                commands::ChatCommand::Help => {
+                    print!("{}", ui::agent_help(&current_model, &root));
+                    continue;
+                }
+                commands::ChatCommand::ChatMode => {
+                    run_interactive_chat(&current_model, temperature, false)?;
+                    break;
+                }
+                commands::ChatCommand::SwitchToAgent => {
+                    println!("mode: agent");
+                    continue;
+                }
+                commands::ChatCommand::DirectAgentTask(_) | commands::ChatCommand::Root(_) => {}
+                commands::ChatCommand::Status => {
+                    print!("{}", interactive_agent_status(&current_model, &root)?);
+                    continue;
+                }
+                commands::ChatCommand::Runtime(command) => {
+                    println!("{}", execute_runtime_command(&current_model, command)?);
+                    continue;
+                }
+                commands::ChatCommand::Debug(mode) => {
+                    let output = match mode {
+                        Some(mode) => runtime::debug_result(&current_model, Some(mode), false)?,
+                        None => runtime::toggle_debug_result(&current_model)?,
+                    };
+                    println!("{output}");
+                    continue;
+                }
+                commands::ChatCommand::Model(next_model) => {
+                    if let Some(next_model) = next_model {
+                        current_model = next_model.to_string();
+                        update_active_session_model(&current_model)?;
+                        let runtime_state =
+                            runtime::load(&current_model)?.with_model(&current_model);
+                        runtime::save(&runtime_state)?;
+                        ui::print_model_set(&current_model);
+                    } else {
+                        ui::print_model_help(&current_model);
+                    }
+                    continue;
+                }
             }
-            continue;
-        }
-        if is_end_command(prompt) {
-            let _ = session::delete()?;
-            ui::print_session_ended();
-            break;
         }
         let outcome = agent::run_agent(
             prompt,
@@ -854,7 +867,7 @@ fn spawn_docked_turn(
     temperature: Option<f32>,
     legacy_routing: bool,
 ) -> InFlightTurn {
-    if let Some(task) = parse_agent_task_command(&prompt) {
+    if let Some(task) = commands::parse_agent_task_command(&prompt) {
         if let Some(root) = task_root_for_prompt(task, selected_root) {
             if path_boundary_violation(task, &root).is_none() {
                 return spawn_agent_turn(task.to_string(), root, model, temperature);
@@ -1451,11 +1464,11 @@ fn paths_equal(left: &Path, right: &Path) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use super::commands::{is_end_command, is_exit_command, parse_agent_task_command};
     use super::{
         agent_route_confirmation, approval_decision_for_choice, cap_interactive_memory,
-        context_scan_status, is_agent_task_cancel_choice, is_agent_task_choice, is_end_command,
-        is_exit_command, is_workspace_agent_prompt, no_pending_agent_task_text,
-        parse_agent_task_command, parse_shell_read_command,
+        context_scan_status, is_agent_task_cancel_choice, is_agent_task_choice,
+        is_workspace_agent_prompt, no_pending_agent_task_text, parse_shell_read_command,
         rendered_markdown_effective_stream_delay, rendered_markdown_stream_chunks, shell_pwd_text,
         task_root_for_prompt, terminal_stream_chunk_delay, workspace_agent_root_for_prompt,
         ShellReadCommand,
