@@ -4,6 +4,7 @@ use crate::cancel::CancellationToken;
 use crate::provider::{self, assistant_message, system_message, user_message, Message};
 use crate::safety::{cap_text, redact_text};
 
+mod approval_text;
 pub(crate) mod commit_audit;
 mod decision;
 mod read_tools;
@@ -499,9 +500,7 @@ fn approval_request(step: usize, call: &ToolCall) -> Option<ApprovalRequest> {
             Some(ApprovalRequest {
                 step,
                 tool: call.name.clone(),
-                summary: format!(
-                    "approval required: run_shell\ncwd: {cwd}\nreason: {reason}\ncommand: {command}\nType yes run to approve, n to deny.\n"
-                ),
+                summary: approval_text::shell_summary(cwd, reason, command),
             })
         }
         "propose_patch" => {
@@ -528,9 +527,7 @@ fn approval_request(step: usize, call: &ToolCall) -> Option<ApprovalRequest> {
             Some(ApprovalRequest {
                 step,
                 tool: call.name.clone(),
-                summary: format!(
-                    "approval required: propose_patch\npath: {path}\nreason: {reason}\n--- find ---\n{find}\n--- replace ---\n{replace}\nType yes apply to approve, n to deny.\n"
-                ),
+                summary: approval_text::patch_summary(path, reason, find, replace),
             })
         }
         _ => None,
