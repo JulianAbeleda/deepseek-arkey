@@ -4,8 +4,9 @@ use std::time::Duration;
 
 use crossterm::cursor::{Hide, MoveTo, MoveToColumn, Show};
 use crossterm::event::{
-    self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode, KeyModifiers,
-    KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+    self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode, KeyEvent, KeyEventKind,
+    KeyModifiers, KeyboardEnhancementFlags, PopKeyboardEnhancementFlags,
+    PushKeyboardEnhancementFlags,
 };
 use crossterm::execute;
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode, size, Clear, ClearType};
@@ -130,7 +131,7 @@ impl InlineInput {
                     render_line(prompt, &buffer, cursor)?;
                     continue;
                 }
-                Event::Key(key) => match key.code {
+                Event::Key(key) if is_key_press_or_repeat(key) => match key.code {
                     KeyCode::Enter => {
                         newline()?;
                         if !buffer.trim().is_empty() {
@@ -207,6 +208,7 @@ impl InlineInput {
                     }
                     _ => {}
                 },
+                Event::Key(_) => continue,
                 _ => continue,
             }
         }
@@ -368,7 +370,7 @@ impl DockedComposer {
                 self.insert_text(&text)?;
                 Ok(None)
             }
-            Event::Key(key) => match key.code {
+            Event::Key(key) if is_key_press_or_repeat(key) => match key.code {
                 KeyCode::Esc => Ok(Some(InputAction::Cancel)),
                 KeyCode::Enter => {
                     if key.modifiers.contains(KeyModifiers::SHIFT)
@@ -506,6 +508,7 @@ impl DockedComposer {
                 }
                 _ => Ok(None),
             },
+            Event::Key(_) => Ok(None),
             _ => Ok(None),
         }
     }
@@ -653,7 +656,7 @@ impl DockedComposer {
         };
 
         match event {
-            Event::Key(key) => match modal.key_action(*key) {
+            Event::Key(key) if is_key_press_or_repeat(*key) => match modal.key_action(*key) {
                 ApprovalKeyAction::Choose(choice) => Ok(ApprovalModalEvent::Consumed(Some(
                     InputAction::Approval(choice),
                 ))),
@@ -664,6 +667,7 @@ impl DockedComposer {
                 }
                 ApprovalKeyAction::PassThrough => Ok(ApprovalModalEvent::PassThrough),
             },
+            Event::Key(_) => Ok(ApprovalModalEvent::Consumed(None)),
             Event::Paste(_) => Ok(ApprovalModalEvent::Consumed(None)),
             _ => Ok(ApprovalModalEvent::Consumed(None)),
         }
@@ -904,6 +908,10 @@ fn keyboard_enhancement_flags() -> KeyboardEnhancementFlags {
     KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
         | KeyboardEnhancementFlags::REPORT_EVENT_TYPES
         | KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES
+}
+
+fn is_key_press_or_repeat(key: KeyEvent) -> bool {
+    matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat)
 }
 
 fn render_line(prompt: &str, buffer: &str, cursor: usize) -> Result<(), String> {
@@ -1564,6 +1572,31 @@ mod tests {
         assert!(flags.contains(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES));
         assert!(flags.contains(KeyboardEnhancementFlags::REPORT_EVENT_TYPES));
         assert!(flags.contains(KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES));
+    }
+
+    #[test]
+    fn key_event_filter_ignores_release_events() {
+        assert!(super::is_key_press_or_repeat(
+            crossterm::event::KeyEvent::new_with_kind(
+                crossterm::event::KeyCode::Char('h'),
+                crossterm::event::KeyModifiers::NONE,
+                crossterm::event::KeyEventKind::Press,
+            )
+        ));
+        assert!(super::is_key_press_or_repeat(
+            crossterm::event::KeyEvent::new_with_kind(
+                crossterm::event::KeyCode::Char('h'),
+                crossterm::event::KeyModifiers::NONE,
+                crossterm::event::KeyEventKind::Repeat,
+            )
+        ));
+        assert!(!super::is_key_press_or_repeat(
+            crossterm::event::KeyEvent::new_with_kind(
+                crossterm::event::KeyCode::Char('h'),
+                crossterm::event::KeyModifiers::NONE,
+                crossterm::event::KeyEventKind::Release,
+            )
+        ));
     }
 
     #[test]
