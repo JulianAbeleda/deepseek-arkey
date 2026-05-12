@@ -154,6 +154,26 @@ pub fn run_agent(
     )
 }
 
+#[deprecated(note = "use run_agent_with_handlers and AgentRunOptions instead")]
+#[allow(dead_code)]
+pub fn run_agent_with_options(
+    task: &str,
+    model: &str,
+    temperature: Option<f32>,
+    config: AgentConfig,
+    approval_mode: ApprovalMode,
+    on_step: impl FnMut(AgentStep),
+) -> Result<AgentOutcome, String> {
+    run_agent_with_handlers(
+        task,
+        model,
+        temperature,
+        AgentRunOptions::new(config).approval_mode(approval_mode),
+        on_step,
+        |_| ApprovalDecision::Deny,
+    )
+}
+
 pub fn run_agent_final_only(
     task: &str,
     model: &str,
@@ -167,6 +187,76 @@ pub fn run_agent_final_only(
         AgentRunOptions::new(config).quiet_cache(true),
         |_| {},
         |_| ApprovalDecision::Deny,
+    )
+}
+
+#[deprecated(note = "use run_agent_with_handlers and AgentRunOptions instead")]
+#[allow(dead_code)]
+pub fn run_agent_with_approval_handler(
+    task: &str,
+    model: &str,
+    temperature: Option<f32>,
+    config: AgentConfig,
+    approval_mode: ApprovalMode,
+    on_step: impl FnMut(AgentStep),
+    on_approval: impl FnMut(ApprovalRequest) -> ApprovalDecision,
+) -> Result<AgentOutcome, String> {
+    run_agent_with_handlers(
+        task,
+        model,
+        temperature,
+        AgentRunOptions::new(config).approval_mode(approval_mode),
+        on_step,
+        on_approval,
+    )
+}
+
+#[deprecated(note = "use run_agent_with_handlers and AgentRunOptions::quiet_cache instead")]
+#[allow(dead_code)]
+pub fn run_agent_quiet_cache_with_approval_handler(
+    task: &str,
+    model: &str,
+    temperature: Option<f32>,
+    config: AgentConfig,
+    approval_mode: ApprovalMode,
+    on_step: impl FnMut(AgentStep),
+    on_approval: impl FnMut(ApprovalRequest) -> ApprovalDecision,
+) -> Result<AgentOutcome, String> {
+    run_agent_with_handlers(
+        task,
+        model,
+        temperature,
+        AgentRunOptions::new(config)
+            .approval_mode(approval_mode)
+            .quiet_cache(true),
+        on_step,
+        on_approval,
+    )
+}
+
+#[deprecated(note = "use run_agent_with_handlers with AgentRunOptions::quiet_cache and cancel")]
+#[allow(dead_code)]
+#[allow(clippy::too_many_arguments)]
+pub fn run_agent_quiet_cache_with_approval_handler_cancelled(
+    task: &str,
+    model: &str,
+    temperature: Option<f32>,
+    config: AgentConfig,
+    approval_mode: ApprovalMode,
+    on_step: impl FnMut(AgentStep),
+    on_approval: impl FnMut(ApprovalRequest) -> ApprovalDecision,
+    cancel: CancellationToken,
+) -> Result<AgentOutcome, String> {
+    run_agent_with_handlers(
+        task,
+        model,
+        temperature,
+        AgentRunOptions::new(config)
+            .approval_mode(approval_mode)
+            .quiet_cache(true)
+            .cancel(cancel),
+        on_step,
+        on_approval,
     )
 }
 
