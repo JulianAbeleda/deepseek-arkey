@@ -68,9 +68,17 @@ pub struct SessionState {
     pub model: String,
     pub updated_at: u64,
     pub messages: Vec<Message>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_persisted_root_option",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub selected_root: Option<PersistedRoot>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_persisted_root_option",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub agent_root: Option<PersistedRoot>,
 }
 
@@ -139,6 +147,16 @@ impl SessionState {
             self.messages.drain(0..2);
         }
     }
+}
+
+fn deserialize_persisted_root_option<'de, D>(
+    deserializer: D,
+) -> Result<Option<PersistedRoot>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let root = Option::<PathBuf>::deserialize(deserializer)?;
+    Ok(root.and_then(|root| PersistedRoot::from_path_buf(root).ok()))
 }
 
 pub fn session_path() -> PathBuf {
@@ -377,7 +395,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_relative_persisted_roots() {
+    fn drops_relative_persisted_roots_on_session_load() {
         let raw = r#"{
           "provider": "DeepSeek",
           "name": "default",
@@ -387,8 +405,34 @@ mod tests {
           "selected_root": "relative/path"
         }"#;
 
-        let err = serde_json::from_str::<SessionState>(raw).unwrap_err();
+        let loaded = serde_json::from_str::<SessionState>(raw).unwrap();
 
-        assert!(err.to_string().contains("session root is not absolute"));
+        assert_eq!(loaded.selected_root_path(), None);
+    }
+
+    #[test]
+    fn drops_stale_persisted_roots_on_session_load() {
+        let missing = std::env::temp_dir().join(format!(
+            "deepseek-missing-session-root-{}",
+            std::process::id()
+        ));
+        let raw = format!(
+            r#"{{
+          "provider": "DeepSeek",
+          "name": "default",
+          "model": "model-a",
+          "updated_at": 1,
+          "messages": [],
+          "selected_root": {},
+          "agent_root": {}
+        }}"#,
+            serde_json::to_string(&missing).unwrap(),
+            serde_json::to_string(&missing).unwrap()
+        );
+
+        let loaded = serde_json::from_str::<SessionState>(&raw).unwrap();
+
+        assert_eq!(loaded.selected_root_path(), None);
+        assert_eq!(loaded.agent_root_path(), None);
     }
 }
