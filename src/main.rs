@@ -1,4 +1,5 @@
 mod agent;
+mod answer_format;
 mod cancel;
 mod cli;
 mod input;
@@ -84,7 +85,7 @@ fn run(args: Args) -> Result<(), String> {
                     outcome.transcript_path.display()
                 );
             }
-            println!("{}", repl::terminal_agent_answer(&outcome.answer));
+            println!("{}", answer_format::terminal_agent_answer(&outcome.answer));
         }
         Some(Command::Login) => {
             provider::login_check(&model)?;

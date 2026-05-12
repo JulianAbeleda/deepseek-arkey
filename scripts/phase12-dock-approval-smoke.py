@@ -34,17 +34,17 @@ def write_fake_curl(directory):
             import sys
 
             config = sys.stdin.read()
-            if "deny shell command" in config and "Tool result for step" in config:
+            if "inspect shell denial gate" in config and "Tool result for step" in config:
                 decision = {"final_answer": "shell denied through dock"}
-            elif "approve shell command" in config and "Tool result for step" in config:
+            elif "inspect shell approval gate" in config and "Tool result for step" in config:
                 decision = {"final_answer": "shell approved through dock"}
-            elif "deny patch edit" in config and "Tool result for step" in config:
+            elif "inspect patch denial gate" in config and "Tool result for step" in config:
                 decision = {"final_answer": "patch denied through dock"}
-            elif "approve patch edit" in config and "Tool result for step" in config:
+            elif "inspect patch approval gate" in config and "Tool result for step" in config:
                 decision = {"final_answer": "patch approved through dock"}
             elif "Tool result for step" in config:
                 decision = {"final_answer": "unexpected tool result"}
-            elif "deny shell command" in config:
+            elif "inspect shell denial gate" in config:
                 decision = {
                     "thought": "request shell and expect user denial",
                     "tool": {
@@ -56,7 +56,7 @@ def write_fake_curl(directory):
                         },
                     },
                 }
-            elif "approve shell command" in config:
+            elif "inspect shell approval gate" in config:
                 decision = {
                     "thought": "request shell and expect user approval",
                     "tool": {
@@ -68,7 +68,7 @@ def write_fake_curl(directory):
                         },
                     },
                 }
-            elif "deny patch edit" in config:
+            elif "inspect patch denial gate" in config:
                 decision = {
                     "thought": "request patch and expect user denial",
                     "tool": {
@@ -81,7 +81,7 @@ def write_fake_curl(directory):
                         },
                     },
                 }
-            elif "approve patch edit" in config:
+            elif "inspect patch approval gate" in config:
                 decision = {
                     "thought": "request patch and expect user approval",
                     "tool": {
@@ -161,13 +161,7 @@ def main():
                 "initial dock",
             )
 
-            os.write(master, b"deny shell command\r")
-            wait_for(
-                lambda: screen.contains("agent step 1: run_shell"),
-                master,
-                screen,
-                "shell tool step render",
-            )
+            os.write(master, b"inspect shell denial gate\r")
             wait_for(
                 lambda: screen.contains("run_shell requires approval"),
                 master,
@@ -197,7 +191,7 @@ def main():
                 raise AssertionError(f"docked worker prompted for shell approval\n{screen.dump()}")
             assert_not_legacy_handoff(screen)
 
-            os.write(master, b"approve shell command\r")
+            os.write(master, b"inspect shell approval gate\r")
             wait_for(
                 lambda: screen.contains("run_shell requires approval")
                 and screen.contains("command: printf PHASE12_APPROVED"),
@@ -220,13 +214,7 @@ def main():
             )
             assert_not_legacy_handoff(screen)
 
-            os.write(master, b"deny patch edit\r")
-            wait_for(
-                lambda: screen.contains("agent step 1: propose_patch"),
-                master,
-                screen,
-                "patch tool step render",
-            )
+            os.write(master, b"inspect patch denial gate\r")
             wait_for(
                 lambda: screen.contains("propose_patch requires approval")
                 and screen.contains("path: README.md"),
@@ -252,7 +240,7 @@ def main():
                 raise AssertionError(f"denied patch modified README.md: {readme!r}")
             assert_not_legacy_handoff(screen)
 
-            os.write(master, b"approve patch edit\r")
+            os.write(master, b"inspect patch approval gate\r")
             wait_for(
                 lambda: screen.contains("propose_patch requires approval")
                 and screen.contains("path: README.md"),

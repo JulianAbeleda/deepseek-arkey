@@ -36,11 +36,11 @@ def write_fake_curl(directory):
             import sys
 
             config = sys.stdin.read()
-            if "try a shell command" in config and "Tool result for step" in config:
+            if "inspect shell denial gate" in config and "Tool result for step" in config:
                 decision = {"final_answer": "shell denied as expected"}
             elif "Tool result for step" in config:
                 decision = {"final_answer": "desktop scan complete"}
-            elif "try a shell command" in config:
+            elif "inspect shell denial gate" in config:
                 decision = {
                     "thought": "request shell to verify dock denies it",
                     "tool": {
@@ -171,7 +171,7 @@ def main():
                 raise AssertionError(f"tool step persisted after final answer\n{screen.dump()}")
             assert_not_legacy_handoff(screen)
 
-            os.write(master, b"try a shell command\r")
+            os.write(master, b"inspect shell denial gate\r")
             wait_for(
                 lambda: screen.contains("agent step 1: run_shell"),
                 master,
