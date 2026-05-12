@@ -251,54 +251,7 @@ mod tests {
         path_boundary_clarify_text, root_status, update_selected_root_from,
     };
     use std::fs;
-    use std::path::{Path, PathBuf};
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    struct TestDir {
-        path: PathBuf,
-    }
-
-    impl TestDir {
-        fn new(name: &str) -> Self {
-            let base = std::env::temp_dir();
-            for attempt in 0..100 {
-                let unique = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap()
-                    .as_nanos();
-                let path = base.join(format!(
-                    "deepseek-{name}-{}-{unique}-{attempt}",
-                    std::process::id()
-                ));
-                match fs::create_dir(&path) {
-                    Ok(()) => return Self { path },
-                    Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => continue,
-                    Err(err) => panic!("failed to create test dir {}: {err}", path.display()),
-                }
-            }
-            panic!("failed to create unique test dir for {name}");
-        }
-
-        fn path(&self) -> &Path {
-            &self.path
-        }
-
-        fn join(&self, path: impl AsRef<Path>) -> PathBuf {
-            self.path.join(path)
-        }
-    }
-
-    impl Drop for TestDir {
-        fn drop(&mut self) {
-            if let Err(err) = fs::remove_dir_all(&self.path) {
-                if std::thread::panicking() {
-                    eprintln!("failed to remove test dir {}: {err}", self.path.display());
-                } else {
-                    panic!("failed to remove test dir {}: {err}", self.path.display());
-                }
-            }
-        }
-    }
+    use std::path::Path;
 
     #[test]
     fn parses_root_slash_command() {
@@ -348,7 +301,7 @@ mod tests {
             .map(std::path::PathBuf::from)
             .unwrap();
         let env_root = home.join("env");
-        let isolated_root = TestDir::new("navigation-isolated-test");
+        let isolated_root = tempfile::tempdir().unwrap();
         if env_root.is_dir() {
             assert_eq!(
                 parse_navigation_request("go to my env folder and stay there")
@@ -414,8 +367,8 @@ mod tests {
 
     #[test]
     fn relative_navigation_uses_selected_root_as_base() {
-        let root = TestDir::new("navigation-base-test");
-        let child = root.join("sample_project");
+        let root = tempfile::tempdir().unwrap();
+        let child = root.path().join("sample_project");
         fs::create_dir_all(&child).unwrap();
 
         assert_eq!(
@@ -428,8 +381,8 @@ mod tests {
 
     #[test]
     fn relative_navigation_supports_parent_and_current_directory() {
-        let root = TestDir::new("navigation-relative-test");
-        let parent = root.join("parent");
+        let root = tempfile::tempdir().unwrap();
+        let parent = root.path().join("parent");
         let child = parent.join("child");
         let sibling = parent.join("sibling");
         fs::create_dir_all(&child).unwrap();

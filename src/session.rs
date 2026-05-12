@@ -235,54 +235,6 @@ fn unix_timestamp() -> u64 {
 mod tests {
     use super::{delete_path, load_from_path, save_to_path, SessionState};
     use crate::provider::{DEFAULT_SESSION_NAME, PROVIDER};
-    use std::path::{Path, PathBuf};
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    struct TestDir {
-        path: PathBuf,
-    }
-
-    impl TestDir {
-        fn new(name: &str) -> Self {
-            let base = std::env::temp_dir();
-            for attempt in 0..100 {
-                let unique = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap()
-                    .as_nanos();
-                let path = base.join(format!(
-                    "deepseek-{name}-{}-{unique}-{attempt}",
-                    std::process::id()
-                ));
-                match std::fs::create_dir(&path) {
-                    Ok(()) => return Self { path },
-                    Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => continue,
-                    Err(err) => panic!("failed to create test dir {}: {err}", path.display()),
-                }
-            }
-            panic!("failed to create unique test dir for {name}");
-        }
-
-        fn path(&self) -> &Path {
-            &self.path
-        }
-
-        fn join(&self, path: impl AsRef<Path>) -> PathBuf {
-            self.path.join(path)
-        }
-    }
-
-    impl Drop for TestDir {
-        fn drop(&mut self) {
-            if let Err(err) = std::fs::remove_dir_all(&self.path) {
-                if std::thread::panicking() {
-                    eprintln!("failed to remove test dir {}: {err}", self.path.display());
-                } else {
-                    panic!("failed to remove test dir {}: {err}", self.path.display());
-                }
-            }
-        }
-    }
 
     #[test]
     fn caps_turn_count() {
@@ -296,8 +248,8 @@ mod tests {
 
     #[test]
     fn save_load_delete_round_trip() {
-        let root = TestDir::new("session-roundtrip-test");
-        let path = root.join("active-session.json");
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("active-session.json");
 
         let mut state = SessionState::new(PROVIDER, DEFAULT_SESSION_NAME, "model-a");
         state.push_turn("hello".to_string(), "world".to_string());
@@ -321,7 +273,7 @@ mod tests {
 
     #[test]
     fn stores_agent_root_permission() {
-        let root = TestDir::new("agent-root");
+        let root = tempfile::tempdir().unwrap();
         let mut state = SessionState::new(PROVIDER, DEFAULT_SESSION_NAME, "model-a");
 
         state.approve_agent_root(root.path()).unwrap();
@@ -336,7 +288,7 @@ mod tests {
 
     #[test]
     fn clears_messages_without_clearing_session_metadata() {
-        let root = TestDir::new("agent-root-metadata");
+        let root = tempfile::tempdir().unwrap();
         let mut state = SessionState::new(PROVIDER, DEFAULT_SESSION_NAME, "model-a");
         state.push_turn("hello".to_string(), "world".to_string());
         state.approve_agent_root(root.path()).unwrap();
@@ -353,9 +305,9 @@ mod tests {
 
     #[test]
     fn saves_and_loads_agent_root_permission() {
-        let root = TestDir::new("session-agent-root-test");
-        let path = root.join("active-session.json");
-        let approved_root = root.join("workspace");
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("active-session.json");
+        let approved_root = root.path().join("workspace");
         std::fs::create_dir_all(&approved_root).unwrap();
 
         let mut state = SessionState::new(PROVIDER, DEFAULT_SESSION_NAME, "model-a");
@@ -371,9 +323,9 @@ mod tests {
 
     #[test]
     fn loads_legacy_string_roots() {
-        let root = TestDir::new("legacy-roots-test");
-        let selected = root.join("selected");
-        let agent = root.join("agent");
+        let root = tempfile::tempdir().unwrap();
+        let selected = root.path().join("selected");
+        let agent = root.path().join("agent");
         std::fs::create_dir_all(&selected).unwrap();
         std::fs::create_dir_all(&agent).unwrap();
         let raw = format!(
@@ -404,8 +356,8 @@ mod tests {
 
     #[test]
     fn normalizes_persisted_roots() {
-        let root = TestDir::new("normalize-roots-test");
-        let workspace = root.join("workspace");
+        let root = tempfile::tempdir().unwrap();
+        let workspace = root.path().join("workspace");
         std::fs::create_dir_all(&workspace).unwrap();
         let spelling = workspace.join("..").join("workspace");
         let mut state = SessionState::new(PROVIDER, DEFAULT_SESSION_NAME, "model-a");
