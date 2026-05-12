@@ -207,11 +207,7 @@ impl AgentChatRoute {
 }
 
 fn unreachable_external_approval(_: ApprovalRequest) -> ApprovalDecision {
-    debug_assert!(
-        false,
-        "default agent wrappers must not request external approval"
-    );
-    ApprovalDecision::Deny
+    unreachable!("default agent wrappers must not request external approval")
 }
 
 fn run_agent_with_chat_handler(
@@ -747,8 +743,9 @@ mod tests {
     use super::write_tools::{apply_prepared_patch, prepare_patch};
     use super::{
         append_no_action_retry_note, append_parser_repair_notes, parse_decision,
-        parse_decision_with_metadata, system_prompt, write_transcript, AgentChatRoute, AgentConfig,
-        ApprovalDecision, ApprovalMode, ToolCall, TranscriptEntry, DEFAULT_MAX_STEPS,
+        parse_decision_with_metadata, system_prompt, unreachable_external_approval,
+        write_transcript, AgentChatRoute, AgentConfig, ApprovalDecision, ApprovalMode,
+        ApprovalRequest, ToolCall, TranscriptEntry, DEFAULT_MAX_STEPS,
     };
 
     fn execute_tool(workspace: &Workspace, call: &ToolCall) -> String {
@@ -1325,6 +1322,19 @@ I will list the files now."#,
             AgentChatRoute::from_options(true, Some(&cancel)),
             AgentChatRoute::QuietCancelled
         );
+    }
+
+    #[test]
+    fn default_agent_approval_handler_panics_if_reached() {
+        let result = std::panic::catch_unwind(|| {
+            unreachable_external_approval(ApprovalRequest {
+                step: 1,
+                tool: "run_shell".to_string(),
+                summary: "approval required".to_string(),
+            });
+        });
+
+        assert!(result.is_err());
     }
 
     #[test]
