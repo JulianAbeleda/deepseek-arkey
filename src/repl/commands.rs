@@ -8,8 +8,29 @@ pub(super) enum RuntimeCommand {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum CommandParse<T> {
+    NotACommand,
+    Valid(T),
+    Invalid(CommandError),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum CommandError {
+    UnknownRuntimeCommand,
+}
+
+impl CommandError {
+    pub(super) fn message(self) -> &'static str {
+        match self {
+            Self::UnknownRuntimeCommand => {
+                "unknown runtime command; use /runtime or /runtime legacy-routing <on|off>"
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ChatCommand<'a> {
-    Invalid(&'static str),
     Help,
     ChatMode,
     SwitchToAgent,
@@ -23,43 +44,43 @@ pub(super) enum ChatCommand<'a> {
     Exit,
 }
 
-pub(super) fn parse_chat_command(prompt: &str) -> Option<ChatCommand<'_>> {
+pub(super) fn parse_chat_command(prompt: &str) -> CommandParse<ChatCommand<'_>> {
     if is_exit_command(prompt) {
-        return Some(ChatCommand::Exit);
+        return CommandParse::Valid(ChatCommand::Exit);
     }
     if is_end_command(prompt) {
-        return Some(ChatCommand::End);
+        return CommandParse::Valid(ChatCommand::End);
     }
     if matches!(prompt, "?" | "/help") {
-        return Some(ChatCommand::Help);
+        return CommandParse::Valid(ChatCommand::Help);
     }
     if prompt == "/chat" {
-        return Some(ChatCommand::ChatMode);
+        return CommandParse::Valid(ChatCommand::ChatMode);
     }
     if prompt == "/agent" {
-        return Some(ChatCommand::SwitchToAgent);
+        return CommandParse::Valid(ChatCommand::SwitchToAgent);
     }
     if let Some(task) = parse_agent_task_command(prompt) {
-        return Some(ChatCommand::DirectAgentTask(task));
+        return CommandParse::Valid(ChatCommand::DirectAgentTask(task));
     }
     if prompt == "/status" {
-        return Some(ChatCommand::Status);
+        return CommandParse::Valid(ChatCommand::Status);
     }
     if let Some(root) = parse_root_command(prompt) {
-        return Some(ChatCommand::Root(root));
+        return CommandParse::Valid(ChatCommand::Root(root));
     }
     match parse_runtime_command(prompt) {
-        Ok(Some(command)) => return Some(ChatCommand::Runtime(command)),
+        Ok(Some(command)) => return CommandParse::Valid(ChatCommand::Runtime(command)),
         Ok(None) => {}
-        Err(message) => return Some(ChatCommand::Invalid(message)),
+        Err(error) => return CommandParse::Invalid(error),
     }
     if let Some(mode) = parse_debug_command(prompt) {
-        return Some(ChatCommand::Debug(mode));
+        return CommandParse::Valid(ChatCommand::Debug(mode));
     }
     if let Some(model) = parse_model_command(prompt) {
-        return Some(ChatCommand::Model(model));
+        return CommandParse::Valid(ChatCommand::Model(model));
     }
-    None
+    CommandParse::NotACommand
 }
 
 pub(super) fn parse_agent_task_command(prompt: &str) -> Option<&str> {
@@ -83,7 +104,7 @@ pub(super) fn parse_debug_command(prompt: &str) -> Option<Option<&str>> {
     })
 }
 
-pub(super) fn parse_runtime_command(prompt: &str) -> Result<Option<RuntimeCommand>, &'static str> {
+pub(super) fn parse_runtime_command(prompt: &str) -> Result<Option<RuntimeCommand>, CommandError> {
     if prompt == "/runtime" {
         return Ok(Some(RuntimeCommand::Status));
     }
@@ -94,7 +115,7 @@ pub(super) fn parse_runtime_command(prompt: &str) -> Result<Option<RuntimeComman
     match args {
         "legacy-routing on" => Ok(Some(RuntimeCommand::LegacyRouting(true))),
         "legacy-routing off" => Ok(Some(RuntimeCommand::LegacyRouting(false))),
-        _ => Err("unknown runtime command; use /runtime or /runtime legacy-routing <on|off>"),
+        _ => Err(CommandError::UnknownRuntimeCommand),
     }
 }
 
@@ -140,7 +161,7 @@ pub(super) fn is_end_command(prompt: &str) -> bool {
 mod tests {
     use super::{
         is_end_command, is_exit_command, parse_chat_command, parse_debug_command,
-        parse_model_command, parse_runtime_command, ChatCommand, RuntimeCommand,
+        parse_model_command, parse_runtime_command, CommandError, CommandParse, RuntimeCommand,
     };
 
     #[test]
@@ -202,9 +223,7 @@ mod tests {
     fn parses_invalid_runtime_as_chat_command_error() {
         assert_eq!(
             parse_chat_command("/runtime unknown"),
-            Some(ChatCommand::Invalid(
-                "unknown runtime command; use /runtime or /runtime legacy-routing <on|off>"
-            ))
+            CommandParse::Invalid(CommandError::UnknownRuntimeCommand)
         );
     }
 }
