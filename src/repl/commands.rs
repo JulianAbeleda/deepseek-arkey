@@ -88,7 +88,7 @@ pub(super) fn parse_runtime_command(prompt: &str) -> Option<RuntimeCommand> {
     match args {
         "legacy-routing on" => Some(RuntimeCommand::LegacyRouting(true)),
         "legacy-routing off" => Some(RuntimeCommand::LegacyRouting(false)),
-        _ => Some(RuntimeCommand::Status),
+        _ => None,
     }
 }
 
@@ -186,10 +186,7 @@ mod tests {
             parse_runtime_command("/runtime legacy-routing off"),
             Some(RuntimeCommand::LegacyRouting(false))
         );
-        assert_eq!(
-            parse_runtime_command("/runtime unknown"),
-            Some(RuntimeCommand::Status)
-        );
+        assert_eq!(parse_runtime_command("/runtime unknown"), None);
         assert_eq!(parse_runtime_command("runtime"), None);
     }
 }
