@@ -22,6 +22,13 @@ use crate::workspace::{
     update_selected_root_from,
 };
 
+mod commands;
+
+use commands::{
+    execute_runtime_command, is_end_command, is_exit_command, parse_agent_task_command,
+    parse_debug_command, parse_model_command, parse_runtime_command,
+};
+
 enum TurnEvent {
     Delta(String),
     RenderedMarkdown(String),
@@ -97,29 +104,33 @@ fn run_interactive_chat(model: &str, temperature: Option<f32>, stream: bool) -> 
         if prompt.is_empty() {
             continue;
         }
-        if is_exit_command(prompt) {
-            break;
-        }
-        if matches!(prompt, "?" | "/help") {
-            ui::print_help(&current_model);
-            continue;
-        }
-        if prompt == "/agent" {
-            run_interactive_agent(&current_model, temperature)?;
-            break;
-        }
-        if let Some(task) = parse_agent_task_command(prompt) {
-            let root = effective_workspace_root(None)
-                .ok_or_else(|| "agent task needs a workspace root; run from a project directory or use interactive /root <path>".to_string())?;
-            run_confirmed_agent_task(
-                &PendingAgentTask {
-                    prompt: task.to_string(),
-                    root,
-                },
-                &current_model,
-                temperature,
-            )?;
-            continue;
+        if let Some(command) = commands::parse_chat_command(prompt) {
+            match command {
+                commands::ChatCommand::Exit => break,
+                commands::ChatCommand::Help => {
+                    ui::print_help(&current_model);
+                    continue;
+                }
+                commands::ChatCommand::SwitchToAgent => {
+                    run_interactive_agent(&current_model, temperature)?;
+                    break;
+                }
+                commands::ChatCommand::DirectAgentTask(task) => {
+                    let root = effective_workspace_root(None).ok_or_else(|| {
+                        "agent task needs a workspace root; run from a project directory or use interactive /root <path>".to_string()
+                    })?;
+                    run_confirmed_agent_task(
+                        &PendingAgentTask {
+                            prompt: task.to_string(),
+                            root,
+                        },
+                        &current_model,
+                        temperature,
+                    )?;
+                    continue;
+                }
+                _ => {}
+            }
         }
         if prompt == "/status" {
             ui::print_status(&current_model)?;
@@ -1136,13 +1147,6 @@ fn is_agent_task_cancel_choice(prompt: &str) -> bool {
     matches!(prompt, "n" | "no")
 }
 
-fn parse_agent_task_command(prompt: &str) -> Option<&str> {
-    prompt
-        .strip_prefix("/agent ")
-        .map(str::trim)
-        .filter(|task| !task.is_empty())
-}
-
 fn task_root_for_prompt(prompt: &str, selected_root: Option<&Path>) -> Option<PathBuf> {
     infer_natural_root(prompt)
         .or_else(|| selected_root.map(Path::to_path_buf))
@@ -1384,73 +1388,6 @@ fn interactive_agent_status(model: &str, root: &Path) -> Result<String, String> 
     Ok(output)
 }
 
-fn parse_debug_command(prompt: &str) -> Option<Option<&str>> {
-    if prompt == "/debug" {
-        return Some(None);
-    }
-    prompt.strip_prefix("/debug ").map(|mode| {
-        let mode = mode.trim();
-        if mode.is_empty() {
-            None
-        } else {
-            Some(mode)
-        }
-    })
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RuntimeCommand {
-    Status,
-    LegacyRouting(bool),
-}
-
-fn parse_runtime_command(prompt: &str) -> Option<RuntimeCommand> {
-    if prompt == "/runtime" {
-        return Some(RuntimeCommand::Status);
-    }
-    let args = prompt.strip_prefix("/runtime ")?.trim();
-    match args {
-        "legacy-routing on" => Some(RuntimeCommand::LegacyRouting(true)),
-        "legacy-routing off" => Some(RuntimeCommand::LegacyRouting(false)),
-        _ => Some(RuntimeCommand::Status),
-    }
-}
-
-fn execute_runtime_command(model: &str, command: RuntimeCommand) -> Result<String, String> {
-    match command {
-        RuntimeCommand::Status => runtime::runtime_result(model, false),
-        RuntimeCommand::LegacyRouting(enabled) => {
-            let state = runtime::set_legacy_routing(model, enabled)?;
-            Ok(runtime::format_runtime_state(&state, model))
-        }
-    }
-}
-
-fn parse_model_command(prompt: &str) -> Option<Option<&str>> {
-    if prompt == "/model" {
-        return Some(None);
-    }
-    prompt.strip_prefix("/model ").map(|model| {
-        let model = model.trim();
-        if model.is_empty() {
-            None
-        } else {
-            Some(model)
-        }
-    })
-}
-
-fn is_exit_command(prompt: &str) -> bool {
-    matches!(
-        prompt,
-        "exit" | "quit" | "/exit" | "/quit" | "/exit quit" | "/quit exit"
-    )
-}
-
-fn is_end_command(prompt: &str) -> bool {
-    matches!(prompt, "session end" | "/end" | "/end session")
-}
-
 fn reset_persisted_chat_messages() -> Result<Option<SessionState>, String> {
     let Some(mut state) = session::load()? else {
         return Ok(None);
@@ -1517,10 +1454,9 @@ mod tests {
         agent_route_confirmation, approval_decision_for_choice, cap_interactive_memory,
         context_scan_status, is_agent_task_cancel_choice, is_agent_task_choice, is_end_command,
         is_exit_command, is_workspace_agent_prompt, no_pending_agent_task_text,
-        parse_agent_task_command, parse_debug_command, parse_model_command, parse_runtime_command,
-        parse_shell_read_command, rendered_markdown_effective_stream_delay,
-        rendered_markdown_stream_chunks, shell_pwd_text, task_root_for_prompt,
-        terminal_stream_chunk_delay, workspace_agent_root_for_prompt, RuntimeCommand,
+        parse_agent_task_command, parse_shell_read_command,
+        rendered_markdown_effective_stream_delay, rendered_markdown_stream_chunks, shell_pwd_text,
+        task_root_for_prompt, terminal_stream_chunk_delay, workspace_agent_root_for_prompt,
         ShellReadCommand,
     };
     use crate::agent;
@@ -1530,17 +1466,6 @@ mod tests {
     use std::collections::HashSet;
     use std::path::{Path, PathBuf};
     use std::time::Instant;
-
-    #[test]
-    fn parses_model_slash_command() {
-        assert_eq!(parse_model_command("/model"), Some(None));
-        assert_eq!(parse_model_command("/model   "), Some(None));
-        assert_eq!(
-            parse_model_command("/model deepseek-v4-pro"),
-            Some(Some("deepseek-v4-pro"))
-        );
-        assert_eq!(parse_model_command("model deepseek-v4-flash"), None);
-    }
 
     #[test]
     fn recognizes_exit_commands() {
@@ -1587,35 +1512,6 @@ mod tests {
             agent::ApprovalDecision::Deny
         );
         assert!(approved.is_empty());
-    }
-
-    #[test]
-    fn parses_debug_slash_command() {
-        assert_eq!(parse_debug_command("/debug"), Some(None));
-        assert_eq!(parse_debug_command("/debug off"), Some(Some("off")));
-        assert_eq!(parse_debug_command("/debug manual"), Some(Some("manual")));
-        assert_eq!(parse_debug_command("debug"), None);
-    }
-
-    #[test]
-    fn parses_runtime_legacy_routing_command() {
-        assert_eq!(
-            parse_runtime_command("/runtime"),
-            Some(RuntimeCommand::Status)
-        );
-        assert_eq!(
-            parse_runtime_command("/runtime legacy-routing on"),
-            Some(RuntimeCommand::LegacyRouting(true))
-        );
-        assert_eq!(
-            parse_runtime_command("/runtime legacy-routing off"),
-            Some(RuntimeCommand::LegacyRouting(false))
-        );
-        assert_eq!(
-            parse_runtime_command("/runtime unknown"),
-            Some(RuntimeCommand::Status)
-        );
-        assert_eq!(parse_runtime_command("runtime"), None);
     }
 
     #[test]
