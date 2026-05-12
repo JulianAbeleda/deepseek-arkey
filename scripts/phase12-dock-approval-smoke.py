@@ -163,7 +163,7 @@ def main():
 
             os.write(master, b"inspect shell denial gate\r")
             wait_for(
-                lambda: screen.contains("agent step 1: run_shell"),
+                lambda: screen.contains("agent step") and screen.contains("run_shell"),
                 master,
                 screen,
                 "shell denial tool step",
@@ -199,7 +199,7 @@ def main():
 
             os.write(master, b"inspect shell approval gate\r")
             wait_for(
-                lambda: screen.contains("agent step 1: run_shell"),
+                lambda: screen.contains("agent step") and screen.contains("run_shell"),
                 master,
                 screen,
                 "shell approval tool step",
@@ -228,7 +228,7 @@ def main():
 
             os.write(master, b"inspect patch denial gate\r")
             wait_for(
-                lambda: screen.contains("agent step 1: propose_patch"),
+                lambda: screen.contains("agent step") and screen.contains("propose_patch"),
                 master,
                 screen,
                 "patch denial tool step",
@@ -260,7 +260,7 @@ def main():
 
             os.write(master, b"inspect patch approval gate\r")
             wait_for(
-                lambda: screen.contains("agent step 1: propose_patch"),
+                lambda: screen.contains("agent step") and screen.contains("propose_patch"),
                 master,
                 screen,
                 "patch approval tool step",

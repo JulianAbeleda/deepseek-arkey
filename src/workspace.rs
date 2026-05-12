@@ -251,7 +251,41 @@ mod tests {
         path_boundary_clarify_text, root_status, update_selected_root_from,
     };
     use std::fs;
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    struct TestDir {
+        path: PathBuf,
+    }
+
+    impl TestDir {
+        fn new(name: &str) -> Self {
+            let unique = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let path = std::env::temp_dir()
+                .join(format!("deepseek-{name}-{}-{unique}", std::process::id()));
+            fs::create_dir_all(&path).unwrap();
+            Self { path }
+        }
+
+        fn path(&self) -> &Path {
+            &self.path
+        }
+
+        fn join(&self, path: impl AsRef<Path>) -> PathBuf {
+            self.path.join(path)
+        }
+    }
+
+    impl Drop for TestDir {
+        fn drop(&mut self) {
+            fs::remove_dir_all(&self.path).unwrap_or_else(|err| {
+                panic!("failed to remove test dir {}: {err}", self.path.display())
+            });
+        }
+    }
 
     #[test]
     fn parses_root_slash_command() {
@@ -301,12 +335,7 @@ mod tests {
             .map(std::path::PathBuf::from)
             .unwrap();
         let env_root = home.join("env");
-        let isolated_root = std::env::temp_dir().join(format!(
-            "deepseek-navigation-isolated-test-{}",
-            std::process::id()
-        ));
-        let _ = fs::remove_dir_all(&isolated_root);
-        fs::create_dir_all(&isolated_root).unwrap();
+        let isolated_root = TestDir::new("navigation-isolated-test");
         if env_root.is_dir() {
             assert_eq!(
                 parse_navigation_request("go to my env folder and stay there")
@@ -333,25 +362,28 @@ mod tests {
                 Some(env_root.canonicalize().unwrap().as_path())
             );
             assert_eq!(
-                parse_navigation_request_from("enter the deepseek repo", Some(&isolated_root))
+                parse_navigation_request_from(
+                    "enter the deepseek repo",
+                    Some(isolated_root.path())
+                )
+                .unwrap(),
+                None
+            );
+            assert_eq!(
+                parse_navigation_request_from("navigate into deepseek", Some(isolated_root.path()))
                     .unwrap(),
                 None
             );
             assert_eq!(
-                parse_navigation_request_from("navigate into deepseek", Some(&isolated_root))
-                    .unwrap(),
-                None
-            );
-            assert_eq!(
-                parse_navigation_request_from("open the minimax repo", Some(&isolated_root))
+                parse_navigation_request_from("open the minimax repo", Some(isolated_root.path()))
                     .unwrap(),
                 None
             );
             assert!(
-                parse_navigation_request_from("cd into minimax", Some(&isolated_root)).is_err()
+                parse_navigation_request_from("cd into minimax", Some(isolated_root.path()))
+                    .is_err()
             );
         }
-        let _ = fs::remove_dir_all(&isolated_root);
         assert_eq!(
             parse_navigation_request("go through downloads").unwrap(),
             None
@@ -369,34 +401,24 @@ mod tests {
 
     #[test]
     fn relative_navigation_uses_selected_root_as_base() {
-        let root = std::env::temp_dir().join(format!(
-            "deepseek-navigation-base-test-{}",
-            std::process::id()
-        ));
+        let root = TestDir::new("navigation-base-test");
         let child = root.join("sample_project");
-        let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&child).unwrap();
 
         assert_eq!(
-            parse_navigation_request_from("cd into sample_project", Some(&root))
+            parse_navigation_request_from("cd into sample_project", Some(root.path()))
                 .unwrap()
                 .as_deref(),
             Some(child.canonicalize().unwrap().as_path())
         );
-
-        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
     fn relative_navigation_supports_parent_and_current_directory() {
-        let root = std::env::temp_dir().join(format!(
-            "deepseek-navigation-relative-test-{}",
-            std::process::id()
-        ));
+        let root = TestDir::new("navigation-relative-test");
         let parent = root.join("parent");
         let child = parent.join("child");
         let sibling = parent.join("sibling");
-        let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&child).unwrap();
         fs::create_dir_all(&sibling).unwrap();
 
@@ -424,8 +446,6 @@ mod tests {
                 .as_deref(),
             Some(sibling.canonicalize().unwrap().as_path())
         );
-
-        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
