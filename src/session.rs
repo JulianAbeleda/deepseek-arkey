@@ -156,7 +156,18 @@ where
     D: Deserializer<'de>,
 {
     let root = Option::<PathBuf>::deserialize(deserializer)?;
-    Ok(root.and_then(|root| PersistedRoot::from_path_buf(root).ok()))
+    let Some(root) = root else {
+        return Ok(None);
+    };
+    // User-selected roots fail loudly. Stale persisted roots warn and
+    // degrade softly so a moved directory does not brick session loading.
+    match PersistedRoot::from_path_buf(root) {
+        Ok(root) => Ok(Some(root)),
+        Err(err) => {
+            eprintln!("warning: dropping invalid persisted root: {err}");
+            Ok(None)
+        }
+    }
 }
 
 pub fn session_path() -> PathBuf {
