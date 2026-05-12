@@ -293,6 +293,64 @@ Validation notes:
 
 - [x] Port MiniMax patch failure-mode tests equivalent to DeepSeek `apply_patch_rejects_changed_file` and `rejects_ambiguous_replacement`.
 
+## Recent Completed Work: 2026-05-11
+
+- [x] Address dock approval audit follow-up.
+- [x] Add and revise commit-audit approval smoke coverage.
+- [x] Centralize PTY smoke helpers in `scripts/smoke_lib.py`.
+- [x] Add commit-audit preflight and tighten its routing behavior.
+- [x] Render agent/tool progress as transient dock state.
+- [x] Move progress above the prompt and keep the timer ticking after tools.
+- [x] Add progress dock smoke coverage.
+- [x] Rename the local verification wrapper to `scripts/verify-local.sh`.
+- [x] Pace rendered Markdown output and cap rendered stream pacing.
+- [x] Add dock turn cancellation with Escape.
+- [x] Add Phase 16 dock cancellation smoke and include it in local verify.
+- [x] Prepare public licensing scrub: MIT metadata, license file, and removal
+      of obsolete local dogfood/handoff artifacts.
+- [x] Clarify API key setup and trim surrounding API-key whitespace in provider
+      loading.
+- [x] Add README project overview.
+- [x] Ignore terminal key release events in dock input handling.
+
+Validation notes:
+
+- 2026-05-11: `scripts/verify-local.sh` now runs format, offline tests, release
+  build, docked TTY smokes, Phase 13/14 commit-audit smokes, Phase 15 progress
+  dock smoke, Phase 16 cancellation smoke, and persistent navigation smoke.
+- 2026-05-11: Current handoff is in
+  `structure/Development/session-handoff.md`; cache files are stable
+  orientation only.
+
+## Recent Completed Work: 2026-05-12
+
+- [x] Remove project-specific natural-root shortcuts for `~/env/deepseek` and
+      `~/env/minimax` from workspace root inference.
+- [x] Keep generic natural roots for Desktop, Downloads, Documents, and `env`.
+- [x] Add public GitHub Actions CI for Rust tests, formatting, clippy, and
+      commit-subject validation.
+- [x] Make `.githooks/commit-msg` optional local feedback and document CI as
+      the shared enforcement path.
+- [x] Extract agent answer formatting from `src/repl.rs` into
+      `src/answer_format.rs`.
+- [x] Remove approval-smoke trigger phrases from production workspace routing
+      while keeping Phase 11/12 smoke coverage.
+
+Validation notes:
+
+- 2026-05-12: Passed `cargo fmt --check`, `cargo test --offline` with 194/194
+  tests passing, `python3 -m unittest scripts/test_check_commit_msg.py`, and
+  `git diff --check`.
+- 2026-05-12: `cargo clippy` exits successfully but reports existing warnings
+  because the current CI command does not deny warnings.
+- 2026-05-12: After answer-format extraction and smoke phrase cleanup, passed
+  `cargo fmt --check`, `cargo test --offline` with 195/195 tests passing,
+  `cargo build --offline --release`, `python3 -m unittest
+  scripts/test_check_commit_msg.py`, `python3
+  scripts/phase11-docked-routing-smoke.py --binary target/release/deepseek`,
+  `python3 scripts/phase12-dock-approval-smoke.py --binary
+  target/release/deepseek`, and `git diff --check`.
+
 Phase 8 smoke commands:
 
 ```bash

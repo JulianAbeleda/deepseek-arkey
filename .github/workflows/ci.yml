@@ -1,0 +1,31 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - run: cargo test
+      - run: cargo fmt --check
+      - run: cargo clippy
+      - run: python3 -m unittest scripts/test_check_commit_msg.py
+      - name: Validate commit subject
+        shell: bash
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            printf '%s\n' "$PR_TITLE" > /tmp/deepseek-commit-message.txt
+          else
+            git log -1 --pretty=%B > /tmp/deepseek-commit-message.txt
+          fi
+          python3 scripts/check_commit_msg.py /tmp/deepseek-commit-message.txt

@@ -16,12 +16,6 @@ pub(crate) fn effective_workspace_root(selected_root: Option<&Path>) -> Option<P
 pub(crate) fn infer_natural_root(prompt: &str) -> Option<PathBuf> {
     let home = std::env::var_os("HOME").map(PathBuf::from)?;
     let lowered = prompt.to_lowercase();
-    if lowered.contains("deepseek repo") || lowered.contains("deepseek repository") {
-        return Some(home.join("env/deepseek"));
-    }
-    if lowered.contains("minimax repo") || lowered.contains("minimax repository") {
-        return Some(home.join("env/minimax"));
-    }
     if lowered.contains("desktop") {
         return Some(home.join("Desktop"));
     }
@@ -196,8 +190,6 @@ fn navigation_alias_root(target: &str) -> Option<PathBuf> {
         "downloads" => Some(home.join("Downloads")),
         "documents" => Some(home.join("Documents")),
         "env" | "my env" => Some(home.join("env")),
-        "deepseek" => Some(home.join("env/deepseek")),
-        "minimax" => Some(home.join("env/minimax")),
         _ => None,
     }
 }
@@ -299,10 +291,7 @@ mod tests {
             infer_natural_root("go to my env folder"),
             Some(home.join("env"))
         );
-        assert_eq!(
-            infer_natural_root("switch to the deepseek repo"),
-            Some(home.join("env/deepseek"))
-        );
+        assert_eq!(infer_natural_root("switch to the deepseek repo"), None);
         assert_eq!(infer_natural_root("fix main.rs"), None);
     }
 
@@ -337,42 +326,19 @@ mod tests {
                     .as_deref(),
                 Some(env_root.canonicalize().unwrap().as_path())
             );
-            let deepseek_root = env_root.join("deepseek");
-            if deepseek_root.is_dir() {
-                assert_eq!(
-                    parse_navigation_request("enter the deepseek repo")
-                        .unwrap()
-                        .as_deref(),
-                    Some(deepseek_root.canonicalize().unwrap().as_path())
-                );
-                assert_eq!(
-                    parse_navigation_request("navigate into deepseek")
-                        .unwrap()
-                        .as_deref(),
-                    Some(deepseek_root.canonicalize().unwrap().as_path())
-                );
-                assert_eq!(
-                    parse_navigation_request("go inside ~/env/deepseek")
-                        .unwrap()
-                        .as_deref(),
-                    Some(deepseek_root.canonicalize().unwrap().as_path())
-                );
-            }
-            let minimax_root = env_root.join("minimax");
-            if minimax_root.is_dir() {
-                assert_eq!(
-                    parse_navigation_request("open the minimax repo")
-                        .unwrap()
-                        .as_deref(),
-                    Some(minimax_root.canonicalize().unwrap().as_path())
-                );
-                assert_eq!(
-                    parse_navigation_request("cd into minimax")
-                        .unwrap()
-                        .as_deref(),
-                    Some(minimax_root.canonicalize().unwrap().as_path())
-                );
-            }
+            assert_eq!(
+                parse_navigation_request("enter the deepseek repo").unwrap(),
+                None
+            );
+            assert_eq!(
+                parse_navigation_request("navigate into deepseek").unwrap(),
+                None
+            );
+            assert_eq!(
+                parse_navigation_request("open the minimax repo").unwrap(),
+                None
+            );
+            assert!(parse_navigation_request("cd into minimax").is_err());
         }
         assert_eq!(
             parse_navigation_request("go through downloads").unwrap(),
