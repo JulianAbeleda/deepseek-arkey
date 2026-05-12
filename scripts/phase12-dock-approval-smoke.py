@@ -11,6 +11,7 @@ This validates the Kimi-style baseline path without a live provider:
 import argparse
 import json
 import os
+import re
 import stat
 import tempfile
 import textwrap
@@ -123,6 +124,10 @@ def assert_not_legacy_handoff(screen):
         raise AssertionError(f"legacy handoff rendered: {found}\n{screen.dump()}")
 
 
+def has_tool_step(screen, tool):
+    return re.search(rf"agent step \d+(?:\.\d+)?: {re.escape(tool)}", screen.all_text()) is not None
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--binary", default=None)
@@ -163,7 +168,7 @@ def main():
 
             os.write(master, b"inspect shell denial gate\r")
             wait_for(
-                lambda: screen.contains("agent step") and screen.contains("run_shell"),
+                lambda: has_tool_step(screen, "run_shell"),
                 master,
                 screen,
                 "shell denial tool step",
@@ -199,7 +204,7 @@ def main():
 
             os.write(master, b"inspect shell approval gate\r")
             wait_for(
-                lambda: screen.contains("agent step") and screen.contains("run_shell"),
+                lambda: has_tool_step(screen, "run_shell"),
                 master,
                 screen,
                 "shell approval tool step",
@@ -228,7 +233,7 @@ def main():
 
             os.write(master, b"inspect patch denial gate\r")
             wait_for(
-                lambda: screen.contains("agent step") and screen.contains("propose_patch"),
+                lambda: has_tool_step(screen, "propose_patch"),
                 master,
                 screen,
                 "patch denial tool step",
@@ -260,7 +265,7 @@ def main():
 
             os.write(master, b"inspect patch approval gate\r")
             wait_for(
-                lambda: screen.contains("agent step") and screen.contains("propose_patch"),
+                lambda: has_tool_step(screen, "propose_patch"),
                 master,
                 screen,
                 "patch approval tool step",
