@@ -102,6 +102,10 @@ fn run_interactive_chat(model: &str, temperature: Option<f32>, stream: bool) -> 
         }
         if let Some(command) = commands::parse_chat_command(prompt) {
             match command {
+                commands::ChatCommand::Invalid(message) => {
+                    ui::print_error(message);
+                    continue;
+                }
                 commands::ChatCommand::Exit => break,
                 commands::ChatCommand::End => {
                     let _ = session::delete()?;
@@ -138,7 +142,10 @@ fn run_interactive_chat(model: &str, temperature: Option<f32>, stream: bool) -> 
                     ui::print_status(&current_model)?;
                     continue;
                 }
-                commands::ChatCommand::Root(_) => {}
+                commands::ChatCommand::Root(_) => {
+                    ui::print_error("/root is only available in docked interactive chat");
+                    continue;
+                }
                 commands::ChatCommand::Runtime(command) => {
                     println!("{}", execute_runtime_command(&current_model, command)?);
                     continue;
@@ -333,6 +340,10 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
         }
         if let Some(command) = commands::parse_chat_command(prompt) {
             match command {
+                commands::ChatCommand::Invalid(message) => {
+                    composer.print_above(&format!("error: {message}\n"))?;
+                    continue;
+                }
                 commands::ChatCommand::Exit => break,
                 commands::ChatCommand::End => {
                     let _ = session::delete()?;
@@ -718,6 +729,10 @@ fn run_interactive_agent(model: &str, temperature: Option<f32>) -> Result<(), St
         }
         if let Some(command) = commands::parse_chat_command(prompt) {
             match command {
+                commands::ChatCommand::Invalid(message) => {
+                    ui::print_error(message);
+                    continue;
+                }
                 commands::ChatCommand::Exit => break,
                 commands::ChatCommand::End => {
                     let _ = session::delete()?;
@@ -736,7 +751,25 @@ fn run_interactive_agent(model: &str, temperature: Option<f32>) -> Result<(), St
                     println!("mode: agent");
                     continue;
                 }
-                commands::ChatCommand::DirectAgentTask(_) | commands::ChatCommand::Root(_) => {}
+                commands::ChatCommand::DirectAgentTask(task) => {
+                    let outcome = agent::run_agent(
+                        task,
+                        &current_model,
+                        temperature,
+                        agent::AgentConfig::new(root.clone(), agent::DEFAULT_MAX_STEPS),
+                    )?;
+                    eprintln!(
+                        "agent: steps={} transcript={}",
+                        outcome.steps,
+                        outcome.transcript_path.display()
+                    );
+                    println!("{}", terminal_agent_answer(&outcome.answer));
+                    continue;
+                }
+                commands::ChatCommand::Root(_) => {
+                    ui::print_error("/root is only available in chat mode");
+                    continue;
+                }
                 commands::ChatCommand::Status => {
                     print!("{}", interactive_agent_status(&current_model, &root)?);
                     continue;

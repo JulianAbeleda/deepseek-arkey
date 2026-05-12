@@ -9,6 +9,7 @@ pub(super) enum RuntimeCommand {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ChatCommand<'a> {
+    Invalid(&'static str),
     Help,
     ChatMode,
     SwitchToAgent,
@@ -47,8 +48,10 @@ pub(super) fn parse_chat_command(prompt: &str) -> Option<ChatCommand<'_>> {
     if let Some(root) = parse_root_command(prompt) {
         return Some(ChatCommand::Root(root));
     }
-    if let Some(command) = parse_runtime_command(prompt) {
-        return Some(ChatCommand::Runtime(command));
+    match parse_runtime_command(prompt) {
+        Ok(Some(command)) => return Some(ChatCommand::Runtime(command)),
+        Ok(None) => {}
+        Err(message) => return Some(ChatCommand::Invalid(message)),
     }
     if let Some(mode) = parse_debug_command(prompt) {
         return Some(ChatCommand::Debug(mode));
@@ -80,15 +83,18 @@ pub(super) fn parse_debug_command(prompt: &str) -> Option<Option<&str>> {
     })
 }
 
-pub(super) fn parse_runtime_command(prompt: &str) -> Option<RuntimeCommand> {
+pub(super) fn parse_runtime_command(prompt: &str) -> Result<Option<RuntimeCommand>, &'static str> {
     if prompt == "/runtime" {
-        return Some(RuntimeCommand::Status);
+        return Ok(Some(RuntimeCommand::Status));
     }
-    let args = prompt.strip_prefix("/runtime ")?.trim();
+    let Some(args) = prompt.strip_prefix("/runtime ") else {
+        return Ok(None);
+    };
+    let args = args.trim();
     match args {
-        "legacy-routing on" => Some(RuntimeCommand::LegacyRouting(true)),
-        "legacy-routing off" => Some(RuntimeCommand::LegacyRouting(false)),
-        _ => None,
+        "legacy-routing on" => Ok(Some(RuntimeCommand::LegacyRouting(true))),
+        "legacy-routing off" => Ok(Some(RuntimeCommand::LegacyRouting(false))),
+        _ => Err("unknown runtime command; use /runtime or /runtime legacy-routing <on|off>"),
     }
 }
 
@@ -133,8 +139,8 @@ pub(super) fn is_end_command(prompt: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        is_end_command, is_exit_command, parse_debug_command, parse_model_command,
-        parse_runtime_command, RuntimeCommand,
+        is_end_command, is_exit_command, parse_chat_command, parse_debug_command,
+        parse_model_command, parse_runtime_command, ChatCommand, RuntimeCommand,
     };
 
     #[test]
@@ -176,17 +182,29 @@ mod tests {
     fn parses_runtime_legacy_routing_command() {
         assert_eq!(
             parse_runtime_command("/runtime"),
-            Some(RuntimeCommand::Status)
+            Ok(Some(RuntimeCommand::Status))
         );
         assert_eq!(
             parse_runtime_command("/runtime legacy-routing on"),
-            Some(RuntimeCommand::LegacyRouting(true))
+            Ok(Some(RuntimeCommand::LegacyRouting(true)))
         );
         assert_eq!(
             parse_runtime_command("/runtime legacy-routing off"),
-            Some(RuntimeCommand::LegacyRouting(false))
+            Ok(Some(RuntimeCommand::LegacyRouting(false)))
         );
-        assert_eq!(parse_runtime_command("/runtime unknown"), None);
-        assert_eq!(parse_runtime_command("runtime"), None);
+        assert!(parse_runtime_command("/runtime unknown").is_err());
+        assert!(parse_runtime_command("/runtime ").is_err());
+        assert!(parse_runtime_command("/runtime legacy-routing").is_err());
+        assert_eq!(parse_runtime_command("runtime"), Ok(None));
+    }
+
+    #[test]
+    fn parses_invalid_runtime_as_chat_command_error() {
+        assert_eq!(
+            parse_chat_command("/runtime unknown"),
+            Some(ChatCommand::Invalid(
+                "unknown runtime command; use /runtime or /runtime legacy-routing <on|off>"
+            ))
+        );
     }
 }
