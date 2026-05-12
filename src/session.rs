@@ -2,7 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::provider::{assistant_message, user_message, Message, PROVIDER_DIR, PROVIDER_STATE_DIR};
 use crate::safety::atomic_write;
@@ -10,18 +10,42 @@ use crate::safety::atomic_write;
 const MAX_TURNS: usize = 20;
 const MAX_CHARS: usize = 40_000;
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(transparent)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PersistedRoot(String);
 
 impl PersistedRoot {
-    fn from_path(root: &Path) -> Self {
-        let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
-        Self(root.display().to_string())
+    fn from_path(root: &Path) -> Result<Self, String> {
+        Self::from_path_buf(root.to_path_buf())
+    }
+
+    fn from_path_buf(root: PathBuf) -> Result<Self, String> {
+        if !root.is_absolute() {
+            return Err(format!("session root is not absolute: {}", root.display()));
+        }
+        Ok(Self(root.display().to_string()))
     }
 
     pub fn path(&self) -> PathBuf {
         PathBuf::from(&self.0)
+    }
+}
+
+impl Serialize for PersistedRoot {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&self.0)
+    }
+}
+
+impl<'de> Deserialize<'de> for PersistedRoot {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = String::deserialize(deserializer)?;
+        Self::from_path_buf(PathBuf::from(&raw)).map_err(serde::de::Error::custom)
     }
 }
 
@@ -58,9 +82,10 @@ impl SessionState {
         self.cap_history();
     }
 
-    pub fn approve_agent_root(&mut self, root: &Path) {
-        self.agent_root = Some(PersistedRoot::from_path(root));
+    pub fn approve_agent_root(&mut self, root: &Path) -> Result<(), String> {
+        self.agent_root = Some(PersistedRoot::from_path(root)?);
         self.updated_at = unix_timestamp();
+        Ok(())
     }
 
     pub fn clear_agent_root(&mut self) {
@@ -68,9 +93,10 @@ impl SessionState {
         self.updated_at = unix_timestamp();
     }
 
-    pub fn select_root(&mut self, root: &Path) {
-        self.selected_root = Some(PersistedRoot::from_path(root));
+    pub fn select_root(&mut self, root: &Path) -> Result<(), String> {
+        self.selected_root = Some(PersistedRoot::from_path(root)?);
         self.updated_at = unix_timestamp();
+        Ok(())
     }
 
     pub fn clear_selected_root(&mut self) {
@@ -214,7 +240,7 @@ mod tests {
         let root = std::env::temp_dir().join("deepseek-agent-root");
         let mut state = SessionState::new(PROVIDER, DEFAULT_SESSION_NAME, "model-a");
 
-        state.approve_agent_root(&root);
+        state.approve_agent_root(&root).unwrap();
         assert_eq!(state.agent_root_path().as_deref(), Some(root.as_path()));
 
         state.clear_agent_root();
@@ -226,7 +252,7 @@ mod tests {
         let root = std::env::temp_dir().join("deepseek-agent-root");
         let mut state = SessionState::new(PROVIDER, DEFAULT_SESSION_NAME, "model-a");
         state.push_turn("hello".to_string(), "world".to_string());
-        state.approve_agent_root(&root);
+        state.approve_agent_root(&root).unwrap();
 
         state.clear_messages();
 
@@ -247,13 +273,13 @@ mod tests {
         std::fs::create_dir_all(&approved_root).unwrap();
 
         let mut state = SessionState::new(PROVIDER, DEFAULT_SESSION_NAME, "model-a");
-        state.approve_agent_root(&approved_root);
+        state.approve_agent_root(&approved_root).unwrap();
         save_to_path(&path, &state).unwrap();
 
         let loaded = load_from_path(&path).unwrap().unwrap();
         assert_eq!(
             loaded.agent_root_path().as_deref(),
-            Some(approved_root.canonicalize().unwrap().as_path())
+            Some(approved_root.as_path())
         );
         let _ = std::fs::remove_dir_all(root);
     }
@@ -280,5 +306,21 @@ mod tests {
             loaded.agent_root_path().as_deref(),
             Some(std::path::Path::new("/tmp/agent"))
         );
+    }
+
+    #[test]
+    fn rejects_relative_persisted_roots() {
+        let raw = r#"{
+          "provider": "DeepSeek",
+          "name": "default",
+          "model": "model-a",
+          "updated_at": 1,
+          "messages": [],
+          "selected_root": "relative/path"
+        }"#;
+
+        let err = serde_json::from_str::<SessionState>(raw).unwrap_err();
+
+        assert!(err.to_string().contains("session root is not absolute"));
     }
 }

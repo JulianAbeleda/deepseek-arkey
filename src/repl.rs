@@ -1412,7 +1412,7 @@ fn approve_session_agent_root(root: &Path) -> Result<(), String> {
     let Some(mut state) = session::load()? else {
         return Ok(());
     };
-    state.approve_agent_root(root);
+    state.approve_agent_root(root)?;
     session::save(&state)
 }
 
@@ -1429,7 +1429,7 @@ fn save_selected_root(root: Option<&Path>) -> Result<(), String> {
         return Ok(());
     };
     match root {
-        Some(root) => state.select_root(root),
+        Some(root) => state.select_root(root)?,
         None => state.clear_selected_root(),
     }
     session::save(&state)
