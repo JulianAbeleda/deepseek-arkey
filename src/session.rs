@@ -10,6 +10,21 @@ use crate::safety::atomic_write;
 const MAX_TURNS: usize = 20;
 const MAX_CHARS: usize = 40_000;
 
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(transparent)]
+pub struct PersistedRoot(String);
+
+impl PersistedRoot {
+    fn from_path(root: &Path) -> Self {
+        let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+        Self(root.display().to_string())
+    }
+
+    pub fn path(&self) -> PathBuf {
+        PathBuf::from(&self.0)
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct SessionState {
     pub provider: String,
@@ -18,9 +33,9 @@ pub struct SessionState {
     pub updated_at: u64,
     pub messages: Vec<Message>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub selected_root: Option<String>,
+    pub selected_root: Option<PersistedRoot>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub agent_root: Option<String>,
+    pub agent_root: Option<PersistedRoot>,
 }
 
 impl SessionState {
@@ -44,7 +59,7 @@ impl SessionState {
     }
 
     pub fn approve_agent_root(&mut self, root: &Path) {
-        self.agent_root = Some(root.display().to_string());
+        self.agent_root = Some(PersistedRoot::from_path(root));
         self.updated_at = unix_timestamp();
     }
 
@@ -54,7 +69,7 @@ impl SessionState {
     }
 
     pub fn select_root(&mut self, root: &Path) {
-        self.selected_root = Some(root.display().to_string());
+        self.selected_root = Some(PersistedRoot::from_path(root));
         self.updated_at = unix_timestamp();
     }
 
@@ -69,11 +84,11 @@ impl SessionState {
     }
 
     pub fn selected_root_path(&self) -> Option<PathBuf> {
-        self.selected_root.as_ref().map(PathBuf::from)
+        self.selected_root.as_ref().map(PersistedRoot::path)
     }
 
     pub fn agent_root_path(&self) -> Option<PathBuf> {
-        self.agent_root.as_ref().map(PathBuf::from)
+        self.agent_root.as_ref().map(PersistedRoot::path)
     }
 
     fn cap_history(&mut self) {
@@ -238,8 +253,32 @@ mod tests {
         let loaded = load_from_path(&path).unwrap().unwrap();
         assert_eq!(
             loaded.agent_root_path().as_deref(),
-            Some(approved_root.as_path())
+            Some(approved_root.canonicalize().unwrap().as_path())
         );
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn loads_legacy_string_roots() {
+        let raw = r#"{
+          "provider": "DeepSeek",
+          "name": "default",
+          "model": "model-a",
+          "updated_at": 1,
+          "messages": [],
+          "selected_root": "/tmp/selected",
+          "agent_root": "/tmp/agent"
+        }"#;
+
+        let loaded: SessionState = serde_json::from_str(raw).unwrap();
+
+        assert_eq!(
+            loaded.selected_root_path().as_deref(),
+            Some(std::path::Path::new("/tmp/selected"))
+        );
+        assert_eq!(
+            loaded.agent_root_path().as_deref(),
+            Some(std::path::Path::new("/tmp/agent"))
+        );
     }
 }
