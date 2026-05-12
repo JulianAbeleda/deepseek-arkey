@@ -41,6 +41,14 @@ pub struct AgentRunOptions {
     cancel: Option<CancellationToken>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AgentChatRoute {
+    Standard,
+    Quiet,
+    Cancelled,
+    QuietCancelled,
+}
+
 impl AgentRunOptions {
     pub fn new(config: AgentConfig) -> Self {
         Self {
@@ -127,7 +135,7 @@ pub fn run_agent(
         |step| {
             eprintln!("agent step {}: {}", step.label(), step.tool);
         },
-        |_| ApprovalDecision::Deny,
+        unreachable_external_approval,
     )
 }
 
@@ -143,7 +151,7 @@ pub fn run_agent_final_only(
         temperature,
         AgentRunOptions::new(config).quiet_cache(true),
         |_| {},
-        |_| ApprovalDecision::Deny,
+        unreachable_external_approval,
     )
 }
 
@@ -162,6 +170,7 @@ pub fn run_agent_with_handlers(
         cancel,
     } = options;
     let chat_cancel = cancel.clone();
+    let chat_route = AgentChatRoute::from_options(quiet_cache, chat_cancel.as_ref());
     run_agent_with_chat_handler(
         task,
         model,
@@ -171,16 +180,38 @@ pub fn run_agent_with_handlers(
         &mut on_step,
         &mut on_approval,
         cancel,
-        move |messages, model, temperature| {
-            if let Some(cancel) = chat_cancel.as_ref() {
+        move |messages, model, temperature| match chat_route {
+            AgentChatRoute::Standard => provider::chat(messages, model, temperature, None, false),
+            AgentChatRoute::Quiet => provider::chat_quiet(messages, model, temperature, None),
+            AgentChatRoute::Cancelled => {
+                let cancel = chat_cancel.as_ref().expect("cancel route has token");
+                provider::chat_cancelled(messages, model, temperature, None, cancel)
+            }
+            AgentChatRoute::QuietCancelled => {
+                let cancel = chat_cancel.as_ref().expect("quiet cancel route has token");
                 provider::chat_quiet_cancelled(messages, model, temperature, None, cancel)
-            } else if quiet_cache {
-                provider::chat_quiet(messages, model, temperature, None)
-            } else {
-                provider::chat(messages, model, temperature, None, false)
             }
         },
     )
+}
+
+impl AgentChatRoute {
+    fn from_options(quiet_cache: bool, cancel: Option<&CancellationToken>) -> Self {
+        match (quiet_cache, cancel.is_some()) {
+            (false, false) => Self::Standard,
+            (true, false) => Self::Quiet,
+            (false, true) => Self::Cancelled,
+            (true, true) => Self::QuietCancelled,
+        }
+    }
+}
+
+fn unreachable_external_approval(_: ApprovalRequest) -> ApprovalDecision {
+    debug_assert!(
+        false,
+        "default agent wrappers must not request external approval"
+    );
+    ApprovalDecision::Deny
 }
 
 fn run_agent_with_chat_handler(
@@ -716,7 +747,7 @@ mod tests {
     use super::write_tools::{apply_prepared_patch, prepare_patch};
     use super::{
         append_no_action_retry_note, append_parser_repair_notes, parse_decision,
-        parse_decision_with_metadata, system_prompt, write_transcript, AgentConfig,
+        parse_decision_with_metadata, system_prompt, write_transcript, AgentChatRoute, AgentConfig,
         ApprovalDecision, ApprovalMode, ToolCall, TranscriptEntry, DEFAULT_MAX_STEPS,
     };
 
@@ -1272,6 +1303,28 @@ I will list the files now."#,
     #[test]
     fn default_max_steps_matches_long_running_agent_budget() {
         assert_eq!(DEFAULT_MAX_STEPS, 1000);
+    }
+
+    #[test]
+    fn agent_chat_route_keeps_quiet_and_cancel_orthogonal() {
+        let cancel = CancellationToken::new();
+
+        assert_eq!(
+            AgentChatRoute::from_options(false, None),
+            AgentChatRoute::Standard
+        );
+        assert_eq!(
+            AgentChatRoute::from_options(true, None),
+            AgentChatRoute::Quiet
+        );
+        assert_eq!(
+            AgentChatRoute::from_options(false, Some(&cancel)),
+            AgentChatRoute::Cancelled
+        );
+        assert_eq!(
+            AgentChatRoute::from_options(true, Some(&cancel)),
+            AgentChatRoute::QuietCancelled
+        );
     }
 
     #[test]
