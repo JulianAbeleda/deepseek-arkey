@@ -156,6 +156,7 @@ pub fn chat_cancelled(
     max_tokens: Option<u32>,
     cancel: &CancellationToken,
 ) -> Result<String, String> {
+    // stream=false, so trailing newline printing is disabled for clarity.
     chat_impl(
         messages,
         model,
@@ -163,7 +164,7 @@ pub fn chat_cancelled(
         max_tokens,
         false,
         true,
-        true,
+        false,
         |_| {},
         Some(cancel),
     )
