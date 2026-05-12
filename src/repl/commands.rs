@@ -161,7 +161,8 @@ pub(super) fn is_end_command(prompt: &str) -> bool {
 mod tests {
     use super::{
         is_end_command, is_exit_command, parse_chat_command, parse_debug_command,
-        parse_model_command, parse_runtime_command, CommandError, CommandParse, RuntimeCommand,
+        parse_model_command, parse_runtime_command, ChatCommand, CommandError, CommandParse,
+        RuntimeCommand,
     };
 
     #[test]
@@ -224,6 +225,14 @@ mod tests {
         assert_eq!(
             parse_chat_command("/runtime unknown"),
             CommandParse::Invalid(CommandError::UnknownRuntimeCommand)
+        );
+    }
+
+    #[test]
+    fn parses_direct_agent_task_as_valid_chat_command() {
+        assert_eq!(
+            parse_chat_command("/agent fix the bug"),
+            CommandParse::Valid(ChatCommand::DirectAgentTask("fix the bug"))
         );
     }
 }

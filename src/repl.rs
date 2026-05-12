@@ -755,6 +755,7 @@ fn run_interactive_agent(model: &str, temperature: Option<f32>) -> Result<(), St
                     continue;
                 }
                 commands::ChatCommand::DirectAgentTask(_) => {
+                    // Already in agent mode; require the user to enter the task directly.
                     ui::print_error("already in agent mode; enter the task without /agent");
                     continue;
                 }
