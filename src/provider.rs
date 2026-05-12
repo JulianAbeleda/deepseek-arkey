@@ -149,26 +149,6 @@ pub fn chat_quiet(
     )
 }
 
-pub fn chat_cancelled(
-    messages: &[Message],
-    model: &str,
-    temperature: Option<f32>,
-    max_tokens: Option<u32>,
-    cancel: &CancellationToken,
-) -> Result<String, String> {
-    chat_impl(
-        messages,
-        model,
-        temperature,
-        max_tokens,
-        false,
-        false,
-        false,
-        |_| {},
-        Some(cancel),
-    )
-}
-
 pub fn chat_quiet_cancelled(
     messages: &[Message],
     model: &str,
