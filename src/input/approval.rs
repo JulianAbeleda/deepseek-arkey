@@ -12,14 +12,14 @@ pub enum ApprovalChoice {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct ApprovalModal {
+pub(crate) struct ApprovalModal {
     tool: String,
     summary: String,
     selected_index: usize,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum ApprovalKeyAction {
+pub(crate) enum ApprovalKeyAction {
     Choose(ApprovalChoice),
     Ignore,
     MoveSelection(isize),
@@ -27,7 +27,7 @@ pub(super) enum ApprovalKeyAction {
 }
 
 impl ApprovalModal {
-    pub(super) fn new(tool: String, summary: String) -> Self {
+    pub(crate) fn new(tool: String, summary: String) -> Self {
         Self {
             tool,
             summary,
@@ -35,7 +35,7 @@ impl ApprovalModal {
         }
     }
 
-    pub(super) fn move_selection(&mut self, delta: isize) {
+    pub(crate) fn move_selection(&mut self, delta: isize) {
         let option_count = APPROVAL_OPTIONS.len();
         self.selected_index = if delta.is_negative() {
             self.selected_index
@@ -46,11 +46,11 @@ impl ApprovalModal {
         };
     }
 
-    pub(super) fn selected_choice(&self) -> ApprovalChoice {
+    pub(crate) fn selected_choice(&self) -> ApprovalChoice {
         APPROVAL_OPTIONS[self.selected_index].choice
     }
 
-    pub(super) fn key_action(&self, key: KeyEvent) -> ApprovalKeyAction {
+    pub(crate) fn key_action(&self, key: KeyEvent) -> ApprovalKeyAction {
         match key.code {
             KeyCode::Up => ApprovalKeyAction::MoveSelection(-1),
             KeyCode::Down => ApprovalKeyAction::MoveSelection(1),
@@ -94,7 +94,7 @@ const APPROVAL_OPTIONS: &[ApprovalOption] = &[
     },
 ];
 
-pub(super) fn approval_panel_rows(modal: &ApprovalModal, width: usize) -> Vec<String> {
+pub(crate) fn approval_panel_rows(modal: &ApprovalModal, width: usize) -> Vec<String> {
     let width = width.max(1);
     let inner_width = width.saturating_sub(2);
     let mut rows = Vec::new();

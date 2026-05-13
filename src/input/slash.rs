@@ -5,14 +5,14 @@ use super::{
     SLASH_COMMANDS,
 };
 
-pub(super) struct SlashCompletion {
-    pub(super) command: String,
-    pub(super) index: usize,
-    pub(super) prefix: String,
-    pub(super) token_end: usize,
+pub(crate) struct SlashCompletion {
+    pub(crate) command: String,
+    pub(crate) index: usize,
+    pub(crate) prefix: String,
+    pub(crate) token_end: usize,
 }
 
-pub(super) fn next_slash_completion(
+pub(crate) fn next_slash_completion(
     buffer: &str,
     cursor: usize,
     previous_index: Option<usize>,
@@ -62,14 +62,14 @@ fn slash_command_match_entries(prefix: &str) -> Vec<(usize, SlashCommandSpec)> {
 }
 
 #[cfg(test)]
-pub(super) fn slash_command_matches(prefix: &str) -> Vec<&'static str> {
+pub(crate) fn slash_command_matches(prefix: &str) -> Vec<&'static str> {
     slash_command_match_entries(prefix)
         .into_iter()
         .map(|(_, command)| command.command)
         .collect()
 }
 
-pub(super) fn slash_completion_panel_rows(
+pub(crate) fn slash_completion_panel_rows(
     buffer: &str,
     selected_command_index: Option<usize>,
     width: usize,
