@@ -19,12 +19,18 @@ const API_URL: &str = "https://api.deepseek.com/chat/completions";
 const LOGIN_MAX_TOKENS: u32 = 128;
 const API_KEY_SETUP_HELP: &str = r#"DeepSeek API key is not set.
 
+For troubleshooting, you can share this message with an AI provider or support
+chat, but do not include any real API keys, tokens, or secrets.
+
 Set it for the current shell:
   export DEEPSEEK_API_KEY="your_deepseek_api_key"
 
-For zsh persistence:
-  echo 'export DEEPSEEK_API_KEY="your_deepseek_api_key"' >> ~/.zshrc
+For zsh persistence on this machine:
+  echo 'export DEEPSEEK_API_KEY="your_deepseek_api_key"' >> ~/.zsh_secrets
   source ~/.zshrc
+
+The ~/.zshrc file sources ~/.zsh_secrets, so keep provider keys there instead
+of writing secrets directly into ~/.zshrc.
 
 Then verify:
   deepseek login"#;
@@ -560,7 +566,11 @@ mod tests {
     fn api_key_rejects_missing_and_blank_values() {
         let missing = parse_api_key(None).unwrap_err();
         assert!(missing.contains("DeepSeek API key is not set"));
+        assert!(missing.contains("AI provider or support"));
+        assert!(missing.contains("do not include any real API keys"));
         assert!(missing.contains("export DEEPSEEK_API_KEY"));
+        assert!(missing.contains("~/.zsh_secrets"));
+        assert!(missing.contains("keep provider keys there"));
         assert!(missing.contains("deepseek login"));
 
         let blank = parse_api_key(Some(" \t\n ".to_string())).unwrap_err();

@@ -23,6 +23,27 @@ const MAX_REDIRECTS: usize = 5;
 const SEARCH_CONTEXT_CAP: usize = 8_000;
 const FETCH_CONTEXT_CAP: usize = 12_000;
 const USER_AGENT_VALUE: &str = "deepseek-cli/0.1 (+https://github.com/JulianAbeleda/deepseek-cli)";
+const BRAVE_API_KEY_SETUP_HELP: &str = r#"Brave Search API key is not set.
+
+For troubleshooting, you can share this message with an AI provider or support
+chat, but do not include any real API keys, tokens, or secrets.
+
+Set it for the current shell:
+  export BRAVE_SEARCH_API_KEY="your_brave_search_api_key"
+
+For zsh persistence on this machine:
+  echo 'export BRAVE_SEARCH_API_KEY="your_brave_search_api_key"' >> ~/.zsh_secrets
+  source ~/.zshrc
+
+The ~/.zshrc file sources ~/.zsh_secrets, so keep provider keys there instead
+of writing secrets directly into ~/.zshrc.
+
+Then verify:
+  deepseek
+  /features
+
+BRAVE_API_KEY is also accepted as a legacy alias, but BRAVE_SEARCH_API_KEY is
+preferred."#;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SearchProvider {
@@ -485,9 +506,8 @@ fn format_search_response(response: &SearchResponse) -> String {
 }
 
 fn brave_api_key() -> Result<String, String> {
-    parse_env_key(&["BRAVE_SEARCH_API_KEY", "BRAVE_API_KEY"]).ok_or_else(|| {
-        "Brave Search requires an API key. Set BRAVE_SEARCH_API_KEY or BRAVE_API_KEY.".to_string()
-    })
+    parse_env_key(&["BRAVE_SEARCH_API_KEY", "BRAVE_API_KEY"])
+        .ok_or_else(|| BRAVE_API_KEY_SETUP_HELP.to_string())
 }
 
 fn tavily_api_key() -> Result<String, String> {
@@ -733,6 +753,26 @@ mod tests {
     }
 
     #[test]
+    fn brave_key_rejects_missing_and_blank_values() {
+        let _guard = env_lock();
+        std::env::remove_var("BRAVE_SEARCH_API_KEY");
+        std::env::remove_var("BRAVE_API_KEY");
+        let missing = brave_api_key().unwrap_err();
+        assert!(missing.contains("Brave Search API key is not set"));
+        assert!(missing.contains("AI provider or support"));
+        assert!(missing.contains("do not include any real API keys"));
+        assert!(missing.contains("export BRAVE_SEARCH_API_KEY"));
+        assert!(missing.contains("~/.zsh_secrets"));
+        assert!(missing.contains("/features"));
+        assert!(missing.contains("BRAVE_API_KEY is also accepted"));
+
+        std::env::set_var("BRAVE_SEARCH_API_KEY", " \t\n ");
+        let blank = brave_api_key().unwrap_err();
+        assert_eq!(blank, missing);
+        std::env::remove_var("BRAVE_SEARCH_API_KEY");
+    }
+
+    #[test]
     fn web_search_tool_rejects_empty_query_before_network() {
         let result = web_search_tool(&json!({"query":"   "}));
         assert!(result.contains("missing non-empty `query`"));
@@ -751,7 +791,8 @@ mod tests {
         );
         assert!(context.is_none());
         assert_eq!(warnings.len(), 1);
-        assert!(warnings[0].contains("Brave Search requires an API key"));
+        assert!(warnings[0].contains("Brave Search API key is not set"));
+        assert!(warnings[0].contains("~/.zsh_secrets"));
         std::env::remove_var("DEEPSEEK_SEARCH_PROVIDER");
     }
 
