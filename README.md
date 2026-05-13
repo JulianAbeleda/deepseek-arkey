@@ -54,6 +54,14 @@ deepseek login
 
 The API key is read from the environment and is never written to the session file.
 
+Internet search is env-configured and opt-in by provider key:
+
+- Search provider: `DEEPSEEK_SEARCH_PROVIDER=brave|tavily` (defaults to `brave`)
+- Brave key: `BRAVE_SEARCH_API_KEY` (`BRAVE_API_KEY` is accepted as an alias)
+- Tavily key: `TAVILY_API_KEY`
+
+Normal chat prefetches web context for URL and current-info prompts, but continues with a warning if web context is unavailable. Agent mode exposes two read-only web tools: `web_search` and `fetch_url`; explicit web tool calls return errors when the selected provider is missing its key or a fetch fails.
+
 ## Commands
 
 ```bash
@@ -99,9 +107,9 @@ deepseek [deepseek-v4-flash] › what do you think about this design?
 The CLI keeps context only during the active ephemeral session and deletes that context when the session ends. The active state path is `~/.local/state/provider-cli/deepseek/active-session.json`, with fallback behavior for environments where the home state path cannot be determined.
 
 Use `/model` inside the interactive shell to show supported model IDs, and `/model <id>` to switch the active session model. Use `/root <path>` to choose the workspace root for tool-capable chat, `/root` to show it, and `/root clear` to return to cwd-based root detection. Use `/runtime legacy-routing on` to temporarily restore deterministic Phase 10 route confirmation, and `/runtime legacy-routing off` to return to model-decided routing. Use `/agent` or `--agent` when you want explicit workspace-agent execution, and `/chat` to return to the docked chat shell. One-off calls can also switch models with `--model <id>`. Current DeepSeek API model IDs are `deepseek-v4-flash` and `deepseek-v4-pro`; legacy aliases `deepseek-chat` and `deepseek-reasoner` retire on 2026-07-24.
-Prompts that reference paths outside the selected root ask for clarification instead of routing directly to tool execution. Docked chat can use read-only workspace tools. Shell commands and edits require dock-native approval through the composer with exact phrases such as `yes run` or `yes apply`.
+Prompts that reference paths outside the selected root ask for clarification instead of routing directly to tool execution. Docked chat can use read-only workspace tools and deterministic web prefetch for URL/current-info prompts. Shell commands and edits require dock-native approval through the composer with exact phrases such as `yes run` or `yes apply`.
 
-Agent mode is explicit and runs a bounded local tool loop with workspace-scoped tools, transcript logging, and approval gates for shell commands and exact text edits:
+Agent mode is explicit and runs a bounded local tool loop with workspace-scoped tools, read-only web tools, transcript logging, and approval gates for shell commands and exact text edits:
 
 ```bash
 deepseek --agent

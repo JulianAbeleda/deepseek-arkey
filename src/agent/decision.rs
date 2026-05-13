@@ -62,12 +62,14 @@ Available read-only tools:
 - read_file: {{"path":"relative/path"}}
 - search_files: {{"path":"relative/path","query":"literal text"}}
 - inspect_tree: {{"path":"relative/path","depth":2}}
+- web_search: {{"query":"search terms","max_results":5}}
+- fetch_url: {{"url":"https://example.com","format":"markdown","max_bytes":1000000,"timeout_ms":15000}}
 
 Approval-gated tool:
 - run_shell: {{"command":"command to run","cwd":"relative/path","reason":"why this is needed"}}
 - propose_patch: {{"path":"relative/file","find":"exact existing text","replace":"replacement text","reason":"why this edit is needed"}}
 
-No raw writes, creates, deletes, network actions, or paths outside the workspace are available. Shell commands and exact text replacements require explicit user approval and may be denied."#,
+No raw writes, creates, deletes, or paths outside the workspace are available. Only web_search and fetch_url may access the network. Shell commands and exact text replacements require explicit user approval and may be denied."#,
         root.display()
     )
 }

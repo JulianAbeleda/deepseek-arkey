@@ -1,4 +1,5 @@
 use super::super::*;
+use crate::internet;
 
 pub(in crate::repl::chat) fn run_prompt_buffered_rendered(
     prior_messages: &[Message],
@@ -11,8 +12,8 @@ pub(in crate::repl::chat) fn run_prompt_buffered_rendered(
     cancel.check()?;
     let runtime_state = runtime::load(model)?;
     let mut messages = prior_messages.to_vec();
-    messages.push(provider::user_message(prompt));
     let response = if runtime_state.backend == RuntimeBackend::Debug {
+        messages.push(provider::user_message(prompt));
         let response = runtime::debug_response(prompt, model);
         let delay = runtime::debug_stream_delay();
         if let Some(delay) = delay {
@@ -28,6 +29,12 @@ pub(in crate::repl::chat) fn run_prompt_buffered_rendered(
         }
         response
     } else {
+        if let Some(context) = internet::web_context_message_for_prompt_lossy(prompt, |warning| {
+            eprintln!("warning: {warning}");
+        }) {
+            messages.push(context);
+        }
+        messages.push(provider::user_message(prompt));
         let response =
             provider::chat_quiet_cancelled(&messages, model, temperature, None, &cancel)?;
         send_rendered_markdown_stream(&sender, &response);
@@ -46,8 +53,8 @@ pub(in crate::repl::chat) fn run_prompt_with_memory(
 ) -> Result<(String, String), String> {
     let runtime_state = runtime::load(model)?;
     let mut messages = memory.clone();
-    messages.push(provider::user_message(prompt));
     let response = if runtime_state.backend == RuntimeBackend::Debug {
+        messages.push(provider::user_message(prompt));
         let response = runtime::debug_response(prompt, model);
         if stream {
             if let Some(sender) = sender {
@@ -60,10 +67,22 @@ pub(in crate::repl::chat) fn run_prompt_with_memory(
         }
         response
     } else if let Some(sender) = sender {
+        if let Some(context) = internet::web_context_message_for_prompt_lossy(prompt, |warning| {
+            eprintln!("warning: {warning}");
+        }) {
+            messages.push(context);
+        }
+        messages.push(provider::user_message(prompt));
         let response = provider::chat_quiet(&messages, model, temperature, None)?;
         send_rendered_markdown_stream(&sender, &response);
         response
     } else {
+        if let Some(context) = internet::web_context_message_for_prompt_lossy(prompt, |warning| {
+            eprintln!("warning: {warning}");
+        }) {
+            messages.push(context);
+        }
+        messages.push(provider::user_message(prompt));
         provider::chat(&messages, model, temperature, None, stream)?
     };
     push_interactive_turn(memory, prompt.to_string(), response.clone());

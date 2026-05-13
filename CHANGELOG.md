@@ -1,5 +1,25 @@
 # Changelog
 
+## Phase 17 - Internet Tools
+
+Summary:
+
+- Normal chat now prefetches web context for URL and current-info prompts,
+  continuing with a warning if web context is unavailable.
+- Explicit agent mode can call `web_search` and `fetch_url` as read-only tools.
+- Search defaults to Brave via `BRAVE_SEARCH_API_KEY` or `BRAVE_API_KEY`.
+- `DEEPSEEK_SEARCH_PROVIDER=tavily` switches search to Tavily via `TAVILY_API_KEY`.
+- `fetch_url` is limited to HTTP(S), validates DNS/IP and redirect targets, rejects
+  restricted addresses, and caps response size, redirects, and timeout.
+
+Validation:
+
+```bash
+cargo fmt --check
+cargo test --offline
+cargo clippy --offline
+```
+
 ## Phase 12 - Dock-Native Approval First Slice
 
 Reliability addendum:

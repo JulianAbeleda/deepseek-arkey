@@ -4,6 +4,7 @@ mod cancel;
 mod cli;
 mod input;
 mod intent;
+mod internet;
 mod provider;
 mod repl;
 mod runtime;
@@ -194,7 +195,6 @@ pub(crate) fn run_prompt(
         .as_ref()
         .map(|state| state.messages.clone())
         .unwrap_or_default();
-    messages.push(provider::user_message(prompt));
     let response = if runtime_state.backend == RuntimeBackend::Debug {
         let response = runtime::debug_response(prompt, model);
         if stream {
@@ -202,6 +202,12 @@ pub(crate) fn run_prompt(
         }
         response
     } else {
+        if let Some(context) = internet::web_context_message_for_prompt_lossy(prompt, |warning| {
+            eprintln!("warning: {warning}");
+        }) {
+            messages.push(context);
+        }
+        messages.push(provider::user_message(prompt));
         provider::chat(&messages, model, temperature, None, stream)?
     };
     if let Some(mut state) = active_state {

@@ -66,6 +66,14 @@ fn system_prompt_includes_markdown_final_answer_style() {
 }
 
 #[test]
+fn system_prompt_includes_web_tools() {
+    let prompt = system_prompt(std::path::Path::new("/tmp/workspace"));
+    assert!(prompt.contains("- web_search:"));
+    assert!(prompt.contains("- fetch_url:"));
+    assert!(prompt.contains("Only web_search and fetch_url may access the network"));
+}
+
+#[test]
 fn parses_openai_style_tool_call() {
     let decision = parse_decision(
             r#"{"content":null,"tool_calls":[{"id":"call_1","type":"function","function":{"name":"read_file","arguments":"{\"path\":\"src/main.rs\"}"}}]}"#,
@@ -666,11 +674,24 @@ fn unknown_tool_returns_observation_error() {
     let result = execute_tool(
         &workspace,
         &ToolCall {
-            name: "fetch_url".to_string(),
-            arguments: json!({"url":"https://example.com"}),
+            name: "unknown_tool".to_string(),
+            arguments: json!({}),
         },
     );
     assert!(result.contains("unknown agent tool"));
+}
+
+#[test]
+fn fetch_url_tool_dispatches_without_approval() {
+    let workspace = Workspace::new(std::env::current_dir().unwrap()).unwrap();
+    let result = execute_tool(
+        &workspace,
+        &ToolCall {
+            name: "fetch_url".to_string(),
+            arguments: json!({"url":"file:///etc/passwd"}),
+        },
+    );
+    assert!(result.contains("only http:// and https:// URLs are supported"));
 }
 
 #[test]

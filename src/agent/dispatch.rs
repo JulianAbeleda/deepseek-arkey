@@ -3,6 +3,7 @@ use super::read_tools;
 use super::workspace::Workspace;
 use super::write_tools;
 use super::{ApprovalMode, ApprovalRequest, ToolCall};
+use crate::internet;
 
 pub(super) fn approval_request(step: usize, call: &ToolCall) -> Option<ApprovalRequest> {
     match call.name.as_str() {
@@ -69,6 +70,8 @@ pub(super) fn execute_tool(
         "read_file" => read_tools::read_file(workspace, call),
         "search_files" => read_tools::search_files(workspace, call),
         "inspect_tree" => read_tools::inspect_tree(workspace, call),
+        "web_search" => internet::web_search_tool(&call.arguments),
+        "fetch_url" => internet::fetch_url_tool(&call.arguments),
         "run_shell" => write_tools::run_shell(workspace, call, approval_mode),
         "propose_patch" => write_tools::propose_patch(workspace, call, approval_mode),
         other => format!("error: unknown agent tool `{other}`"),
