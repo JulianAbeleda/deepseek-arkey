@@ -1,9 +1,14 @@
 mod approval_text;
 pub(crate) mod commit_audit;
 mod decision;
+mod dispatch;
 mod r#loop;
+mod notes;
 mod read_tools;
+mod runner;
+mod summary;
 mod transcript;
+mod types;
 mod workspace;
 mod write_tools;
 

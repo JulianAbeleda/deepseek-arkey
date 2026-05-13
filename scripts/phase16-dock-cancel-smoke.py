@@ -26,14 +26,14 @@ def numbered_lines(path, needle):
 
 
 def assert_source_contract(repo_root):
-    input_support = repo_root / "src" / "input" / "support.rs"
+    input_terminal = repo_root / "src" / "input" / "support" / "terminal.rs"
     input_composer = repo_root / "src" / "input" / "composer.rs"
     repl = repo_root / "src" / "repl" / "chat.rs"
     provider = repo_root / "src" / "provider.rs"
 
     required = [
-        (input_support, "PushKeyboardEnhancementFlags"),
-        (input_support, "PopKeyboardEnhancementFlags"),
+        (input_terminal, "PushKeyboardEnhancementFlags"),
+        (input_terminal, "PopKeyboardEnhancementFlags"),
         (input_composer, "KeyCode::Esc => Ok(Some(InputAction::Cancel))"),
         (repl, "turn.cancel.cancel();"),
         (provider, "child.kill()"),

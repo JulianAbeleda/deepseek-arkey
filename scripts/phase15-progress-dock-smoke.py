@@ -40,15 +40,15 @@ def numbered_lines(path, needle):
 
 def assert_source_contract(repo_root):
     repl = repo_root / "src" / "repl" / "chat.rs"
-    repl_support = repo_root / "src" / "repl" / "chat_support.rs"
+    repl_stream = repo_root / "src" / "repl" / "chat_support" / "stream.rs"
     input_composer = repo_root / "src" / "input" / "composer.rs"
 
     progress_calls = numbered_lines(repl, "progress_dock(&context_scan_status")
     stale_calls = numbered_lines(repl, "status_above(&context_scan_status")
     progress_def = numbered_lines(input_composer, "pub fn progress_dock")
     progress_clear = numbered_lines(input_composer, "self.progress_rows.clear();")
-    paced_final = numbered_lines(repl_support, "send_rendered_markdown_stream")
-    eager_final = numbered_lines(repl_support, "TurnEvent::Delta(render_terminal_markdown")
+    paced_final = numbered_lines(repl_stream, "send_rendered_markdown_stream")
+    eager_final = numbered_lines(repl_stream, "TurnEvent::Delta(render_terminal_markdown")
 
     if not progress_calls:
         raise AssertionError("missing progress_dock context-scan call in src/repl/chat.rs")
@@ -60,7 +60,7 @@ def assert_source_contract(repo_root):
     if not progress_clear:
         raise AssertionError("missing progress_rows clear path in src/input/composer.rs")
     if not paced_final:
-        raise AssertionError("missing paced final markdown stream path in src/repl/chat_support.rs")
+        raise AssertionError("missing paced final markdown stream path in src/repl/chat_support/stream.rs")
     if eager_final:
         details = "\n".join(f"{line}: {text}" for line, text in eager_final)
         raise AssertionError(f"eager rendered markdown delta path found:\n{details}")
@@ -73,7 +73,7 @@ def assert_source_contract(repo_root):
     for line, text in progress_clear:
         print(f"progress_clear=input/composer.rs:{line}: {text}")
     for line, text in paced_final:
-        print(f"paced_final_stream=repl/chat_support.rs:{line}: {text}")
+        print(f"paced_final_stream=repl/chat_support/stream.rs:{line}: {text}")
 
 
 def write_slow_fake_curl(directory):
