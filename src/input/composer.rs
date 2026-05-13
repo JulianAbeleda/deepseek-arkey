@@ -232,6 +232,7 @@ impl DockedComposer {
                     Ok(None)
                 }
                 KeyCode::Char(ch) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    let ch = shifted_char(ch, key.modifiers);
                     insert_at(&mut self.buffer, &mut self.cursor, ch);
                     self.history_index = None;
                     self.reset_slash_completion();
@@ -664,6 +665,37 @@ impl DockedComposer {
         let next = index + 1;
         self.history_index = Some(next);
         self.history.get(next).cloned()
+    }
+}
+
+pub(crate) fn shifted_char(ch: char, modifiers: KeyModifiers) -> char {
+    if !modifiers.contains(KeyModifiers::SHIFT) {
+        return ch;
+    }
+    match ch {
+        'a'..='z' => ch.to_ascii_uppercase(),
+        '1' => '!',
+        '2' => '@',
+        '3' => '#',
+        '4' => '$',
+        '5' => '%',
+        '6' => '^',
+        '7' => '&',
+        '8' => '*',
+        '9' => '(',
+        '0' => ')',
+        '`' => '~',
+        '-' => '_',
+        '=' => '+',
+        '[' => '{',
+        ']' => '}',
+        '\\' => '|',
+        ';' => ':',
+        '\'' => '"',
+        ',' => '<',
+        '.' => '>',
+        '/' => '?',
+        _ => ch,
     }
 }
 

@@ -2,11 +2,11 @@ use super::{
     approval_panel_rows, buffer_prefix, compose_dock_rows, compose_rendered_dock_rows, insert_at,
     keyboard_enhancement_flags, next_slash_completion, next_word_cursor, output_row,
     parse_forced_terminal_size, previous_word_cursor, progress_panel_rows, prompt_echo_block_lines,
-    remove_at, remove_before, remove_previous_word, slash_command_matches,
+    remove_at, remove_before, remove_previous_word, shifted_char, slash_command_matches,
     slash_completion_panel_rows, submitted_prompt_echo_with_options, take_ansi_sequence,
     visible_len, visible_suffix, ApprovalChoice, ApprovalModal, DockedComposer, DOCK_RESERVED_ROWS,
 };
-use crossterm::event::KeyboardEnhancementFlags;
+use crossterm::event::{KeyModifiers, KeyboardEnhancementFlags};
 
 #[test]
 fn keyboard_enhancement_flags_enable_modified_enter_reporting() {
@@ -39,6 +39,16 @@ fn key_event_filter_ignores_release_events() {
             crossterm::event::KeyEventKind::Release,
         )
     ));
+}
+
+#[test]
+fn shifted_key_chars_normalize_base_ascii_reports() {
+    assert_eq!(shifted_char('a', KeyModifiers::SHIFT), 'A');
+    assert_eq!(shifted_char('/', KeyModifiers::SHIFT), '?');
+    assert_eq!(shifted_char('1', KeyModifiers::SHIFT), '!');
+    assert_eq!(shifted_char('=', KeyModifiers::SHIFT), '+');
+    assert_eq!(shifted_char('?', KeyModifiers::SHIFT), '?');
+    assert_eq!(shifted_char('x', KeyModifiers::NONE), 'x');
 }
 
 #[test]
