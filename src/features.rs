@@ -150,6 +150,12 @@ fn set_word(enabled: bool) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Mutex, OnceLock};
+
+    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
+    }
 
     #[test]
     fn dashboard_reports_missing_keys_without_values() {
@@ -212,6 +218,7 @@ mod tests {
 
     #[test]
     fn toggle_search_provider_persists_runtime_provider() {
+        let _guard = env_lock();
         let home = tempfile::tempdir().unwrap();
         let old_home = std::env::var_os("HOME");
         let old_env = std::env::var("DEEPSEEK_SEARCH_PROVIDER").ok();
