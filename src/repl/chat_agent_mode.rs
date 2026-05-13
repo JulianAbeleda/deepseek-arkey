@@ -1,4 +1,5 @@
 use super::*;
+use crate::features;
 
 pub(super) fn run_confirmed_agent_task(
     task: &PendingAgentTask,
@@ -93,6 +94,10 @@ pub(super) fn run_interactive_agent(model: &str, temperature: Option<f32>) -> Re
                 }
                 commands::ChatCommand::Status => {
                     print!("{}", interactive_agent_status(&current_model, &root)?);
+                    continue;
+                }
+                commands::ChatCommand::Features => {
+                    println!("{}", features::features_dashboard());
                     continue;
                 }
                 commands::ChatCommand::Runtime(command) => {

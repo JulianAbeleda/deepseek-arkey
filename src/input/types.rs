@@ -24,6 +24,7 @@ pub(crate) const SLASH_COMMANDS: &[SlashCommandSpec] = &[
     SlashCommandSpec::new("/debug", "Toggle local debug backend"),
     SlashCommandSpec::new("/runtime", "Show provider/debug runtime state"),
     SlashCommandSpec::new("/status", "Show active session details"),
+    SlashCommandSpec::new("/features", "Show API-backed feature availability"),
     SlashCommandSpec::new("/end", "End the current session and clear context"),
     SlashCommandSpec::new("/exit", "Exit without clearing context"),
     SlashCommandSpec::new("/quit", "Exit without clearing context"),

@@ -36,6 +36,7 @@ pub(super) enum ChatCommand<'a> {
     SwitchToAgent,
     DirectAgentTask(&'a str),
     Status,
+    Features,
     Root(Option<&'a str>),
     Runtime(RuntimeCommand),
     Debug(Option<&'a str>),
@@ -65,6 +66,9 @@ pub(super) fn parse_chat_command(prompt: &str) -> CommandParse<ChatCommand<'_>> 
     }
     if prompt == "/status" {
         return CommandParse::Valid(ChatCommand::Status);
+    }
+    if prompt == "/features" {
+        return CommandParse::Valid(ChatCommand::Features);
     }
     if let Some(root) = parse_root_command(prompt) {
         return CommandParse::Valid(ChatCommand::Root(root));
@@ -233,6 +237,14 @@ mod tests {
         assert_eq!(
             parse_chat_command("/agent fix the bug"),
             CommandParse::Valid(ChatCommand::DirectAgentTask("fix the bug"))
+        );
+    }
+
+    #[test]
+    fn parses_features_slash_command() {
+        assert_eq!(
+            parse_chat_command("/features"),
+            CommandParse::Valid(ChatCommand::Features)
         );
     }
 }

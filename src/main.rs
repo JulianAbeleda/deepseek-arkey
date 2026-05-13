@@ -2,6 +2,7 @@ mod agent;
 mod answer_format;
 mod cancel;
 mod cli;
+mod features;
 mod input;
 mod intent;
 mod internet;

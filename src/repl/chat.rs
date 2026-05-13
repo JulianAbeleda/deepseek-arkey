@@ -9,6 +9,7 @@ use crate::agent;
 use crate::agent::commit_audit::is_commit_audit_prompt;
 use crate::answer_format::{format_agent_answer, terminal_agent_answer};
 use crate::cancel::CancellationToken;
+use crate::features;
 use crate::input::{ApprovalChoice, DockedComposer, InlineInput, InputAction, RawModeSession};
 use crate::intent::{classify_intent, path_boundary_violation, recent_task_context, Intent};
 use crate::provider::{self, Message, DEFAULT_SESSION_NAME, PROVIDER};
@@ -140,6 +141,10 @@ fn run_interactive_chat(model: &str, temperature: Option<f32>, stream: bool) -> 
                 }
                 commands::ChatCommand::Status => {
                     ui::print_status(&current_model)?;
+                    continue;
+                }
+                commands::ChatCommand::Features => {
+                    println!("{}", features::features_dashboard());
                     continue;
                 }
                 commands::ChatCommand::Root(_) => {
@@ -438,6 +443,10 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
                     let output = execute_runtime_command(&current_model, command)?;
                     runtime_state = runtime::load(&current_model)?;
                     composer.print_above(&output)?;
+                    continue;
+                }
+                commands::ChatCommand::Features => {
+                    composer.print_above(&features::features_dashboard())?;
                     continue;
                 }
                 commands::ChatCommand::Debug(mode) => {

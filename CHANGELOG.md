@@ -2,6 +2,11 @@
 
 ## Phase 17 - Internet Tools
 
+Addendum:
+
+- `/features` now shows which API-backed capabilities are enabled by the
+  current shell environment without printing secret values.
+
 Summary:
 
 - Normal chat now prefetches web context for URL and current-info prompts,
