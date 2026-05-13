@@ -5,7 +5,7 @@ use crossterm::cursor::{position, MoveToColumn};
 use crossterm::execute;
 use crossterm::terminal::{size, Clear, ClearType};
 
-use crate::provider::{PROVIDER, SUPPORTED_MODELS};
+use crate::provider::{APP_COMMAND, PROVIDER, SUPPORTED_MODELS};
 use crate::session;
 
 pub fn print_banner(model: &str) -> Option<u16> {
@@ -14,7 +14,7 @@ pub fn print_banner(model: &str) -> Option<u16> {
     let _ = write!(
         stdout,
         "{} {}  {}\r\n",
-        accent(PROVIDER.to_ascii_lowercase()),
+        accent(APP_COMMAND),
         muted("booted"),
         muted(format!("[{model}]"))
     );
@@ -28,7 +28,7 @@ pub fn print_banner(model: &str) -> Option<u16> {
 pub fn prompt_text(model: &str) -> String {
     format!(
         "{} {} › ",
-        accent(PROVIDER.to_ascii_lowercase()),
+        accent(APP_COMMAND),
         backend(format!("[{model}]"))
     )
 }
@@ -201,7 +201,7 @@ mod tests {
     #[test]
     fn prompt_includes_provider_and_model() {
         let prompt = prompt_text("deepseek-v4-flash");
-        assert!(prompt.contains("deepseek"));
+        assert!(prompt.contains("deepseek-arkey"));
         assert!(prompt.contains("deepseek-v4-flash"));
     }
 }

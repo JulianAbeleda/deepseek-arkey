@@ -5,7 +5,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
-use crate::provider::{PROVIDER, PROVIDER_DIR, PROVIDER_STATE_DIR};
+use crate::provider::{
+    OLD_PROVIDER_DIR, OLD_PROVIDER_STATE_DIR, PROVIDER, PROVIDER_DIR, PROVIDER_STATE_DIR,
+};
 use crate::safety::atomic_write;
 
 const DEBUG_STREAM_DELAY_ENV: &str = "DEEPSEEK_DEBUG_STREAM_DELAY_MS";
@@ -78,7 +80,9 @@ impl RuntimeBackend {
     pub fn parse(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
             "provider" | "off" => Some(Self::Provider),
-            provider if provider == PROVIDER_DIR => Some(Self::Provider),
+            provider if provider == PROVIDER_DIR || provider == OLD_PROVIDER_DIR => {
+                Some(Self::Provider)
+            }
             "debug" | "debug-manual" | "manual" | "on" => Some(Self::Debug),
             _ => None,
         }
@@ -86,17 +90,26 @@ impl RuntimeBackend {
 }
 
 pub fn runtime_path() -> PathBuf {
+    runtime_path_for(PROVIDER_DIR, PROVIDER_STATE_DIR)
+}
+
+fn old_runtime_path() -> PathBuf {
+    runtime_path_for(OLD_PROVIDER_DIR, OLD_PROVIDER_STATE_DIR)
+}
+
+fn runtime_path_for(provider_dir: &str, fallback_dir: &str) -> PathBuf {
     if let Some(home) = std::env::var_os("HOME") {
         return PathBuf::from(home)
             .join(".local/state/provider-cli")
-            .join(PROVIDER_DIR)
+            .join(provider_dir)
             .join("runtime-state.json");
     }
-    PathBuf::from(PROVIDER_STATE_DIR).join("runtime-state.json")
+    PathBuf::from(fallback_dir).join("runtime-state.json")
 }
 
 pub fn load(default_model: &str) -> Result<RuntimeState, String> {
     let path = runtime_path();
+    migrate_runtime_state_if_needed(&path)?;
     if !path.exists() {
         return Ok(RuntimeState::provider(Some(default_model.to_string())));
     }
@@ -107,6 +120,18 @@ pub fn load(default_model: &str) -> Result<RuntimeState, String> {
 pub fn save(state: &RuntimeState) -> Result<(), String> {
     let bytes = serde_json::to_vec_pretty(state).map_err(|err| err.to_string())?;
     atomic_write(&runtime_path(), &bytes).map_err(|err| err.to_string())
+}
+
+fn migrate_runtime_state_if_needed(path: &PathBuf) -> Result<(), String> {
+    if path.exists() {
+        return Ok(());
+    }
+    let old_path = old_runtime_path();
+    if !old_path.exists() {
+        return Ok(());
+    }
+    let raw = fs::read(&old_path).map_err(|err| err.to_string())?;
+    atomic_write(path, &raw).map_err(|err| err.to_string())
 }
 
 pub fn set_backend(default_model: &str, backend: RuntimeBackend) -> Result<RuntimeState, String> {
@@ -202,7 +227,9 @@ fn unix_timestamp() -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{RuntimeBackend, RuntimeState};
+    use super::{load, runtime_path, RuntimeBackend, RuntimeState};
+    use crate::test_support::env_lock;
+    use std::fs;
 
     #[test]
     fn parses_debug_aliases() {
@@ -242,5 +269,63 @@ mod tests {
                 .as_deref(),
             Some("tavily")
         );
+    }
+
+    #[test]
+    fn load_migrates_old_runtime_state_when_new_state_is_missing() {
+        let _guard = env_lock();
+        let home = tempfile::tempdir().unwrap();
+        let old_home = std::env::var_os("HOME");
+        std::env::set_var("HOME", home.path());
+        let old_path = home
+            .path()
+            .join(".local/state/provider-cli/deepseek/runtime-state.json");
+        fs::create_dir_all(old_path.parent().unwrap()).unwrap();
+        fs::write(
+            &old_path,
+            r#"{"backend":"provider","runtime":"terminal","model":"deepseek-v4-pro","legacy_routing":false,"updated_at":1}"#,
+        )
+        .unwrap();
+
+        let state = load("deepseek-v4-flash").unwrap();
+        assert_eq!(state.model.as_deref(), Some("deepseek-v4-pro"));
+        assert!(runtime_path().exists());
+
+        match old_home {
+            Some(home) => std::env::set_var("HOME", home),
+            None => std::env::remove_var("HOME"),
+        }
+    }
+
+    #[test]
+    fn load_prefers_existing_new_runtime_state_over_old_state() {
+        let _guard = env_lock();
+        let home = tempfile::tempdir().unwrap();
+        let old_home = std::env::var_os("HOME");
+        std::env::set_var("HOME", home.path());
+        let old_path = home
+            .path()
+            .join(".local/state/provider-cli/deepseek/runtime-state.json");
+        let new_path = runtime_path();
+        fs::create_dir_all(old_path.parent().unwrap()).unwrap();
+        fs::create_dir_all(new_path.parent().unwrap()).unwrap();
+        fs::write(
+            &old_path,
+            r#"{"backend":"provider","runtime":"terminal","model":"old-model","legacy_routing":false,"updated_at":1}"#,
+        )
+        .unwrap();
+        fs::write(
+            &new_path,
+            r#"{"backend":"provider","runtime":"terminal","model":"new-model","legacy_routing":false,"updated_at":2}"#,
+        )
+        .unwrap();
+
+        let state = load("fallback").unwrap();
+        assert_eq!(state.model.as_deref(), Some("new-model"));
+
+        match old_home {
+            Some(home) => std::env::set_var("HOME", home),
+            None => std::env::remove_var("HOME"),
+        }
     }
 }

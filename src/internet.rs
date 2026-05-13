@@ -25,7 +25,8 @@ const HARD_TIMEOUT_MS: u64 = 60_000;
 const MAX_REDIRECTS: usize = 5;
 const SEARCH_CONTEXT_CAP: usize = 8_000;
 const FETCH_CONTEXT_CAP: usize = 12_000;
-const USER_AGENT_VALUE: &str = "deepseek-cli/0.1 (+https://github.com/JulianAbeleda/deepseek-cli)";
+const USER_AGENT_VALUE: &str =
+    "deepseek-arkey/0.1 (+https://github.com/JulianAbeleda/deepseek-cli)";
 const BRAVE_API_KEY_SETUP_HELP: &str = r#"Brave Search API key is not set.
 
 For troubleshooting, you can share this message with an AI provider or support
@@ -704,12 +705,7 @@ struct TavilyResult {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Mutex, OnceLock};
-
-    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
-    }
+    use crate::test_support::env_lock;
 
     #[test]
     fn detects_url_prompt_context() {

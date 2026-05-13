@@ -1,14 +1,15 @@
 use super::super::*;
+use crate::provider;
 
 pub(in crate::repl::chat) fn print_agent_banner(model: &str, root: &Path) {
-    println!("deepseek [{model}] agent");
+    println!("{} [{model}] agent", provider::APP_COMMAND);
     println!("workspace: {}", root.display());
     println!("read tools on - edits require yes apply - shell requires yes run");
     println!("Enter send - ? help - /chat - /model - /status - /end - /exit");
 }
 
 pub(in crate::repl::chat) fn agent_prompt_text(model: &str) -> String {
-    format!("deepseek [{model}] agent › ")
+    format!("{} [{model}] agent › ", provider::APP_COMMAND)
 }
 
 pub(in crate::repl::chat) fn interactive_agent_status(

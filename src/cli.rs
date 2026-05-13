@@ -3,8 +3,8 @@ use clap::{Parser, Subcommand};
 use crate::agent::DEFAULT_MAX_STEPS;
 
 #[derive(Debug, Parser)]
-#[command(name = "deepseek")]
-#[command(about = "Standalone DeepSeek terminal CLI")]
+#[command(name = "deepseek-arkey")]
+#[command(about = "Standalone Arkey terminal CLI for DeepSeek")]
 pub struct Args {
     #[command(subcommand)]
     pub command: Option<Command>,

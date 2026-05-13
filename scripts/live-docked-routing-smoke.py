@@ -30,7 +30,7 @@ def assert_not_legacy_handoff(screen):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--binary", default=None)
-    parser.add_argument("--name", default="deepseek")
+    parser.add_argument("--name", default="deepseek-arkey")
     parser.add_argument("--expect", default="DEEPSEEK_DOCKED_LIVE_OK")
     parser.add_argument("--timeout", type=float, default=45.0)
     args = parser.parse_args()

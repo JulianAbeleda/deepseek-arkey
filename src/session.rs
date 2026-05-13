@@ -4,7 +4,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-use crate::provider::{assistant_message, user_message, Message, PROVIDER_DIR, PROVIDER_STATE_DIR};
+use crate::provider::{
+    assistant_message, user_message, Message, OLD_PROVIDER_DIR, OLD_PROVIDER_STATE_DIR,
+    PROVIDER_DIR, PROVIDER_STATE_DIR,
+};
 use crate::safety::atomic_write;
 
 const MAX_TURNS: usize = 20;
@@ -171,17 +174,26 @@ where
 }
 
 pub fn session_path() -> PathBuf {
+    session_path_for(PROVIDER_DIR, PROVIDER_STATE_DIR)
+}
+
+fn old_session_path() -> PathBuf {
+    session_path_for(OLD_PROVIDER_DIR, OLD_PROVIDER_STATE_DIR)
+}
+
+fn session_path_for(provider_dir: &str, fallback_dir: &str) -> PathBuf {
     if let Some(home) = std::env::var_os("HOME") {
         return PathBuf::from(home)
             .join(".local/state/provider-cli")
-            .join(PROVIDER_DIR)
+            .join(provider_dir)
             .join("active-session.json");
     }
-    PathBuf::from(PROVIDER_STATE_DIR).join("active-session.json")
+    PathBuf::from(fallback_dir).join("active-session.json")
 }
 
 pub fn load() -> Result<Option<SessionState>, String> {
     let path = session_path();
+    migrate_session_state_if_needed(&path)?;
     load_from_path(&path)
 }
 
@@ -202,6 +214,18 @@ pub fn save(state: &SessionState) -> Result<(), String> {
 fn save_to_path(path: &Path, state: &SessionState) -> Result<(), String> {
     let bytes = serde_json::to_vec_pretty(state).map_err(|err| err.to_string())?;
     atomic_write(path, &bytes).map_err(|err| err.to_string())
+}
+
+fn migrate_session_state_if_needed(path: &Path) -> Result<(), String> {
+    if path.exists() {
+        return Ok(());
+    }
+    let old_path = old_session_path();
+    if !old_path.exists() {
+        return Ok(());
+    }
+    let raw = fs::read(&old_path).map_err(|err| err.to_string())?;
+    atomic_write(path, &raw).map_err(|err| err.to_string())
 }
 
 pub fn delete() -> Result<bool, String> {
@@ -233,8 +257,10 @@ fn unix_timestamp() -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{delete_path, load_from_path, save_to_path, SessionState};
+    use super::{delete_path, load, load_from_path, save_to_path, session_path, SessionState};
     use crate::provider::{DEFAULT_SESSION_NAME, PROVIDER};
+    use crate::test_support::env_lock;
+    use std::fs;
 
     #[test]
     fn caps_turn_count() {
@@ -269,6 +295,65 @@ mod tests {
         assert!(delete_path(&path).unwrap());
         assert!(load_from_path(&path).unwrap().is_none());
         assert!(!delete_path(&path).unwrap());
+    }
+
+    #[test]
+    fn load_migrates_old_session_state_when_new_state_is_missing() {
+        let _guard = env_lock();
+        let home = tempfile::tempdir().unwrap();
+        let old_home = std::env::var_os("HOME");
+        std::env::set_var("HOME", home.path());
+        let old_path = home
+            .path()
+            .join(".local/state/provider-cli/deepseek/active-session.json");
+        fs::create_dir_all(old_path.parent().unwrap()).unwrap();
+        fs::write(
+            &old_path,
+            r#"{"provider":"DeepSeek","name":"default","model":"deepseek-v4-pro","updated_at":1,"messages":[{"role":"user","content":"hello"},{"role":"assistant","content":"world"}]}"#,
+        )
+        .unwrap();
+
+        let loaded = load().unwrap().unwrap();
+        assert_eq!(loaded.model, "deepseek-v4-pro");
+        assert_eq!(loaded.messages.len(), 2);
+        assert!(session_path().exists());
+
+        match old_home {
+            Some(home) => std::env::set_var("HOME", home),
+            None => std::env::remove_var("HOME"),
+        }
+    }
+
+    #[test]
+    fn load_prefers_existing_new_session_state_over_old_state() {
+        let _guard = env_lock();
+        let home = tempfile::tempdir().unwrap();
+        let old_home = std::env::var_os("HOME");
+        std::env::set_var("HOME", home.path());
+        let old_path = home
+            .path()
+            .join(".local/state/provider-cli/deepseek/active-session.json");
+        let new_path = session_path();
+        fs::create_dir_all(old_path.parent().unwrap()).unwrap();
+        fs::create_dir_all(new_path.parent().unwrap()).unwrap();
+        fs::write(
+            &old_path,
+            r#"{"provider":"DeepSeek","name":"default","model":"old-model","updated_at":1,"messages":[]}"#,
+        )
+        .unwrap();
+        fs::write(
+            &new_path,
+            r#"{"provider":"DeepSeek","name":"default","model":"new-model","updated_at":2,"messages":[]}"#,
+        )
+        .unwrap();
+
+        let loaded = load().unwrap().unwrap();
+        assert_eq!(loaded.model, "new-model");
+
+        match old_home {
+            Some(home) => std::env::set_var("HOME", home),
+            None => std::env::remove_var("HOME"),
+        }
     }
 
     #[test]

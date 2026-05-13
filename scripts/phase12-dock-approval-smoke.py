@@ -131,7 +131,7 @@ def has_tool_step(screen, tool):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--binary", default=None)
-    parser.add_argument("--name", default="deepseek")
+    parser.add_argument("--name", default="deepseek-arkey")
     args = parser.parse_args()
 
     binary = resolve_binary(args.name, args.binary)

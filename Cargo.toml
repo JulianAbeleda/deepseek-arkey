@@ -1,8 +1,13 @@
 [package]
-name = "deepseek"
+name = "deepseek-arkey"
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
+
+[[bin]]
+name = "deepseek"
+path = "src/bin/deepseek.rs"
+test = false
 
 [dependencies]
 clap = { version = "4.5", features = ["derive"] }

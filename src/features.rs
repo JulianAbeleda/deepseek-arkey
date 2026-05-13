@@ -150,12 +150,7 @@ fn set_word(enabled: bool) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Mutex, OnceLock};
-
-    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
-    }
+    use crate::test_support::env_lock;
 
     #[test]
     fn dashboard_reports_missing_keys_without_values() {

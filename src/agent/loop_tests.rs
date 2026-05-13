@@ -1137,3 +1137,30 @@ fn reads_latest_transcript() {
     assert!(latest.1.contains("newer"));
     let _ = fs::remove_dir_all(root);
 }
+
+#[test]
+fn reads_latest_transcript_migrates_old_transcript_dir() {
+    let unique = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!(
+        "deepseek-agent-old-transcript-test-{}-{unique}",
+        std::process::id()
+    ));
+    let old_dir = root.join(".deepseek").join("agent-transcripts");
+    fs::create_dir_all(&old_dir).unwrap();
+    let old_path = old_dir.join("1.json");
+    fs::write(&old_path, r#"[{"role":"task","content":"old transcript"}]"#).unwrap();
+
+    let latest = super::read_latest_transcript(root.clone())
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        fs::canonicalize(latest.0.parent().unwrap()).unwrap(),
+        fs::canonicalize(root.join(PROVIDER_STATE_DIR).join("agent-transcripts")).unwrap()
+    );
+    assert!(latest.1.contains("old transcript"));
+    assert!(old_path.exists());
+    let _ = fs::remove_dir_all(root);
+}

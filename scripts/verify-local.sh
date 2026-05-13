@@ -6,7 +6,7 @@ cd "$ROOT"
 
 LIVE=0
 FULL=0
-BINARY="target/release/deepseek"
+BINARY="target/release/deepseek-arkey"
 
 usage() {
   cat <<'USAGE'
@@ -18,7 +18,7 @@ Default checks are local/offline:
   - cargo fmt --check
   - cargo test --offline
   - cargo build --offline --release
-  - docked TTY smoke against target/release/deepseek
+  - docked TTY smoke against target/release/deepseek-arkey
   - progress dock smoke
   - dock cancellation smoke
   - persistent navigation smoke
@@ -124,7 +124,7 @@ run ./scripts/persistent-navigation-test.sh
 if ((FULL)); then
   section "Full Local Smokes"
   run python3 scripts/agent-startup-smoke.py --binary "$BINARY"
-  run python3 scripts/phase10-scope-probe.py --binary "$BINARY" --name deepseek --model deepseek-v4-flash
+  run python3 scripts/phase10-scope-probe.py --binary "$BINARY" --name deepseek-arkey --model deepseek-v4-flash
   run python3 scripts/phase11-docked-routing-smoke.py --binary "$BINARY"
   run python3 scripts/phase12-dock-approval-smoke.py --binary "$BINARY"
 fi
@@ -142,4 +142,4 @@ else
 fi
 
 section "Result"
-echo "deepseek local verification: ok"
+echo "deepseek-arkey local verification: ok"

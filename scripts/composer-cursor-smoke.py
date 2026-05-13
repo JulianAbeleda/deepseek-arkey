@@ -27,7 +27,7 @@ def assert_cursor_after(screen, text):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--binary", default=None)
-    parser.add_argument("--name", default="deepseek")
+    parser.add_argument("--name", default="deepseek-arkey")
     parser.add_argument("--cols", type=int, default=COLS)
     parser.add_argument("--rows", type=int, default=ROWS)
     args = parser.parse_args()

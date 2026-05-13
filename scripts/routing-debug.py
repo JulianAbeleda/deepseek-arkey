@@ -234,7 +234,7 @@ def check_direct_agent_stays_in_chat_memory(binary, env, name, home, workspace):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--name", default="deepseek")
+    parser.add_argument("--name", default="deepseek-arkey")
     parser.add_argument("--binary")
     parser.add_argument("--model", help="Accepted for parity with smoke wrappers; routing-debug uses the binary default.")
     args = parser.parse_args()
@@ -313,7 +313,7 @@ def main():
             else:
                 failed += 1
 
-        provider_repo = deepseek_repo if args.name == "deepseek" else minimax_repo
+        provider_repo = deepseek_repo if args.name in {"deepseek", "deepseek-arkey"} else minimax_repo
         if check_persistent_navigation(binary, env, args.name, home, env_root, provider_repo):
             passed += 1
         else:

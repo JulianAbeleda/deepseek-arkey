@@ -57,7 +57,7 @@ fn edits_at_cursor() {
 
 #[test]
 fn visible_len_ignores_ansi() {
-    assert_eq!(visible_len("\x1b[36mdeepseek\x1b[0m › "), 11);
+    assert_eq!(visible_len("\x1b[36mdeepseek-arkey\x1b[0m › "), 17);
 }
 
 #[test]
@@ -69,7 +69,8 @@ fn dock_display_uses_visible_suffix_for_long_lines() {
 
 #[test]
 fn dock_display_keeps_ansi_sequences_intact_at_narrow_widths() {
-    let text = "\x1b[36;1mdeepseek\x1b[0m \x1b[38;2;122;162;247m[deepseek-v4-flash]\x1b[0m › draft";
+    let text =
+        "\x1b[36;1mdeepseek-arkey\x1b[0m \x1b[38;2;122;162;247m[deepseek-v4-flash]\x1b[0m › draft";
     let suffix = visible_suffix(text, 10);
 
     assert_eq!(suffix, "\x1b[38;2;122;162;247mh]\x1b[0m › draft");
@@ -436,7 +437,7 @@ fn progress_panel_rows_are_capped_and_padded() {
 #[test]
 fn progress_dock_rows_render_above_prompt() {
     let panel = progress_panel_rows("Loading 1s\n\nagent step 1: list_files", 48);
-    let rows = compose_rendered_dock_rows("deepseek [model] › ", "", 0, 48, &panel, false);
+    let rows = compose_rendered_dock_rows("deepseek-arkey [model] › ", "", 0, 48, &panel, false);
     let plain = rows
         .lines
         .iter()
@@ -453,7 +454,7 @@ fn progress_dock_rows_render_above_prompt() {
         .unwrap();
     let prompt_row = plain
         .iter()
-        .position(|row| row.starts_with("deepseek [model] ›"))
+        .position(|row| row.starts_with("deepseek-arkey [model] ›"))
         .unwrap();
     let help_row = plain
         .iter()

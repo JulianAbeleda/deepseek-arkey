@@ -38,7 +38,7 @@ def read_until(fd, expected, timeout=3.0):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--binary", default=None)
-    parser.add_argument("--name", default="deepseek")
+    parser.add_argument("--name", default="deepseek-arkey")
     parser.add_argument("--model", default="deepseek-v4-flash")
     args = parser.parse_args()
 

@@ -147,7 +147,7 @@ def run_cancel_smoke(binary, name):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--binary", default=None, help="DeepSeek binary to test.")
-    parser.add_argument("--name", default="deepseek")
+    parser.add_argument("--name", default="deepseek-arkey")
     args = parser.parse_args()
 
     repo_root = Path(__file__).resolve().parents[1]

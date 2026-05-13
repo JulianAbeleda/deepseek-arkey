@@ -9,8 +9,11 @@ use crate::cancel::{CancellationToken, CANCELLED};
 use crate::safety::{cap_text, redact_text, DEFAULT_TEXT_CAP};
 
 pub const PROVIDER: &str = "DeepSeek";
-pub const PROVIDER_DIR: &str = "deepseek";
-pub const PROVIDER_STATE_DIR: &str = ".deepseek";
+pub const APP_COMMAND: &str = "deepseek-arkey";
+pub const PROVIDER_DIR: &str = "deepseek-arkey";
+pub const OLD_PROVIDER_DIR: &str = "deepseek";
+pub const PROVIDER_STATE_DIR: &str = ".deepseek-arkey";
+pub const OLD_PROVIDER_STATE_DIR: &str = ".deepseek";
 pub const ENV_KEY: &str = "DEEPSEEK_API_KEY";
 pub const DEFAULT_MODEL: &str = "deepseek-v4-flash";
 pub const DEFAULT_SESSION_NAME: &str = "default";
@@ -33,7 +36,7 @@ The ~/.zshrc file sources ~/.zsh_secrets, so keep provider keys there instead
 of writing secrets directly into ~/.zshrc.
 
 Then verify:
-  deepseek login"#;
+  deepseek-arkey login"#;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Message {
@@ -571,7 +574,7 @@ mod tests {
         assert!(missing.contains("export DEEPSEEK_API_KEY"));
         assert!(missing.contains("~/.zsh_secrets"));
         assert!(missing.contains("keep provider keys there"));
-        assert!(missing.contains("deepseek login"));
+        assert!(missing.contains("deepseek-arkey login"));
 
         let blank = parse_api_key(Some(" \t\n ".to_string())).unwrap_err();
         assert_eq!(blank, missing);

@@ -68,12 +68,12 @@ Required:
 
 Optional local smoke after building release binary:
   cargo build --offline --release
-  python3 scripts/docked-smoke.py --binary target/release/deepseek
-  python3 scripts/docked-smoke.py --binary target/release/deepseek --entrypoint default
+  python3 scripts/docked-smoke.py --binary target/release/deepseek-arkey
+  python3 scripts/docked-smoke.py --binary target/release/deepseek-arkey --entrypoint default
   ./scripts/persistent-navigation-test.sh
 
 Optional live provider smoke requires DEEPSEEK_API_KEY and network:
-  python3 scripts/live-docked-routing-smoke.py --binary target/release/deepseek
+  python3 scripts/live-docked-routing-smoke.py --binary target/release/deepseek-arkey
 COMMANDS
 
 section "Full Diff"

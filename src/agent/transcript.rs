@@ -4,7 +4,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
-use crate::provider::PROVIDER_STATE_DIR;
+use crate::provider::{OLD_PROVIDER_STATE_DIR, PROVIDER_STATE_DIR};
 use crate::safety::{atomic_write, cap_text};
 
 const MAX_TRANSCRIPT_ENTRY_CHARS: usize = 12_000;
@@ -43,6 +43,7 @@ pub(super) fn read_latest_transcript(
 ) -> Result<Option<(PathBuf, String)>, String> {
     let root = canonicalize_root(root.into())?;
     let dir = transcript_dir(&root);
+    migrate_transcripts_if_needed(&dir, &old_transcript_dir(&root))?;
     if !dir.exists() {
         return Ok(None);
     }
@@ -62,6 +63,30 @@ pub(super) fn read_latest_transcript(
 
 fn transcript_dir(root: &Path) -> PathBuf {
     root.join(PROVIDER_STATE_DIR).join("agent-transcripts")
+}
+
+fn old_transcript_dir(root: &Path) -> PathBuf {
+    root.join(OLD_PROVIDER_STATE_DIR).join("agent-transcripts")
+}
+
+fn migrate_transcripts_if_needed(new_dir: &Path, old_dir: &Path) -> Result<(), String> {
+    if new_dir.exists() || !old_dir.exists() {
+        return Ok(());
+    }
+    fs::create_dir_all(new_dir).map_err(|err| err.to_string())?;
+    for entry in fs::read_dir(old_dir).map_err(|err| err.to_string())? {
+        let entry = entry.map_err(|err| err.to_string())?;
+        let old_path = entry.path();
+        if !old_path.is_file() {
+            continue;
+        }
+        let Some(file_name) = old_path.file_name() else {
+            continue;
+        };
+        let new_path = new_dir.join(file_name);
+        fs::copy(&old_path, &new_path).map_err(|err| err.to_string())?;
+    }
+    Ok(())
 }
 
 fn unix_timestamp() -> u64 {

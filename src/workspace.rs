@@ -250,6 +250,7 @@ mod tests {
         parse_navigation_request, parse_navigation_request_from, parse_root_command,
         path_boundary_clarify_text, root_status, update_selected_root_from,
     };
+    use crate::test_support::env_lock;
     use std::fs;
     use std::path::Path;
 
@@ -271,6 +272,7 @@ mod tests {
 
     #[test]
     fn infers_natural_roots_from_prompt() {
+        let _guard = env_lock();
         use super::infer_natural_root;
         let home = std::env::var_os("HOME")
             .map(std::path::PathBuf::from)
@@ -297,6 +299,7 @@ mod tests {
 
     #[test]
     fn parses_navigation_requests_as_persistent_roots() {
+        let _guard = env_lock();
         let home = std::env::var_os("HOME")
             .map(std::path::PathBuf::from)
             .unwrap();

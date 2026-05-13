@@ -109,7 +109,7 @@ def assert_not_legacy_handoff(screen):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--binary", default=None, help="DeepSeek binary to test.")
-    parser.add_argument("--name", default="deepseek")
+    parser.add_argument("--name", default="deepseek-arkey")
     args = parser.parse_args()
 
     binary = resolve_binary(args.name, args.binary)
