@@ -26,7 +26,7 @@ const MAX_REDIRECTS: usize = 5;
 const SEARCH_CONTEXT_CAP: usize = 8_000;
 const FETCH_CONTEXT_CAP: usize = 12_000;
 const USER_AGENT_VALUE: &str =
-    "deepseek-arkey/0.1 (+https://github.com/JulianAbeleda/deepseek-cli)";
+    "deepseek-arkey/0.1 (+https://github.com/JulianAbeleda/deepseek-arkey)";
 const BRAVE_API_KEY_SETUP_HELP: &str = r#"Brave Search API key is not set.
 
 For troubleshooting, you can share this message with an AI provider or support
