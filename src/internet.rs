@@ -8,7 +8,10 @@ use reqwest::Url;
 use serde::Deserialize;
 use serde_json::json;
 
+use crate::features;
+use crate::provider;
 use crate::provider::{system_message, Message};
+use crate::runtime;
 use crate::safety::cap_text;
 
 const BRAVE_SEARCH_ENDPOINT: &str = "https://api.search.brave.com/res/v1/web/search";
@@ -62,10 +65,14 @@ impl SearchProvider {
         }
     }
 
-    fn from_env() -> Result<Self, String> {
-        let value =
-            std::env::var("DEEPSEEK_SEARCH_PROVIDER").unwrap_or_else(|_| "brave".to_string());
-        Self::parse(&value)
+    fn active() -> Result<Self, String> {
+        let runtime_state = runtime::load(provider::DEFAULT_MODEL)?;
+        let env_value = std::env::var("DEEPSEEK_SEARCH_PROVIDER").ok();
+        let provider = features::active_search_provider(
+            runtime_state.search_provider.as_deref(),
+            env_value.as_deref(),
+        );
+        Self::parse(&provider)
     }
 
     fn name(self) -> &'static str {
@@ -209,7 +216,7 @@ pub(crate) fn web_context_message_for_prompt_lossy(
 }
 
 fn web_search(query: &str, max_results: usize) -> Result<SearchResponse, String> {
-    match SearchProvider::from_env()? {
+    match SearchProvider::active()? {
         SearchProvider::Brave => brave_search(query, max_results),
         SearchProvider::Tavily => tavily_search(query, max_results),
     }
@@ -736,10 +743,17 @@ mod tests {
     }
 
     #[test]
-    fn search_provider_defaults_to_brave_from_env() {
+    fn search_provider_defaults_to_brave_without_runtime_or_env() {
         let _guard = env_lock();
+        let home = tempfile::tempdir().unwrap();
+        let old_home = std::env::var_os("HOME");
+        std::env::set_var("HOME", home.path());
         std::env::remove_var("DEEPSEEK_SEARCH_PROVIDER");
-        assert_eq!(SearchProvider::from_env().unwrap(), SearchProvider::Brave);
+        assert_eq!(SearchProvider::active().unwrap(), SearchProvider::Brave);
+        match old_home {
+            Some(home) => std::env::set_var("HOME", home),
+            None => std::env::remove_var("HOME"),
+        }
     }
 
     #[test]

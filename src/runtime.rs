@@ -24,6 +24,8 @@ pub struct RuntimeState {
     pub model: Option<String>,
     #[serde(default)]
     pub legacy_routing: bool,
+    #[serde(default)]
+    pub search_provider: Option<String>,
     pub updated_at: u64,
 }
 
@@ -34,6 +36,7 @@ impl RuntimeState {
             runtime: "terminal".to_string(),
             model,
             legacy_routing: false,
+            search_provider: None,
             updated_at: unix_timestamp(),
         }
     }
@@ -52,6 +55,12 @@ impl RuntimeState {
 
     pub fn with_legacy_routing(mut self, enabled: bool) -> Self {
         self.legacy_routing = enabled;
+        self.updated_at = unix_timestamp();
+        self
+    }
+
+    pub fn with_search_provider(mut self, provider: impl Into<String>) -> Self {
+        self.search_provider = Some(provider.into());
         self.updated_at = unix_timestamp();
         self
     }
@@ -112,6 +121,15 @@ pub fn set_legacy_routing(default_model: &str, enabled: bool) -> Result<RuntimeS
     Ok(state)
 }
 
+pub fn set_search_provider(
+    default_model: &str,
+    provider: impl Into<String>,
+) -> Result<RuntimeState, String> {
+    let state = load(default_model)?.with_search_provider(provider);
+    save(&state)?;
+    Ok(state)
+}
+
 pub fn debug_result(model: &str, mode: Option<&str>, json: bool) -> Result<String, String> {
     let state = match mode {
         Some(mode) => {
@@ -148,7 +166,7 @@ pub fn format_runtime_state(state: &RuntimeState, fallback_model: &str) -> Strin
         RuntimeBackend::Debug => "debug",
     };
     format!(
-        "LLM: {backend}\nRuntime: {}\nModel: {}\nRouting: {}\nUpdated: {}\n",
+        "LLM: {backend}\nRuntime: {}\nModel: {}\nRouting: {}\nSearch: {}\nUpdated: {}\n",
         state.runtime,
         state.model.as_deref().unwrap_or(fallback_model),
         if state.legacy_routing {
@@ -156,6 +174,7 @@ pub fn format_runtime_state(state: &RuntimeState, fallback_model: &str) -> Strin
         } else {
             "model-decided"
         },
+        state.search_provider.as_deref().unwrap_or("env/default"),
         state.updated_at
     )
 }
@@ -210,5 +229,18 @@ mod tests {
         let state = RuntimeState::provider(Some("deepseek-v4-flash".to_string()));
         assert!(!state.legacy_routing);
         assert!(state.with_legacy_routing(true).legacy_routing);
+    }
+
+    #[test]
+    fn search_provider_defaults_unset_and_can_be_set() {
+        let state = RuntimeState::provider(Some("deepseek-v4-flash".to_string()));
+        assert_eq!(state.search_provider, None);
+        assert_eq!(
+            state
+                .with_search_provider("tavily")
+                .search_provider
+                .as_deref(),
+            Some("tavily")
+        );
     }
 }

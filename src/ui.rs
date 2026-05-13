@@ -40,6 +40,7 @@ pub fn print_help(model: &str) {
     print_line("  /model <id>         Switch model for this active session");
     print_line("  /status             Show active session details");
     print_line("  /features           Show API-backed feature availability");
+    print_line("  /features toggle    Switch Brave/Tavily search provider");
     print_line("  /runtime            Show provider/debug runtime state");
     print_line("  /runtime legacy-routing on|off");
     print_line("                      Toggle legacy deterministic routing");
@@ -77,7 +78,7 @@ pub fn print_model_set(model: &str) {
 
 pub fn interactive_help(model: &str) -> String {
     format!(
-        "DeepSeek Chat Commands\nWorkspace\n  /root               Show active workspace root\n  /root <path>        Set workspace root for routed agent tasks\n  /root clear         Return to cwd-based root detection\n\nSession\n  /model              Show or switch DeepSeek model\n  /model <id>         Switch model for this active session\n  /status             Show active session details\n  /features           Show API-backed feature availability\n  /runtime            Show provider/debug runtime state\n  /runtime legacy-routing on|off\n                      Toggle legacy deterministic routing\n  /debug [on|off]     Toggle local debug backend\n  /agent              Switch to workspace agent mode\n  /agent <task>       Run one agent task from chat mode\n  /end                End the current session and clear context\n\nGeneral\n  ? or /help          Show this help\n  /exit               Exit without clearing context\n\nShell\n  mode                chat\n  model               {model}\n"
+        "DeepSeek Chat Commands\nWorkspace\n  /root               Show active workspace root\n  /root <path>        Set workspace root for routed agent tasks\n  /root clear         Return to cwd-based root detection\n\nSession\n  /model              Show or switch DeepSeek model\n  /model <id>         Switch model for this active session\n  /status             Show active session details\n  /features           Show API-backed feature availability\n  /features toggle    Switch Brave/Tavily search provider\n  /runtime            Show provider/debug runtime state\n  /runtime legacy-routing on|off\n                      Toggle legacy deterministic routing\n  /debug [on|off]     Toggle local debug backend\n  /agent              Switch to workspace agent mode\n  /agent <task>       Run one agent task from chat mode\n  /end                End the current session and clear context\n\nGeneral\n  ? or /help          Show this help\n  /exit               Exit without clearing context\n\nShell\n  mode                chat\n  model               {model}\n"
     )
 }
 
@@ -90,7 +91,7 @@ pub fn model_help(model: &str) -> String {
 
 pub fn agent_help(model: &str, root: &Path) -> String {
     format!(
-        "DeepSeek Agent Commands\nWorkspace\n  root                {}\n  read tools          list_files, read_file, search_files, inspect_tree\n  web tools           web_search, fetch_url\n  shell               requires yes run\n  edits               require yes apply\n\nSession\n  /chat               Switch to plain chat mode\n  /model              Show or switch DeepSeek model\n  /model <id>         Switch model for this active session\n  /status             Show mode, root, model, and session details\n  /features           Show API-backed feature availability\n  /runtime            Show provider/debug runtime state\n  /runtime legacy-routing on|off\n                      Toggle legacy deterministic routing\n  /debug [on|off]     Toggle local debug backend\n  /end                End the current session and clear context\n\nGeneral\n  ? or /help          Show this help\n  /exit               Exit without clearing context\n\nShell\n  mode                agent\n  model               {model}\n",
+        "DeepSeek Agent Commands\nWorkspace\n  root                {}\n  read tools          list_files, read_file, search_files, inspect_tree\n  web tools           web_search, fetch_url\n  shell               requires yes run\n  edits               require yes apply\n\nSession\n  /chat               Switch to plain chat mode\n  /model              Show or switch DeepSeek model\n  /model <id>         Switch model for this active session\n  /status             Show mode, root, model, and session details\n  /features           Show API-backed feature availability\n  /features toggle    Switch Brave/Tavily search provider\n  /runtime            Show provider/debug runtime state\n  /runtime legacy-routing on|off\n                      Toggle legacy deterministic routing\n  /debug [on|off]     Toggle local debug backend\n  /end                End the current session and clear context\n\nGeneral\n  ? or /help          Show this help\n  /exit               Exit without clearing context\n\nShell\n  mode                agent\n  model               {model}\n",
         root.display()
     )
 }

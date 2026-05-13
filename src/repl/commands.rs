@@ -8,6 +8,12 @@ pub(super) enum RuntimeCommand {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum FeaturesCommand {
+    Show,
+    Toggle,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum CommandParse<T> {
     NotACommand,
     Valid(T),
@@ -17,6 +23,7 @@ pub(super) enum CommandParse<T> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum CommandError {
     UnknownRuntimeCommand,
+    UnknownFeaturesCommand,
 }
 
 impl CommandError {
@@ -24,6 +31,9 @@ impl CommandError {
         match self {
             Self::UnknownRuntimeCommand => {
                 "unknown runtime command; use /runtime or /runtime legacy-routing <on|off>"
+            }
+            Self::UnknownFeaturesCommand => {
+                "unknown features command; use /features or /features toggle"
             }
         }
     }
@@ -36,7 +46,7 @@ pub(super) enum ChatCommand<'a> {
     SwitchToAgent,
     DirectAgentTask(&'a str),
     Status,
-    Features,
+    Features(FeaturesCommand),
     Root(Option<&'a str>),
     Runtime(RuntimeCommand),
     Debug(Option<&'a str>),
@@ -67,8 +77,10 @@ pub(super) fn parse_chat_command(prompt: &str) -> CommandParse<ChatCommand<'_>> 
     if prompt == "/status" {
         return CommandParse::Valid(ChatCommand::Status);
     }
-    if prompt == "/features" {
-        return CommandParse::Valid(ChatCommand::Features);
+    match parse_features_command(prompt) {
+        Ok(Some(command)) => return CommandParse::Valid(ChatCommand::Features(command)),
+        Ok(None) => {}
+        Err(error) => return CommandParse::Invalid(error),
     }
     if let Some(root) = parse_root_command(prompt) {
         return CommandParse::Valid(ChatCommand::Root(root));
@@ -85,6 +97,21 @@ pub(super) fn parse_chat_command(prompt: &str) -> CommandParse<ChatCommand<'_>> 
         return CommandParse::Valid(ChatCommand::Model(model));
     }
     CommandParse::NotACommand
+}
+
+pub(super) fn parse_features_command(
+    prompt: &str,
+) -> Result<Option<FeaturesCommand>, CommandError> {
+    if prompt == "/features" {
+        return Ok(Some(FeaturesCommand::Show));
+    }
+    let Some(args) = prompt.strip_prefix("/features ") else {
+        return Ok(None);
+    };
+    match args.trim() {
+        "toggle" => Ok(Some(FeaturesCommand::Toggle)),
+        _ => Err(CommandError::UnknownFeaturesCommand),
+    }
 }
 
 pub(super) fn parse_agent_task_command(prompt: &str) -> Option<&str> {
@@ -165,8 +192,8 @@ pub(super) fn is_end_command(prompt: &str) -> bool {
 mod tests {
     use super::{
         is_end_command, is_exit_command, parse_chat_command, parse_debug_command,
-        parse_model_command, parse_runtime_command, ChatCommand, CommandError, CommandParse,
-        RuntimeCommand,
+        parse_features_command, parse_model_command, parse_runtime_command, ChatCommand,
+        CommandError, CommandParse, FeaturesCommand, RuntimeCommand,
     };
 
     #[test]
@@ -244,7 +271,15 @@ mod tests {
     fn parses_features_slash_command() {
         assert_eq!(
             parse_chat_command("/features"),
-            CommandParse::Valid(ChatCommand::Features)
+            CommandParse::Valid(ChatCommand::Features(FeaturesCommand::Show))
+        );
+        assert_eq!(
+            parse_chat_command("/features toggle"),
+            CommandParse::Valid(ChatCommand::Features(FeaturesCommand::Toggle))
+        );
+        assert_eq!(
+            parse_features_command("/features unknown"),
+            Err(CommandError::UnknownFeaturesCommand)
         );
     }
 }

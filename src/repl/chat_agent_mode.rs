@@ -96,8 +96,14 @@ pub(super) fn run_interactive_agent(model: &str, temperature: Option<f32>) -> Re
                     print!("{}", interactive_agent_status(&current_model, &root)?);
                     continue;
                 }
-                commands::ChatCommand::Features => {
-                    println!("{}", features::features_dashboard());
+                commands::ChatCommand::Features(command) => {
+                    let output = match command {
+                        commands::FeaturesCommand::Show => features::features_dashboard(),
+                        commands::FeaturesCommand::Toggle => {
+                            features::toggle_search_provider(&current_model)?
+                        }
+                    };
+                    println!("{output}");
                     continue;
                 }
                 commands::ChatCommand::Runtime(command) => {

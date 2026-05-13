@@ -143,8 +143,14 @@ fn run_interactive_chat(model: &str, temperature: Option<f32>, stream: bool) -> 
                     ui::print_status(&current_model)?;
                     continue;
                 }
-                commands::ChatCommand::Features => {
-                    println!("{}", features::features_dashboard());
+                commands::ChatCommand::Features(command) => {
+                    let output = match command {
+                        commands::FeaturesCommand::Show => features::features_dashboard(),
+                        commands::FeaturesCommand::Toggle => {
+                            features::toggle_search_provider(&current_model)?
+                        }
+                    };
+                    println!("{output}");
                     continue;
                 }
                 commands::ChatCommand::Root(_) => {
@@ -445,8 +451,15 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
                     composer.print_above(&output)?;
                     continue;
                 }
-                commands::ChatCommand::Features => {
-                    composer.print_above(&features::features_dashboard())?;
+                commands::ChatCommand::Features(command) => {
+                    let output = match command {
+                        commands::FeaturesCommand::Show => features::features_dashboard(),
+                        commands::FeaturesCommand::Toggle => {
+                            features::toggle_search_provider(&current_model)?
+                        }
+                    };
+                    runtime_state = runtime::load(&current_model)?;
+                    composer.print_above(&output)?;
                     continue;
                 }
                 commands::ChatCommand::Debug(mode) => {
