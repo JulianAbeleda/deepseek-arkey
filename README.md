@@ -28,6 +28,17 @@ Do not store API keys in this folder. Put secrets in your shell environment and 
 
 ## Quick Start
 
+With Homebrew:
+
+```bash
+brew install JulianAbeleda/tap/deepseek-arkey
+export DEEPSEEK_API_KEY="your_deepseek_api_key"
+deepseek-arkey login
+deepseek-arkey
+```
+
+From source:
+
 ```bash
 cargo build --release
 cp target/release/deepseek-arkey ~/.local/bin/deepseek-arkey
@@ -36,8 +47,8 @@ export DEEPSEEK_API_KEY="your_deepseek_api_key"
 deepseek-arkey login
 ```
 
-Make sure `~/.local/bin` is on `PATH`. The `deepseek` binary is kept as a
-compatibility alias.
+For source installs, make sure `~/.local/bin` is on `PATH`. The `deepseek`
+binary is kept as a compatibility alias.
 
 For zsh persistence:
 
