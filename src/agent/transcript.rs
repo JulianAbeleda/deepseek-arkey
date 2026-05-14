@@ -20,7 +20,11 @@ pub(super) fn write_transcript(
     entries: &[TranscriptEntry],
 ) -> Result<PathBuf, String> {
     let dir = transcript_dir(root);
-    let path = dir.join(format!("{}.json", unix_timestamp()));
+    let path = dir.join(format!(
+        "{}-{}.json",
+        unix_timestamp_nanos(),
+        std::process::id()
+    ));
     let entries = capped_entries(entries);
     let bytes = serde_json::to_vec_pretty(&entries).map_err(|err| err.to_string())?;
     atomic_write(&path, &bytes).map_err(|err| err.to_string())?;
@@ -53,7 +57,7 @@ pub(super) fn read_latest_transcript(
         .map(|entry| entry.path())
         .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("json"))
         .collect::<Vec<_>>();
-    entries.sort();
+    entries.sort_by(compare_transcript_paths);
     let Some(path) = entries.pop() else {
         return Ok(None);
     };
@@ -89,9 +93,26 @@ fn migrate_transcripts_if_needed(new_dir: &Path, old_dir: &Path) -> Result<(), S
     Ok(())
 }
 
-fn unix_timestamp() -> u64 {
+fn compare_transcript_paths(left: &PathBuf, right: &PathBuf) -> std::cmp::Ordering {
+    match (
+        transcript_numeric_prefix(left),
+        transcript_numeric_prefix(right),
+    ) {
+        (Some(left), Some(right)) => left.cmp(&right),
+        _ => left.cmp(right),
+    }
+}
+
+fn transcript_numeric_prefix(path: &Path) -> Option<u128> {
+    path.file_stem()
+        .and_then(|stem| stem.to_str())
+        .and_then(|stem| stem.split('-').next())
+        .and_then(|prefix| prefix.parse::<u128>().ok())
+}
+
+fn unix_timestamp_nanos() -> u128 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_secs())
+        .map(|duration| duration.as_nanos())
         .unwrap_or_default()
 }

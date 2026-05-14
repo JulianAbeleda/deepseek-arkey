@@ -177,6 +177,18 @@ fn parses_openai_style_final_content() {
 }
 
 #[test]
+fn parses_first_balanced_json_before_trailing_prose() {
+    let decision = parse_decision(
+        r#"```json
+{"content":"done","tool_calls":null}
+```
+extra prose"#,
+    )
+    .unwrap();
+    assert_eq!(decision.final_answer.as_deref(), Some("done"));
+}
+
+#[test]
 fn parses_common_final_answer_aliases() {
     let decision = parse_decision(r#"{"answer":"done"}"#).unwrap();
     assert_eq!(decision.final_answer.as_deref(), Some("done"));
@@ -1144,6 +1156,89 @@ fn reads_latest_transcript() {
         fs::canonicalize(&newer).unwrap()
     );
     assert!(latest.1.contains("newer"));
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn writes_multiple_transcripts_without_same_second_collision() {
+    let root = std::env::temp_dir().join(format!(
+        "deepseek-agent-transcript-collision-test-{}",
+        std::process::id()
+    ));
+    fs::create_dir_all(&root).unwrap();
+    let first = write_transcript(
+        &root,
+        &[TranscriptEntry {
+            role: "task".to_string(),
+            content: "first".to_string(),
+        }],
+    )
+    .unwrap();
+    let second = write_transcript(
+        &root,
+        &[TranscriptEntry {
+            role: "task".to_string(),
+            content: "second".to_string(),
+        }],
+    )
+    .unwrap();
+    assert_ne!(first, second);
+    assert!(first.exists());
+    assert!(second.exists());
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn reads_latest_transcript_by_numeric_prefix() {
+    let root = std::env::temp_dir().join(format!(
+        "deepseek-agent-numeric-latest-transcript-test-{}",
+        std::process::id()
+    ));
+    let dir = root.join(PROVIDER_STATE_DIR).join("agent-transcripts");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(
+        dir.join("20.json"),
+        r#"[{"role":"task","content":"older"}]"#,
+    )
+    .unwrap();
+    fs::write(
+        dir.join("100.json"),
+        r#"[{"role":"task","content":"newer"}]"#,
+    )
+    .unwrap();
+
+    let latest = super::read_latest_transcript(root.clone())
+        .unwrap()
+        .unwrap();
+    assert_eq!(latest.0.file_name().unwrap(), "100.json");
+    assert!(latest.1.contains("newer"));
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn reads_latest_transcript_tolerates_non_numeric_names() {
+    let root = std::env::temp_dir().join(format!(
+        "deepseek-agent-nonnumeric-latest-transcript-test-{}",
+        std::process::id()
+    ));
+    let dir = root.join(PROVIDER_STATE_DIR).join("agent-transcripts");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(
+        dir.join("backup.json"),
+        r#"[{"role":"task","content":"backup"}]"#,
+    )
+    .unwrap();
+    fs::write(
+        dir.join("manual.json"),
+        r#"[{"role":"task","content":"manual"}]"#,
+    )
+    .unwrap();
+
+    let latest = super::read_latest_transcript(root.clone())
+        .unwrap()
+        .unwrap();
+    assert_eq!(latest.0.file_name().unwrap(), "manual.json");
+    assert!(latest.1.contains("manual"));
     let _ = fs::remove_dir_all(root);
 }
 

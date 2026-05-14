@@ -277,7 +277,10 @@ fn extract_json_object(text: &str) -> Option<&str> {
         }
     }
     let end = text.rfind('}')?;
-    (start < end).then_some(&text[start..=end])
+    text[end + 1..]
+        .trim()
+        .is_empty()
+        .then_some(&text[start..=end])
 }
 
 fn normalize_decision(
