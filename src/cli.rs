@@ -5,6 +5,7 @@ use crate::agent::DEFAULT_MAX_STEPS;
 #[derive(Debug, Parser)]
 #[command(name = "deepseek-arkey")]
 #[command(about = "Standalone Arkey terminal CLI for DeepSeek")]
+#[command(version)]
 pub struct Args {
     #[command(subcommand)]
     pub command: Option<Command>,
@@ -118,5 +119,12 @@ mod tests {
             Some(Command::Agent { final_only, .. }) => assert!(!final_only),
             other => panic!("expected agent command, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn exposes_package_version_flag() {
+        let err = Args::try_parse_from(["deepseek", "--version"]).unwrap_err();
+
+        assert_eq!(err.kind(), clap::error::ErrorKind::DisplayVersion);
     }
 }
