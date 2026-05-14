@@ -1,5 +1,40 @@
 # Changelog
 
+This changelog tracks public release notes. Older `Phase` entries are internal
+development milestones and may not represent every implementation phase.
+
+## v1.3.0 - Dock Stability and Direct Agent Routing
+
+Summary:
+
+- Removed the legacy `route: agent task` confirmation popup. Declarative
+  workspace tasks now route directly into agent execution after root and path
+  checks.
+- Kept shell and write actions behind the dock approval gate, making tool
+  approval the source of permissions.
+- Stabilized progress dock rendering by buffering dock updates and redrawing
+  only when progress text changes.
+- Hardened agent transcript storage with collision-resistant filenames and
+  numeric latest-transcript sorting.
+- Made streaming provider calls cancellation-aware.
+- Tightened agent JSON extraction so trailing prose no longer breaks otherwise
+  valid decisions.
+- Released package and Homebrew tap as `v1.3.0`.
+
+Validation:
+
+```bash
+cargo fmt --check
+cargo check
+cargo test --offline
+cargo build --release
+python3 scripts/phase11-docked-routing-smoke.py --binary target/release/deepseek-arkey
+python3 scripts/phase12-dock-approval-smoke.py --binary target/release/deepseek-arkey
+python3 scripts/phase15-progress-dock-smoke.py --binary target/release/deepseek-arkey
+python3 scripts/phase16-dock-cancel-smoke.py --binary target/release/deepseek-arkey
+./scripts/persistent-navigation-test.sh
+```
+
 ## Phase 17 - Internet Tools
 
 Addendum:
