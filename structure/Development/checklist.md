@@ -227,7 +227,7 @@ Validation notes:
 
 ## Phase 12: Dock-Native Approval First Slice
 
-- Scope: `docs/phase12-dock-approval-scope.md`
+- Scope: `docs/development/phase12-dock-approval-scope.md`
 - Handoff: local ignored development note.
 - [x] Implement dock-native approval requests in DeepSeek first.
 - [x] Preserve explicit agent mode `yes run` and `yes apply` prompts.
