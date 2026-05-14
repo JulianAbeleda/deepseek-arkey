@@ -38,6 +38,28 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
     })
 }
 
+pub fn migrate_file_if_missing(new_path: &Path, old_path: &Path) -> io::Result<()> {
+    if new_path.exists() || !old_path.exists() {
+        return Ok(());
+    }
+    let raw = fs::read(old_path)?;
+    atomic_write(new_path, &raw)
+}
+
+pub fn unix_timestamp_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or_default()
+}
+
+pub fn unix_timestamp_nanos() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default()
+}
+
 pub fn cap_text(text: &str, max_chars: usize) -> String {
     let mut capped: String = text.chars().take(max_chars).collect();
     if text.chars().count() > max_chars {
@@ -67,10 +89,7 @@ fn redact_token(token: &str) -> String {
 }
 
 fn unique_suffix() -> String {
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_nanos())
-        .unwrap_or_default();
+    let nanos = unix_timestamp_nanos();
     format!("{}-{nanos}", std::process::id())
 }
 

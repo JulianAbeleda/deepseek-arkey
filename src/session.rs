@@ -1,6 +1,5 @@
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
@@ -8,7 +7,7 @@ use crate::provider::{
     assistant_message, user_message, Message, OLD_PROVIDER_DIR, OLD_PROVIDER_STATE_DIR,
     PROVIDER_DIR, PROVIDER_STATE_DIR,
 };
-use crate::safety::atomic_write;
+use crate::safety::{atomic_write, migrate_file_if_missing, unix_timestamp_secs};
 
 const MAX_TURNS: usize = 20;
 const MAX_CHARS: usize = 40_000;
@@ -91,7 +90,7 @@ impl SessionState {
             provider: provider.to_string(),
             name: name.into(),
             model: model.into(),
-            updated_at: unix_timestamp(),
+            updated_at: unix_timestamp_secs(),
             messages: Vec::new(),
             selected_root: None,
             agent_root: None,
@@ -101,36 +100,36 @@ impl SessionState {
     pub fn push_turn(&mut self, user: String, assistant: String) {
         self.messages.push(user_message(user));
         self.messages.push(assistant_message(assistant));
-        self.updated_at = unix_timestamp();
+        self.updated_at = unix_timestamp_secs();
         self.cap_history();
     }
 
     #[cfg(test)]
     pub fn approve_agent_root(&mut self, root: &Path) -> Result<(), String> {
         self.agent_root = Some(PersistedRoot::from_path(root)?);
-        self.updated_at = unix_timestamp();
+        self.updated_at = unix_timestamp_secs();
         Ok(())
     }
 
     pub fn clear_agent_root(&mut self) {
         self.agent_root = None;
-        self.updated_at = unix_timestamp();
+        self.updated_at = unix_timestamp_secs();
     }
 
     pub fn select_root(&mut self, root: &Path) -> Result<(), String> {
         self.selected_root = Some(PersistedRoot::from_path(root)?);
-        self.updated_at = unix_timestamp();
+        self.updated_at = unix_timestamp_secs();
         Ok(())
     }
 
     pub fn clear_selected_root(&mut self) {
         self.selected_root = None;
-        self.updated_at = unix_timestamp();
+        self.updated_at = unix_timestamp_secs();
     }
 
     pub fn clear_messages(&mut self) {
         self.messages.clear();
-        self.updated_at = unix_timestamp();
+        self.updated_at = unix_timestamp_secs();
     }
 
     pub fn selected_root_path(&self) -> Option<PathBuf> {
@@ -219,15 +218,8 @@ fn save_to_path(path: &Path, state: &SessionState) -> Result<(), String> {
 }
 
 fn migrate_session_state_if_needed(path: &Path) -> Result<(), String> {
-    if path.exists() {
-        return Ok(());
-    }
     let old_path = old_session_path();
-    if !old_path.exists() {
-        return Ok(());
-    }
-    let raw = fs::read(&old_path).map_err(|err| err.to_string())?;
-    atomic_write(path, &raw).map_err(|err| err.to_string())
+    migrate_file_if_missing(path, &old_path).map_err(|err| err.to_string())
 }
 
 pub fn delete() -> Result<bool, String> {
@@ -248,13 +240,6 @@ fn total_chars(messages: &[Message]) -> usize {
         .iter()
         .map(|message| message.content.chars().count())
         .sum()
-}
-
-fn unix_timestamp() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_secs())
-        .unwrap_or_default()
 }
 
 #[cfg(test)]

@@ -1,14 +1,13 @@
 use std::fs;
 use std::path::PathBuf;
 use std::time::Duration;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
 use crate::provider::{
     OLD_PROVIDER_DIR, OLD_PROVIDER_STATE_DIR, PROVIDER, PROVIDER_DIR, PROVIDER_STATE_DIR,
 };
-use crate::safety::atomic_write;
+use crate::safety::{atomic_write, migrate_file_if_missing, unix_timestamp_secs};
 
 const DEBUG_STREAM_DELAY_ENV: &str = "DEEPSEEK_DEBUG_STREAM_DELAY_MS";
 
@@ -39,31 +38,31 @@ impl RuntimeState {
             model,
             legacy_routing: false,
             search_provider: None,
-            updated_at: unix_timestamp(),
+            updated_at: unix_timestamp_secs(),
         }
     }
 
     pub fn with_backend(mut self, backend: RuntimeBackend) -> Self {
         self.backend = backend;
-        self.updated_at = unix_timestamp();
+        self.updated_at = unix_timestamp_secs();
         self
     }
 
     pub fn with_model(mut self, model: impl Into<String>) -> Self {
         self.model = Some(model.into());
-        self.updated_at = unix_timestamp();
+        self.updated_at = unix_timestamp_secs();
         self
     }
 
     pub fn with_legacy_routing(mut self, enabled: bool) -> Self {
         self.legacy_routing = enabled;
-        self.updated_at = unix_timestamp();
+        self.updated_at = unix_timestamp_secs();
         self
     }
 
     pub fn with_search_provider(mut self, provider: impl Into<String>) -> Self {
         self.search_provider = Some(provider.into());
-        self.updated_at = unix_timestamp();
+        self.updated_at = unix_timestamp_secs();
         self
     }
 
@@ -123,15 +122,8 @@ pub fn save(state: &RuntimeState) -> Result<(), String> {
 }
 
 fn migrate_runtime_state_if_needed(path: &PathBuf) -> Result<(), String> {
-    if path.exists() {
-        return Ok(());
-    }
     let old_path = old_runtime_path();
-    if !old_path.exists() {
-        return Ok(());
-    }
-    let raw = fs::read(&old_path).map_err(|err| err.to_string())?;
-    atomic_write(path, &raw).map_err(|err| err.to_string())
+    migrate_file_if_missing(path, &old_path).map_err(|err| err.to_string())
 }
 
 pub fn set_backend(default_model: &str, backend: RuntimeBackend) -> Result<RuntimeState, String> {
@@ -216,13 +208,6 @@ pub fn debug_stream_delay() -> Option<Duration> {
         .and_then(|value| value.parse::<u64>().ok())
         .filter(|delay| *delay > 0)
         .map(Duration::from_millis)
-}
-
-fn unix_timestamp() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_secs())
-        .unwrap_or_default()
 }
 
 #[cfg(test)]

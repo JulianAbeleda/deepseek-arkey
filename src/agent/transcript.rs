@@ -1,11 +1,10 @@
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
 use crate::provider::{OLD_PROVIDER_STATE_DIR, PROVIDER_STATE_DIR};
-use crate::safety::{atomic_write, cap_text};
+use crate::safety::{atomic_write, cap_text, unix_timestamp_nanos};
 
 const MAX_TRANSCRIPT_ENTRY_CHARS: usize = 12_000;
 
@@ -108,11 +107,4 @@ fn transcript_numeric_prefix(path: &Path) -> Option<u128> {
         .and_then(|stem| stem.to_str())
         .and_then(|stem| stem.split('-').next())
         .and_then(|prefix| prefix.parse::<u128>().ok())
-}
-
-fn unix_timestamp_nanos() -> u128 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_nanos())
-        .unwrap_or_default()
 }
