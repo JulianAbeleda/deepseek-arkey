@@ -71,7 +71,7 @@ Normal chat prefetches web context for URL and current-info prompts, but continu
 
   Those are the standards this project is aiming for.
 
-  ## Maintenance Philosophy
+  ## Philosophy
 
   Another frustration I have with many AI-era repositories is maintenance discipline. Good projects can quickly become buried under commits, oversized scripts, and delayed refactors.
 
