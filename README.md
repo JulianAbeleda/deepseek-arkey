@@ -104,8 +104,6 @@ If you want a DeepSeek TUI where you stay in the loop and review what your AI is
 - [Coding Principles](./docs/development/coding-principles.md)
 - [编码原则（简体中文）](./docs/development/coding-principles.zh-CN.md)
 - [Commit Discipline](./docs/development/commit-discipline.md)
-- [Phase 11 Routing Audit](./docs/development/phase11-routing-audit.md)
-- [Phase 12 Dock Approval Scope](./docs/development/phase12-dock-approval-scope.md)
 
 ## License
 
