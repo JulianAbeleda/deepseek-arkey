@@ -1,11 +1,10 @@
 use super::commands::{is_end_command, is_exit_command, parse_agent_task_command};
 use super::{
-    agent_route_confirmation, approval_decision_for_choice, approval_grant, cap_interactive_memory,
-    context_scan_status, is_agent_task_cancel_choice, is_agent_task_choice,
-    is_workspace_agent_prompt, no_pending_agent_task_text, parse_shell_read_command,
+    approval_decision_for_choice, approval_grant, cap_interactive_memory, context_scan_status,
+    interactive_chat_status, is_workspace_agent_prompt, parse_shell_read_command,
     rendered_markdown_effective_stream_delay, rendered_markdown_stream_chunks, shell_pwd_text,
     task_root_for_prompt, terminal_stream_chunk_delay, workspace_agent_root_for_prompt,
-    ShellReadCommand,
+    ApprovalGrant, ShellReadCommand,
 };
 use crate::agent;
 use crate::input::ApprovalChoice;
@@ -229,34 +228,6 @@ fn rendered_markdown_effective_stream_delay_can_disable_or_skip_sleep() {
 }
 
 #[test]
-fn agent_task_choice_accepts_natural_confirmation_words() {
-    assert!(is_agent_task_choice("y"));
-    assert!(is_agent_task_choice("yes"));
-    assert!(is_agent_task_choice("yes agent"));
-    assert!(is_agent_task_choice("agent task"));
-    assert!(is_agent_task_choice("agent"));
-    assert!(!is_agent_task_choice("n"));
-    assert!(!is_agent_task_choice("/agent"));
-    assert!(!is_agent_task_choice("agent task please"));
-}
-
-#[test]
-fn agent_task_cancel_choice_accepts_short_negative_words() {
-    assert!(is_agent_task_cancel_choice("n"));
-    assert!(is_agent_task_cancel_choice("no"));
-    assert!(!is_agent_task_cancel_choice("y"));
-    assert!(!is_agent_task_cancel_choice("no thanks"));
-}
-
-#[test]
-fn agent_route_confirmation_points_to_short_choices() {
-    let response = agent_route_confirmation(Path::new("/tmp/workspace"));
-    assert!(response.contains("Type y to continue"));
-    assert!(response.contains("n to cancel"));
-    assert!(!response.contains("yes agent"));
-}
-
-#[test]
 fn parses_direct_agent_task_slash_command() {
     assert_eq!(
         parse_agent_task_command("/agent scan src"),
@@ -298,15 +269,6 @@ fn shell_pwd_prints_current_root() {
 }
 
 #[test]
-fn no_pending_agent_task_text_points_to_root_or_direct_agent() {
-    let response = no_pending_agent_task_text();
-    assert!(response.contains("No pending agent task to confirm"));
-    assert!(response.contains("/root <path>"));
-    assert!(response.contains("/agent <task>"));
-    assert!(response.contains("leading slash"));
-}
-
-#[test]
 fn interactive_memory_is_capped_in_process() {
     let mut memory = Vec::new();
     for index in 0..25 {
@@ -316,6 +278,22 @@ fn interactive_memory_is_capped_in_process() {
     cap_interactive_memory(&mut memory);
     assert_eq!(memory.len(), 40);
     assert_eq!(memory[0].content, "u5");
+}
+
+#[test]
+fn chat_status_reports_direct_agent_routing_and_tool_permissions() {
+    let output = interactive_chat_status(
+        "deepseek-v4-flash",
+        Some(Path::new("/tmp/workspace")),
+        true,
+        &HashSet::<ApprovalGrant>::new(),
+        0,
+    )
+    .unwrap();
+    assert!(output.contains("agent-routing: direct"));
+    assert!(output.contains("write-permission: confirm-required"));
+    assert!(output.contains("shell-permission: confirm-required"));
+    assert!(!output.contains("agent-session: confirm-required"));
 }
 
 #[test]

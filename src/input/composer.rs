@@ -357,29 +357,6 @@ impl DockedComposer {
         self.render()
     }
 
-    pub fn status_above(&mut self, text: &str) -> Result<(), String> {
-        let status_rows = self.status_rows;
-        let had_status = self.take_status_active();
-        let mut stdout = io::stdout();
-        if had_status {
-            clear_rows_above_dock(&mut stdout, self.active_dock_rows(), status_rows)?;
-        }
-        self.move_to_transcript_cursor(&mut stdout)?;
-        execute!(stdout, MoveToColumn(0), Clear(ClearType::CurrentLine))
-            .map_err(|err| err.to_string())?;
-        let lines = text.lines().collect::<Vec<_>>();
-        for (index, line) in lines.iter().enumerate() {
-            if index > 0 {
-                write!(stdout, "\r\n").map_err(|err| err.to_string())?;
-            }
-            write!(stdout, "{line}").map_err(|err| err.to_string())?;
-        }
-        stdout.flush().map_err(|err| err.to_string())?;
-        self.status_active = true;
-        self.status_rows = lines.len().max(1);
-        self.render_preserving_cursor()
-    }
-
     pub fn progress_dock(&mut self, text: &str) -> Result<(), String> {
         self.progress_rows = progress_panel_rows(text, terminal_width());
         self.hide_cursor()?;

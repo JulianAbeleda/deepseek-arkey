@@ -2,7 +2,7 @@ use super::*;
 use crate::features;
 
 pub(super) fn run_confirmed_agent_task(
-    task: &PendingAgentTask,
+    task: &AgentTask,
     model: &str,
     temperature: Option<f32>,
 ) -> Result<(), String> {

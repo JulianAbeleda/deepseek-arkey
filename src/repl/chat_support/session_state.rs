@@ -41,14 +41,6 @@ pub(in crate::repl::chat) fn update_active_session_model(model: &str) -> Result<
     session::save(&state)
 }
 
-pub(in crate::repl::chat) fn approve_session_agent_root(root: &Path) -> Result<(), String> {
-    let Some(mut state) = session::load()? else {
-        return Ok(());
-    };
-    state.approve_agent_root(root)?;
-    session::save(&state)
-}
-
 pub(in crate::repl::chat) fn clear_session_agent_root() -> Result<(), String> {
     let Some(mut state) = session::load()? else {
         return Ok(());
@@ -66,18 +58,4 @@ pub(in crate::repl::chat) fn save_selected_root(root: Option<&Path>) -> Result<(
         None => state.clear_selected_root(),
     }
     session::save(&state)
-}
-
-pub(in crate::repl::chat) fn agent_root_matches(approved: Option<&Path>, root: &Path) -> bool {
-    let Some(approved) = approved else {
-        return false;
-    };
-    paths_equal(approved, root)
-}
-
-pub(in crate::repl::chat) fn paths_equal(left: &Path, right: &Path) -> bool {
-    match (left.canonicalize(), right.canonicalize()) {
-        (Ok(left), Ok(right)) => left == right,
-        _ => left == right,
-    }
 }

@@ -26,13 +26,6 @@ pub(in crate::repl::chat) fn context_scan_status(
     lines.join("\n")
 }
 
-pub(in crate::repl::chat) fn agent_route_confirmation(root: &Path) -> String {
-    format!(
-        "route: agent task\nroot: {}\nRun this as an agent task?\nType y to continue, n to cancel, or /chat to keep chatting.\n",
-        root.display()
-    )
-}
-
 pub(in crate::repl::chat) fn clarify_route_text() -> String {
     "route: unclear\nDo you want chat analysis or an agent task?\nType /chat to discuss, /root <path> to choose a workspace, or /agent <task> to execute.\n".to_string()
 }
@@ -62,18 +55,6 @@ pub(in crate::repl::chat) fn shell_pwd_text(root: Option<&Path>) -> String {
         Some(root) => format!("{}\n", root.display()),
         None => "root: unset\n".to_string(),
     }
-}
-
-pub(in crate::repl::chat) fn no_pending_agent_task_text() -> String {
-    "route: unclear\nNo pending agent task to confirm.\nType /root <path> to choose a workspace, then repeat the task; or type /agent <task> with the leading slash to run one directly.\n".to_string()
-}
-
-pub(in crate::repl::chat) fn is_agent_task_choice(prompt: &str) -> bool {
-    matches!(prompt, "y" | "yes" | "yes agent" | "agent task" | "agent")
-}
-
-pub(in crate::repl::chat) fn is_agent_task_cancel_choice(prompt: &str) -> bool {
-    matches!(prompt, "n" | "no")
 }
 
 pub(in crate::repl::chat) fn task_root_for_prompt(

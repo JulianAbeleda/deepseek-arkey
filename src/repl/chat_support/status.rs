@@ -32,7 +32,6 @@ pub(in crate::repl::chat) fn interactive_chat_status(
     model: &str,
     root: Option<&Path>,
     explicit_root: bool,
-    approved_agent_root: Option<&Path>,
     session_approved_scopes: &HashSet<ApprovalGrant>,
     memory_turns: usize,
 ) -> Result<String, String> {
@@ -42,13 +41,7 @@ pub(in crate::repl::chat) fn interactive_chat_status(
         "chat-memory: process\nchat-turns: {memory_turns}\n"
     ));
     output.push_str(&root_status(root, explicit_root));
-    match approved_agent_root {
-        Some(root) => output.push_str(&format!(
-            "agent-session: allowed\nagent-root: {}\n",
-            root.display()
-        )),
-        None => output.push_str("agent-session: confirm-required\n"),
-    }
+    output.push_str("agent-routing: direct\n");
     if let Some(root) = root {
         let write = approval_status(root, ApprovalScope::Write, session_approved_scopes);
         let shell = approval_status(root, ApprovalScope::Shell, session_approved_scopes);

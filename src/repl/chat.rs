@@ -43,14 +43,14 @@ pub(crate) enum InteractiveMode {
     Chat,
 }
 
-struct PendingAgentTask {
-    prompt: String,
-    root: PathBuf,
-}
-
 struct InFlightTurn {
     receiver: Receiver<TurnEvent>,
     cancel: CancellationToken,
+}
+
+struct AgentTask {
+    prompt: String,
+    root: PathBuf,
 }
 
 struct PendingDockApproval {
@@ -137,7 +137,7 @@ fn run_interactive_chat(model: &str, temperature: Option<f32>, stream: bool) -> 
                             "agent task needs a workspace root; run from a project directory or use interactive /root <path>".to_string()
                         })?;
                     run_confirmed_agent_task(
-                        &PendingAgentTask {
+                        &AgentTask {
                             prompt: task.to_string(),
                             root,
                         },
@@ -223,10 +223,6 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
             current_model.clone(),
         ))?;
     }
-    let mut approved_agent_root = active_session
-        .as_ref()
-        .and_then(SessionState::agent_root_path)
-        .filter(|root| root.is_dir());
     let persisted_selected_root = active_session
         .as_ref()
         .and_then(SessionState::selected_root_path)
@@ -241,13 +237,11 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
     let mut context_scan_started: Option<Instant> = None;
     let mut queued = VecDeque::<String>::new();
     let mut memory = Vec::<Message>::new();
-    let mut pending_agent_task: Option<PendingAgentTask> = None;
     let mut pending_approval: Option<PendingDockApproval> = None;
     let mut session_approved_scopes = HashSet::<ApprovalGrant>::new();
     let mut active_tool_steps = Vec::<agent::AgentStep>::new();
     let mut last_progress_text = String::new();
-    let mut selected_root: Option<PathBuf> =
-        persisted_selected_root.or_else(|| approved_agent_root.clone());
+    let mut selected_root: Option<PathBuf> = persisted_selected_root;
     let mut previous_selected_root: Option<PathBuf> = None;
     let mut switch_to_agent = false;
     loop {
@@ -263,8 +257,8 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
                 if let Some(approval) = approval {
                     context_scan_started = None;
                     if session_approved_scopes.contains(&approval_grant(&approval.request)) {
-                        composer.status_above(&format!(
-                            "approval: auto-approved {} for root",
+                        composer.print_above(&format!(
+                            "approval: auto-approved {} for root\n",
                             approval.request.scope.label()
                         ))?;
                         let _ = approval.reply.send(agent::ApprovalDecision::Approve);
@@ -387,7 +381,6 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
                     continue;
                 }
                 commands::ChatCommand::ChatMode => {
-                    pending_agent_task = None;
                     composer.print_above("mode: chat\n")?;
                     continue;
                 }
@@ -404,12 +397,10 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
                     }
                     let Some(root) = task_root_for_prompt(task, selected_root.as_deref()) else {
                         composer.print_above(&clarify_route_text())?;
-                        pending_agent_task = None;
                         continue;
                     };
                     if let Some(path) = path_boundary_violation(task, &root) {
                         composer.print_above(&path_boundary_clarify_text(&root, &path))?;
-                        pending_agent_task = None;
                         continue;
                     }
                     active_tool_steps.clear();
@@ -429,7 +420,6 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
                         &current_model,
                         effective_workspace_root(selected_root.as_deref()).as_deref(),
                         selected_root.is_some(),
-                        approved_agent_root.as_deref(),
                         &session_approved_scopes,
                         memory.len() / 2,
                     )?)?;
@@ -446,10 +436,8 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
                                         previous_selected_root = selected_root.clone();
                                     }
                                     selected_root = next_root;
-                                    approved_agent_root = None;
                                     clear_session_agent_root()?;
                                     save_selected_root(selected_root.as_deref())?;
-                                    pending_agent_task = None;
                                     root_status(
                                         effective_workspace_root(selected_root.as_deref())
                                             .as_deref(),
@@ -519,10 +507,8 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
             };
             previous_selected_root = selected_root.clone();
             selected_root = Some(previous_root);
-            approved_agent_root = None;
             clear_session_agent_root()?;
             save_selected_root(selected_root.as_deref())?;
-            pending_agent_task = None;
             composer.print_above(&root_status(selected_root.as_deref(), true))?;
             continue;
         }
@@ -532,10 +518,8 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
                     previous_selected_root = selected_root.clone();
                 }
                 selected_root = Some(root);
-                approved_agent_root = None;
                 clear_session_agent_root()?;
                 save_selected_root(selected_root.as_deref())?;
-                pending_agent_task = None;
                 composer.print_above(&root_status(selected_root.as_deref(), true))?;
                 continue;
             }
@@ -544,36 +528,6 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
                 composer.print_above(&format!("root error: {err}\n"))?;
                 continue;
             }
-        }
-        if is_agent_task_choice(prompt) {
-            if let Some(task) = pending_agent_task.take() {
-                approve_session_agent_root(&task.root)?;
-                composer.print_above(&format!(
-                    "agent task accepted\nroot: {}\npending: {}\n",
-                    task.root.display(),
-                    task.prompt
-                ))?;
-                active_tool_steps.clear();
-                last_progress_text.clear();
-                context_scan_started = Some(start_context_scan(&mut composer, &active_tool_steps)?);
-                in_flight = Some(spawn_agent_turn(
-                    task.prompt,
-                    task.root,
-                    current_model.clone(),
-                    temperature,
-                ));
-                continue;
-            }
-            composer.print_above(&no_pending_agent_task_text())?;
-            continue;
-        }
-        if is_agent_task_cancel_choice(prompt) {
-            if pending_agent_task.take().is_some() {
-                composer.print_above("agent task cancelled\nmode: chat\n")?;
-            } else {
-                composer.print_above(&no_pending_agent_task_text())?;
-            }
-            continue;
         }
         if let Some(command) = parse_shell_read_command(prompt) {
             match command {
@@ -590,15 +544,12 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
                     }
                     let Some(root) = effective_workspace_root(selected_root.as_deref()) else {
                         composer.print_above(&clarify_route_text())?;
-                        pending_agent_task = None;
                         continue;
                     };
                     if let Some(path) = path_boundary_violation(&task, &root) {
                         composer.print_above(&path_boundary_clarify_text(&root, &path))?;
-                        pending_agent_task = None;
                         continue;
                     }
-                    pending_agent_task = None;
                     active_tool_steps.clear();
                     last_progress_text.clear();
                     context_scan_started =
@@ -622,7 +573,6 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
             if let Some(root) = workspace_agent_root_for_prompt(prompt, selected_root.as_deref()) {
                 if let Some(path) = path_boundary_violation(prompt, &root) {
                     composer.print_above(&path_boundary_clarify_text(&root, &path))?;
-                    pending_agent_task = None;
                     continue;
                 }
             }
@@ -643,10 +593,8 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
         if let Some(root) = workspace_agent_root_for_prompt(prompt, selected_root.as_deref()) {
             if let Some(path) = path_boundary_violation(prompt, &root) {
                 composer.print_above(&path_boundary_clarify_text(&root, &path))?;
-                pending_agent_task = None;
                 continue;
             }
-            pending_agent_task = None;
             active_tool_steps.clear();
             last_progress_text.clear();
             context_scan_started = Some(start_context_scan(&mut composer, &active_tool_steps)?);
@@ -669,37 +617,24 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
                 let root = task_root_for_prompt(prompt, selected_root.as_deref());
                 let Some(root) = root else {
                     composer.print_above(&clarify_route_text())?;
-                    pending_agent_task = None;
                     continue;
                 };
                 if let Some(path) = path_boundary_violation(prompt, &root) {
                     composer.print_above(&path_boundary_clarify_text(&root, &path))?;
-                    pending_agent_task = None;
                     continue;
                 }
-                if agent_root_matches(approved_agent_root.as_deref(), &root) {
-                    pending_agent_task = None;
-                    active_tool_steps.clear();
-                    last_progress_text.clear();
-                    context_scan_started =
-                        Some(start_context_scan(&mut composer, &active_tool_steps)?);
-                    in_flight = Some(spawn_agent_turn(
-                        prompt.to_string(),
-                        root.clone(),
-                        current_model.clone(),
-                        temperature,
-                    ));
-                    continue;
-                }
-                pending_agent_task = Some(PendingAgentTask {
-                    prompt: prompt.to_string(),
-                    root: root.clone(),
-                });
-                composer.print_above(&agent_route_confirmation(&root))?;
+                active_tool_steps.clear();
+                last_progress_text.clear();
+                context_scan_started = Some(start_context_scan(&mut composer, &active_tool_steps)?);
+                in_flight = Some(spawn_agent_turn(
+                    prompt.to_string(),
+                    root,
+                    current_model.clone(),
+                    temperature,
+                ));
                 continue;
             }
             Intent::Clarify => {
-                pending_agent_task = None;
                 composer.print_above(&clarify_route_text())?;
                 continue;
             }

@@ -66,8 +66,9 @@ def run_prompt(binary, env, name, cwd, prompt, setup_commands=None):
         route_markers = [
             "debug/manual backend",
             "debug/manual agent backend",
-            "route: agent task",
             "route: unclear",
+            "context: scanning",
+            "diagnostic",
         ]
         if not setup_commands:
             route_markers.append("root-source: explicit")
@@ -92,7 +93,7 @@ def run_prompt(binary, env, name, cwd, prompt, setup_commands=None):
 def classify_output(text):
     if "debug/manual agent backend" in text:
         return "agent"
-    if "route: agent task" in text:
+    if "context: scanning" in text or "diagnostic" in text:
         return "agent"
     if "route: unclear" in text:
         return "clarify"
@@ -106,6 +107,14 @@ def classify_output(text):
 def path_visible(text, path):
     compact_text = "".join(text.split())
     return any(candidate in compact_text for candidate in {str(path), os.path.realpath(path)})
+
+
+def direct_agent_visible(text):
+    return (
+        "debug/manual agent backend" in text
+        or "context: scanning" in text
+        or "diagnostic" in text
+    )
 
 
 def check_case(binary, env, name, cwd, prompt, expected, root=None, setup_commands=None):
@@ -163,7 +172,7 @@ def check_persistent_navigation(binary, env, name, home, env_root, provider_repo
         ),
         (
             "fix this repo",
-            lambda text: "route: agent task" in text and path_visible(text, env_root),
+            lambda text: direct_agent_visible(text) and path_visible(text, env_root),
             "follow-up task uses env root",
         ),
         (
@@ -280,7 +289,7 @@ def main():
             (home, "the config is broken", "clarify", None, None),
             (home, "my files are a mess", "clarify", None, None),
             (home, "the tests are failing", "clarify", None, None),
-            (home, "agent task", "clarify", None, None),
+            (home, "agent task", "chat", None, None),
             (workspace, "the config is broken", "agent", workspace, None),
             (workspace, "this repo needs cleanup", "agent", workspace, None),
             (workspace, "the repo is broken", "agent", workspace, None),

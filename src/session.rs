@@ -105,6 +105,7 @@ impl SessionState {
         self.cap_history();
     }
 
+    #[cfg(test)]
     pub fn approve_agent_root(&mut self, root: &Path) -> Result<(), String> {
         self.agent_root = Some(PersistedRoot::from_path(root)?);
         self.updated_at = unix_timestamp();
@@ -136,6 +137,7 @@ impl SessionState {
         self.selected_root.as_ref().map(PersistedRoot::path)
     }
 
+    #[cfg(test)]
     pub fn agent_root_path(&self) -> Option<PathBuf> {
         self.agent_root.as_ref().map(PersistedRoot::path)
     }

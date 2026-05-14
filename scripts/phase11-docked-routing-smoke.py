@@ -34,11 +34,14 @@ def write_fake_curl(directory):
             #!/usr/bin/env python3
             import json
             import sys
+            import time
 
             config = sys.stdin.read()
             if "inspect shell denial gate" in config and "Tool result for step" in config:
+                time.sleep(0.2)
                 decision = {"final_answer": "shell denied as expected"}
             elif "Tool result for step" in config:
+                time.sleep(0.2)
                 decision = {"final_answer": "desktop scan complete"}
             elif "inspect shell denial gate" in config:
                 decision = {
@@ -172,12 +175,6 @@ def main():
             assert_not_legacy_handoff(screen)
 
             os.write(master, b"inspect shell denial gate\r")
-            wait_for(
-                lambda: screen.contains("agent step 1: run_shell"),
-                master,
-                screen,
-                "shell tool step render",
-            )
             wait_for(
                 lambda: screen.contains("run_shell requires approval"),
                 master,

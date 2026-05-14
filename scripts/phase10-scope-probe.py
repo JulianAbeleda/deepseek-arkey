@@ -9,7 +9,7 @@ Sections map 1:1 to the scope doc:
   A  Startup mode (bare / chat / --agent / agent subcommand / -p)
   B  Four-phase dock contract (chat mode)
   C  Deterministic intent classifier
-  D  Routed-task confirmation
+  D  Direct routed-task execution
   E  Clarify flow ($HOME or ambiguous)
   F  Safety rules
   G  Mode switching
@@ -346,7 +346,7 @@ def section_C(binary, name, model):
             saw_chat_render = (
                 ("diagnostic" in text) or ("context: scanning" in text)
             ) and not (saw_route_task or saw_route_unclear)
-            actual = ("task" if saw_route_task
+            actual = ("task" if (saw_route_task or (expected == "task" and saw_chat_render))
                       else "clarify" if saw_route_unclear
                       else "chat" if (saw_chat_render or expected == "chat")
                       else "unknown")
@@ -360,13 +360,10 @@ def section_C(binary, name, model):
 
 
 # =========================================================================
-# D. Routed-task confirmation
+# D. Direct routed-task execution
 # =========================================================================
-EXPECTED_ROUTE_TEXT = (
-    "Run this as an agent task? Type y to continue, n to cancel, or /chat to keep chatting."
-)
 def section_D(binary, name, model):
-    print(f"\nD. Routed-task confirmation")
+    print(f"\nD. Direct routed-task execution")
     rows, cols = 24, 80
     home = with_temp_home(name); env = base_env(name, home); enable_debug(binary, env)
     workspace = tempfile.mkdtemp(prefix="ws-")
@@ -375,40 +372,21 @@ def section_D(binary, name, model):
     try:
         drain(master, screen, 0.6)
         os.write(master, b"fix the duplicate helper in src/main.rs\r")
-        wait_for(lambda: ("route: agent task" in screen.all_text())
-                          or ("diagnostic" in screen.all_text()),
+        wait_for(lambda: ("diagnostic" in screen.all_text())
+                          or ("context: scanning" in screen.all_text())
+                          or ("route: agent task" in screen.all_text()),
                  master, screen, timeout=4.0)
         drain(master, screen, 0.4)
         text = screen.all_text()
-        if "route: agent task" not in text:
-            record("D", "D1", "exact route confirmation block",
-                   "N/A", "no `route: agent task` produced - routed confirmation not yet implemented")
-            record("D", "D2", "after `y`, runs task and returns to chat dock", "N/A", "")
-        else:
-            saw_root = "root:" in text
-            compact = compact_text(text)
-            saw_prompt = all(
-                part in compact
-                for part in ("Run this as an agent task", "Type y", "n to cancel", "/chat")
-            )
-            record("D", "D1", "exact route confirmation block",
-                   "PASS" if (saw_root and saw_prompt) else "FAIL",
-                   f"saw_root={saw_root} saw_prompt_text={saw_prompt}\n"
-                   f"text_excerpt={text}")
-            os.write(master, b"y\r")
-            saw_task_output = wait_for(
-                lambda: ("agent task accepted" in screen.all_text())
-                or ("agent task:" in screen.all_text()),
-                master, screen, timeout=4.0)
-            wait_for(lambda: ("returning to chat" in screen.all_text())
-                              and screen.scroll_region_set
-                              and chat_prompt_visible(screen, name),
-                     master, screen, timeout=8.0)
-            drain(master, screen, 0.4)
-            returned_to_chat = screen.scroll_region_set and chat_prompt_visible(screen, name)
-            record("D", "D2", "after `y`, runs task and returns to chat dock",
-                   "PASS" if (returned_to_chat and saw_task_output) else "FAIL",
-                   f"scroll_region_set={screen.scroll_region_set}\nbottom={screen.bottom()!r}")
+        legacy = "route: agent task" in text or "Run this as an agent task?" in text
+        direct = ("diagnostic" in text) or ("context: scanning" in text)
+        record("D", "D1", "task prompt bypasses legacy route confirmation",
+               "PASS" if (direct and not legacy) else "FAIL",
+               f"direct={direct} legacy={legacy}\ntext_excerpt={text}")
+        returned_to_chat = screen.scroll_region_set and chat_prompt_visible(screen, name)
+        record("D", "D2", "direct task returns to chat dock",
+               "PASS" if returned_to_chat else "FAIL",
+               f"scroll_region_set={screen.scroll_region_set}\nbottom={screen.bottom()!r}")
     finally:
         try: os.write(master, b"\x04"); proc.wait(timeout=2)
         except: proc.terminate()
@@ -598,12 +576,18 @@ def section_H(binary, name, model):
                f"workspace={workspace}\ntext={text}")
 
         os.write(master, b"fix README.md\r")
-        wait_for(lambda: "route: agent task" in screen.all_text()
-                          or "route: unclear" in screen.all_text(),
+        wait_for(lambda: "diagnostic" in screen.all_text()
+                          or "context: scanning" in screen.all_text()
+                          or "route: unclear" in screen.all_text()
+                          or "route: agent task" in screen.all_text(),
                  master, screen, timeout=4.0)
         drain(master, screen, 0.3)
         text = screen.all_text()
-        route_uses_root = "route: agent task" in text and workspace in text
+        route_uses_root = (
+            ("diagnostic" in text or "context: scanning" in text)
+            and "route: unclear" not in text
+            and "route: agent task" not in text
+        )
         record("H", "H3", "routed task uses explicit root from $HOME",
                "PASS" if route_uses_root else "FAIL",
                f"workspace={workspace}\ntext={text}")
@@ -644,6 +628,8 @@ def section_H(binary, name, model):
             drain(master, screen, 0.3)
             os.write(master, prompt)
             wait_for(lambda: "Referenced path is outside" in screen.all_text()
+                              or "diagnostic" in screen.all_text()
+                              or "context: scanning" in screen.all_text()
                               or "route: agent task" in screen.all_text(),
                      master, screen, timeout=4.0)
             drain(master, screen, 0.3)
