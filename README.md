@@ -119,6 +119,13 @@ If you want a DeepSeek TUI where you stay in the loop and review what your AI is
 - [编码原则（简体中文）](./docs/development/coding-principles.zh-CN.md)
 - [Commit Discipline](./docs/development/commit-discipline.md)
 
+## Changelog
+
+- `v1.3.0` adds direct agent routing, dock stability fixes, transcript hardening,
+  streaming cancellation, and the Homebrew tap release.
+- Read the full `v1.3.0` notes in the
+  [changelog](./CHANGELOG.md#v130---dock-stability-and-direct-agent-routing).
+
 ## License
 
 MIT. See [LICENSE](LICENSE).
