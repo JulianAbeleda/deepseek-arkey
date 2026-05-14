@@ -6,12 +6,7 @@ Standalone Rust CLI for using DeepSeek from the terminal, packaged as
 ## What This Is
 
 DeepSeek is an AI model provider. This project is an independent terminal client
-for talking to DeepSeek models from a local machine.
-
-A CLI, or command-line interface, is a tool you run from a terminal with commands
-like `deepseek-arkey -p "prompt"`. A TUI, or terminal user interface, is still terminal
-based, but it gives the session an interactive interface instead of only printing
-one command result at a time.
+for talking to DeepSeek models. 
 
 ## Quick Start
 
