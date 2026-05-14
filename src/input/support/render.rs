@@ -1,14 +1,14 @@
 use std::io::{self, Write};
 
 use crossterm::cursor::{MoveTo, MoveToColumn};
-use crossterm::execute;
 use crossterm::terminal::{Clear, ClearType};
+use crossterm::{execute, queue};
 
 use crate::terminal_width::{pad_display_width, wrap_plain_text};
 
 use crate::input::composer::{DOCK_HELP_TEXT, DOCK_RESERVED_ROWS, DOCK_VERTICAL_PADDING_ROWS};
 
-use super::layout::{clear_dock_rows, dock_row, set_output_scroll_region, terminal_width};
+use super::layout::{dock_row, set_output_scroll_region, terminal_width};
 use super::visible::{compose_dock_rows, truncate_display_text, visible_len, ComposedDockRows};
 
 pub(crate) fn render_line(prompt: &str, buffer: &str, cursor: usize) -> Result<(), String> {
@@ -51,9 +51,20 @@ pub(crate) fn render_dock_lines(
     let cursor_col = rows.cursor_col.min(terminal_width().saturating_sub(1));
     let mut stdout = io::stdout();
     set_output_scroll_region(display_lines.len())?;
-    clear_dock_rows(&mut stdout, display_lines.len().max(previous_rows))?;
+    // Queue all commands in one batch so the terminal receives a complete
+    // dock state in a single write rather than a clear-then-redraw sequence.
+    // Vacated rows (dock shrank) are cleared first; each active row is
+    // cleared immediately before its content is written so there is no
+    // visible blank intermediate state.
+    if previous_rows > display_lines.len() {
+        let old_first = dock_row().saturating_sub(previous_rows.saturating_sub(1) as u16);
+        for row in old_first..first_row {
+            queue!(stdout, MoveTo(0, row), Clear(ClearType::CurrentLine))
+                .map_err(|err| err.to_string())?;
+        }
+    }
     for (index, line) in display_lines.iter().enumerate() {
-        execute!(
+        queue!(
             stdout,
             MoveTo(0, first_row + index as u16),
             Clear(ClearType::CurrentLine)
@@ -61,7 +72,7 @@ pub(crate) fn render_dock_lines(
         .map_err(|err| err.to_string())?;
         write!(stdout, "{line}").map_err(|err| err.to_string())?;
     }
-    execute!(
+    queue!(
         stdout,
         MoveTo(cursor_col as u16, first_row + cursor_row as u16)
     )

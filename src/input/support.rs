@@ -15,9 +15,9 @@ pub(crate) use edit::{
 };
 #[allow(unused_imports)]
 pub(crate) use layout::{
-    clear_dock_rows, clear_rows_above_dock, clear_transient_rows, dock_row, output_row,
-    parse_forced_terminal_size, reset_output_scroll_region, set_output_scroll_region,
-    terminal_rows, terminal_width, transcript_view_height,
+    clear_rows_above_dock, clear_transient_rows, dock_row, output_row, parse_forced_terminal_size,
+    reset_output_scroll_region, set_output_scroll_region, terminal_rows, terminal_width,
+    transcript_view_height,
 };
 #[allow(unused_imports)]
 pub(crate) use render::{

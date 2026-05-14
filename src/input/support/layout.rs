@@ -46,19 +46,6 @@ pub(crate) fn transcript_view_height(reserved_bottom_lines: usize) -> usize {
     output_row(reserved_bottom_lines) as usize + 1
 }
 
-pub(crate) fn clear_dock_rows(stdout: &mut io::Stdout, rows: usize) -> Result<(), String> {
-    if rows == 0 {
-        return Ok(());
-    }
-    let rows = rows.min(DOCK_RESERVED_ROWS);
-    let first_row = dock_row().saturating_sub(rows.saturating_sub(1) as u16);
-    for row in first_row..=dock_row() {
-        execute!(stdout, MoveTo(0, row), Clear(ClearType::CurrentLine))
-            .map_err(|err| err.to_string())?;
-    }
-    Ok(())
-}
-
 pub(crate) fn clear_rows_above_dock(
     stdout: &mut io::Stdout,
     reserved_bottom_lines: usize,

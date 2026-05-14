@@ -43,10 +43,16 @@ def assert_source_contract(repo_root):
     repl_stream = repo_root / "src" / "repl" / "chat_support" / "stream.rs"
     input_composer = repo_root / "src" / "input" / "composer.rs"
 
-    progress_calls = numbered_lines(repl, "progress_dock(&context_scan_status")
+    # Accept either the old inline form or the deduplication-guard variable form.
+    progress_calls = (
+        numbered_lines(repl, "progress_dock(&context_scan_status")
+        or numbered_lines(repl, "context_scan_status(started, &active_tool_steps)")
+    )
     stale_calls = numbered_lines(repl, "status_above(&context_scan_status")
     progress_def = numbered_lines(input_composer, "pub fn progress_dock")
     progress_clear = numbered_lines(input_composer, "self.progress_rows.clear();")
+    progress_dedup = numbered_lines(repl, "last_progress_text")
+    progress_dedup_clear = numbered_lines(repl, "last_progress_text.clear();")
     paced_final = numbered_lines(repl_stream, "send_rendered_markdown_stream")
     eager_final = numbered_lines(repl_stream, "TurnEvent::Delta(render_terminal_markdown")
 
@@ -59,6 +65,10 @@ def assert_source_contract(repo_root):
         raise AssertionError("missing DockedComposer::progress_dock in src/input/composer.rs")
     if not progress_clear:
         raise AssertionError("missing progress_rows clear path in src/input/composer.rs")
+    if not progress_dedup:
+        raise AssertionError("missing progress dock deduplication guard in src/repl/chat.rs")
+    if not progress_dedup_clear:
+        raise AssertionError("missing progress dock deduplication reset in src/repl/chat.rs")
     if not paced_final:
         raise AssertionError("missing paced final markdown stream path in src/repl/chat_support/stream.rs")
     if eager_final:

@@ -245,6 +245,7 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
     let mut pending_approval: Option<PendingDockApproval> = None;
     let mut session_approved_scopes = HashSet::<ApprovalGrant>::new();
     let mut active_tool_steps = Vec::<agent::AgentStep>::new();
+    let mut last_progress_text = String::new();
     let mut selected_root: Option<PathBuf> =
         persisted_selected_root.or_else(|| approved_agent_root.clone());
     let mut previous_selected_root: Option<PathBuf> = None;
@@ -267,6 +268,7 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
                             approval.request.scope.label()
                         ))?;
                         let _ = approval.reply.send(agent::ApprovalDecision::Approve);
+                        last_progress_text.clear();
                         context_scan_started =
                             Some(start_context_scan(&mut composer, &active_tool_steps)?);
                     } else {
@@ -280,11 +282,13 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
                 }
                 if streamed {
                     context_scan_started = None;
+                    last_progress_text.clear();
                 }
                 if let Some(result) = result {
                     in_flight = None;
                     context_scan_started = None;
                     active_tool_steps.clear();
+                    last_progress_text.clear();
                     match result {
                         Ok((prompt, response)) => {
                             push_interactive_turn(&mut memory, prompt, response);
@@ -293,11 +297,13 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
                         Err(err) => {
                             composer.show_cursor()?;
                             composer.clear_progress_dock()?;
+                            last_progress_text.clear();
                             composer.print_above(&format!("error: {err}\n"))?;
                         }
                     }
                     if let Some(next) = queued.pop_front() {
                         active_tool_steps.clear();
+                        last_progress_text.clear();
                         context_scan_started =
                             Some(start_context_scan(&mut composer, &active_tool_steps)?);
                         in_flight = Some(spawn_docked_turn(
@@ -314,7 +320,11 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
         }
         if in_flight.is_some() && pending_approval.is_none() {
             if let Some(started) = context_scan_started {
-                composer.progress_dock(&context_scan_status(started, &active_tool_steps))?;
+                let status = context_scan_status(started, &active_tool_steps);
+                if status != last_progress_text {
+                    last_progress_text = status.clone();
+                    composer.progress_dock(&status)?;
+                }
             }
         }
         let Some(action) = composer.poll_action(Duration::from_millis(50))? else {
@@ -333,6 +343,7 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
                     choice,
                     &mut session_approved_scopes,
                 )?;
+                last_progress_text.clear();
                 context_scan_started = Some(start_context_scan(&mut composer, &active_tool_steps)?);
                 continue;
             }
@@ -343,6 +354,7 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
                     active_tool_steps.clear();
                     queued.clear();
                     composer.clear_progress_dock()?;
+                    last_progress_text.clear();
                     composer.finish_stream()?;
                     composer.print_above("cancelled current response\n")?;
                 }
@@ -401,6 +413,7 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
                         continue;
                     }
                     active_tool_steps.clear();
+                    last_progress_text.clear();
                     context_scan_started =
                         Some(start_context_scan(&mut composer, &active_tool_steps)?);
                     in_flight = Some(spawn_agent_turn(
@@ -541,6 +554,7 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
                     task.prompt
                 ))?;
                 active_tool_steps.clear();
+                last_progress_text.clear();
                 context_scan_started = Some(start_context_scan(&mut composer, &active_tool_steps)?);
                 in_flight = Some(spawn_agent_turn(
                     task.prompt,
@@ -586,6 +600,7 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
                     }
                     pending_agent_task = None;
                     active_tool_steps.clear();
+                    last_progress_text.clear();
                     context_scan_started =
                         Some(start_context_scan(&mut composer, &active_tool_steps)?);
                     in_flight = Some(spawn_agent_turn(
@@ -612,6 +627,7 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
                 }
             }
             active_tool_steps.clear();
+            last_progress_text.clear();
             context_scan_started = Some(start_context_scan(&mut composer, &active_tool_steps)?);
             in_flight = Some(spawn_docked_turn(
                 &memory,
@@ -632,6 +648,7 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
             }
             pending_agent_task = None;
             active_tool_steps.clear();
+            last_progress_text.clear();
             context_scan_started = Some(start_context_scan(&mut composer, &active_tool_steps)?);
             in_flight = Some(spawn_agent_turn(
                 prompt.to_string(),
@@ -663,6 +680,7 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
                 if agent_root_matches(approved_agent_root.as_deref(), &root) {
                     pending_agent_task = None;
                     active_tool_steps.clear();
+                    last_progress_text.clear();
                     context_scan_started =
                         Some(start_context_scan(&mut composer, &active_tool_steps)?);
                     in_flight = Some(spawn_agent_turn(
@@ -687,6 +705,7 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
             }
         }
         active_tool_steps.clear();
+        last_progress_text.clear();
         context_scan_started = Some(start_context_scan(&mut composer, &active_tool_steps)?);
         in_flight = Some(spawn_prompt_turn(
             &memory,
