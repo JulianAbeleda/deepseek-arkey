@@ -3,6 +3,8 @@
 Standalone Rust CLI for using DeepSeek from the terminal, packaged as
 `deepseek-arkey`.
 
+![DeepSeek boot demo](./docs/assets/deepseek_boot_demo.gif)
+
 ## What This Is
 
 DeepSeek is an AI model provider. This project is an independent terminal client
