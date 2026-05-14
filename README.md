@@ -13,6 +13,20 @@ For Mandarin-speaking users, a Simplified Chinese version is available here:
 DeepSeek is an AI model provider. This project is an independent terminal client
 for talking to DeepSeek models.
 
+## Prompting Model
+
+This version of DeepSeek Arkey encourages declarative prompts for agent actions.
+Direct statements such as `Write this in Python` or `Develop this code` are
+treated as action-oriented requests. Questions such as `Can you grade it?` are
+treated as requests to think, evaluate, or explain.
+
+The goal is to make prompting more token-efficient. Say what you want the agent
+to do when you want action. Ask a question when you want analysis.
+
+The main exception is current information. Prompts such as `What's the latest
+news?` can invoke internet retrieval because the answer depends on fresh
+external context.
+
 ## Installation
 
 With Homebrew:

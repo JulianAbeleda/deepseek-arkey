@@ -8,6 +8,14 @@
 
 DeepSeek 是一个 AI 模型提供商。本项目是一个独立的终端客户端，用来与 DeepSeek 模型对话。
 
+## 提示方式
+
+这个版本的 DeepSeek Arkey 鼓励用声明式提示来触发 agent 行动。像 `Write this in Python` 或 `Develop this code` 这样的直接陈述，会被视为面向行动的请求。像 `Can you grade it?` 这样的问题，会被视为思考、评估或解释请求。
+
+目标是让提示更节省 token。想让 agent 行动时，直接说要它做什么。想要分析时，再用问题来询问。
+
+主要例外是实时信息。像 `What's the latest news?` 这样的提示可以触发互联网检索，因为答案依赖最新的外部上下文。
+
 ## 安装
 
 通过 Homebrew 安装：
