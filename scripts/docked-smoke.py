@@ -57,6 +57,14 @@ def main():
                 proc.wait(timeout=2)
                 print(f"{args.name} switch docked smoke: ok")
                 return
+            os.write(master, b"/")
+            wait_for(lambda: dock_contains(screen, "/chat"), master, screen, "slash command panel")
+            if screen.row != ROWS - 2:
+                raise AssertionError(
+                    f"slash command cursor left prompt row: row={screen.row}\n{screen.dump()}"
+                )
+            os.write(master, b"\x03")
+            wait_for(lambda: dock_idle_prompt(screen, args.name), master, screen, "clear slash panel")
             os.write(master, b"/sta\t")
             wait_for(lambda: dock_contains(screen, "/status"), master, screen, "slash command completion")
             os.write(master, b"\x03")

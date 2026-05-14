@@ -37,12 +37,7 @@ pub(crate) fn render_dock_lines(
         panel_rows,
         hide_input,
     );
-    let input_capacity = DOCK_RESERVED_ROWS.saturating_sub(DOCK_VERTICAL_PADDING_ROWS);
-    let visible_rows = rows
-        .lines
-        .len()
-        .saturating_sub(input_capacity)
-        .min(rows.lines.len());
+    let clipped_rows = rows.lines.len().saturating_sub(DOCK_RESERVED_ROWS);
     let display_lines = if rows.lines.len() > DOCK_RESERVED_ROWS {
         &rows.lines[rows.lines.len() - DOCK_RESERVED_ROWS..]
     } else {
@@ -51,7 +46,7 @@ pub(crate) fn render_dock_lines(
     let first_row = dock_row().saturating_sub(display_lines.len().saturating_sub(1) as u16);
     let cursor_row = rows
         .cursor_row
-        .saturating_sub(visible_rows)
+        .saturating_sub(clipped_rows)
         .min(display_lines.len().saturating_sub(1));
     let cursor_col = rows.cursor_col.min(terminal_width().saturating_sub(1));
     let mut stdout = io::stdout();
