@@ -36,8 +36,6 @@ pub struct DockedComposer {
     approval_modal: Option<ApprovalModal>,
     progress_rows: Vec<String>,
     stream_buffer: String,
-    status_active: bool,
-    status_rows: usize,
     transcript_lines: Vec<String>,
     transcript_view_offset: usize,
     transcript_start_row: Option<u16>,
@@ -62,8 +60,6 @@ impl DockedComposer {
             approval_modal: None,
             progress_rows: Vec::new(),
             stream_buffer: String::new(),
-            status_active: false,
-            status_rows: 0,
             transcript_lines: Vec::new(),
             transcript_view_offset: 0,
             transcript_start_row: None,
@@ -332,12 +328,7 @@ impl DockedComposer {
 
     pub fn print_above(&mut self, text: &str) -> Result<(), String> {
         self.snap_transcript_to_bottom();
-        let status_rows = self.status_rows;
-        let had_status = self.take_status_active();
         let mut stdout = io::stdout();
-        if had_status {
-            clear_rows_above_dock(&mut stdout, self.active_dock_rows(), status_rows)?;
-        }
         self.move_to_transcript_cursor(&mut stdout)?;
         execute!(stdout, MoveToColumn(0), Clear(ClearType::CurrentLine))
             .map_err(|err| err.to_string())?;
@@ -378,17 +369,6 @@ impl DockedComposer {
         if self.stream_buffer.is_empty() {
             self.move_to_transcript_cursor(&mut stdout)?;
         }
-        if self.status_active {
-            clear_transient_rows(
-                &mut stdout,
-                self.active_dock_rows(),
-                self.transcript_row(),
-                self.status_rows,
-            )?;
-            self.move_to_transcript_cursor(&mut stdout)?;
-            self.status_active = false;
-            self.status_rows = 0;
-        }
         write_raw_lines(&mut stdout, text)?;
         stdout.flush().map_err(|err| err.to_string())?;
         self.stream_buffer.push_str(text);
@@ -419,15 +399,7 @@ impl DockedComposer {
 
     fn reset_stream_state(&mut self) {
         self.stream_buffer.clear();
-        self.status_active = false;
-        self.status_rows = 0;
         self.progress_rows.clear();
-    }
-
-    fn take_status_active(&mut self) -> bool {
-        let had_status = self.status_active;
-        self.reset_stream_state();
-        had_status
     }
 
     fn insert_text(&mut self, text: &str) -> Result<(), String> {

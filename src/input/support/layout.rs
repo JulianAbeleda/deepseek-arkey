@@ -1,8 +1,6 @@
 use std::io::{self, Write};
 
-use crossterm::cursor::MoveTo;
-use crossterm::execute;
-use crossterm::terminal::{size, Clear, ClearType};
+use crossterm::terminal::size;
 
 use crate::input::composer::DOCK_RESERVED_ROWS;
 
@@ -44,44 +42,6 @@ pub(crate) fn output_row(reserved_bottom_lines: usize) -> u16 {
 
 pub(crate) fn transcript_view_height(reserved_bottom_lines: usize) -> usize {
     output_row(reserved_bottom_lines) as usize + 1
-}
-
-pub(crate) fn clear_rows_above_dock(
-    stdout: &mut io::Stdout,
-    reserved_bottom_lines: usize,
-    rows: usize,
-) -> Result<(), String> {
-    if rows == 0 {
-        return Ok(());
-    }
-    let bottom = output_row(reserved_bottom_lines);
-    let rows = rows.min(bottom as usize + 1);
-    let start = bottom.saturating_add(1).saturating_sub(rows as u16);
-    for row in start..=bottom {
-        execute!(stdout, MoveTo(0, row), Clear(ClearType::CurrentLine))
-            .map_err(|err| err.to_string())?;
-    }
-    Ok(())
-}
-
-pub(crate) fn clear_transient_rows(
-    stdout: &mut io::Stdout,
-    reserved_bottom_lines: usize,
-    start: u16,
-    rows: usize,
-) -> Result<(), String> {
-    if rows == 0 {
-        return Ok(());
-    }
-    let bottom = output_row(reserved_bottom_lines);
-    let end = start
-        .saturating_add(rows as u16)
-        .min(bottom.saturating_add(1));
-    for row in start..end {
-        execute!(stdout, MoveTo(0, row), Clear(ClearType::CurrentLine))
-            .map_err(|err| err.to_string())?;
-    }
-    Ok(())
 }
 
 pub(crate) fn set_output_scroll_region(reserved_bottom_lines: usize) -> Result<(), String> {

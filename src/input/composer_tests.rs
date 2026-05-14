@@ -423,25 +423,9 @@ fn composer_stream_state_can_reset() {
     composer.buffer = "draft".to_string();
     composer.stream_buffer = "hello".to_string();
     assert_eq!(composer.stream_buffer, "hello");
-    assert!(!composer.status_active);
-    composer.status_active = true;
-    composer.status_rows = 3;
     composer.reset_stream_state();
     assert!(composer.stream_buffer.is_empty());
-    assert!(!composer.status_active);
-    assert_eq!(composer.status_rows, 0);
     assert_eq!(composer.buffer, "draft");
-}
-
-#[test]
-fn composer_status_state_is_consumed_before_rewrite() {
-    let mut composer = DockedComposer::new("prompt › ".to_string());
-    composer.status_active = true;
-    composer.status_rows = 2;
-    assert!(composer.take_status_active());
-    assert!(!composer.status_active);
-    assert_eq!(composer.status_rows, 0);
-    assert!(!composer.take_status_active());
 }
 
 #[test]
