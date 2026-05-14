@@ -227,7 +227,14 @@ where
     .map_err(|err| err.to_string())?;
     let client = CurlHttpClient;
     if stream {
-        return chat_streaming(&client, &key, body, print_stream_trailing_newline, on_delta);
+        return chat_streaming(
+            &client,
+            &key,
+            body,
+            print_stream_trailing_newline,
+            on_delta,
+            cancel,
+        );
     }
     let output = if let Some(cancel) = cancel {
         client.post_cancelled(&key, &body, false, cancel)?
@@ -255,6 +262,7 @@ fn chat_streaming<F>(
     body: String,
     print_trailing_newline: bool,
     mut on_delta: F,
+    cancel: Option<&CancellationToken>,
 ) -> Result<String, String>
 where
     F: FnMut(&str),
@@ -267,6 +275,13 @@ where
     let mut response = String::new();
     let mut malformed_events = 0usize;
     for line in BufReader::new(stdout).lines() {
+        if let Some(cancel) = cancel {
+            if cancel.is_cancelled() {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(CANCELLED.to_string());
+            }
+        }
         let line = line.map_err(|err| err.to_string())?;
         let Some(data) = line.strip_prefix("data:").map(str::trim) else {
             continue;
@@ -290,6 +305,13 @@ where
         if let Some(delta) = stream_delta(&value) {
             on_delta(delta);
             response.push_str(delta);
+            if let Some(cancel) = cancel {
+                if cancel.is_cancelled() {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(CANCELLED.to_string());
+                }
+            }
         }
     }
     if malformed_events > 0 {
@@ -508,7 +530,14 @@ fn print_cache_stats(raw: &str) {
 
 #[cfg(test)]
 mod tests {
-    use super::{curl_command, curl_config, curl_quote, extract_assistant_text, parse_api_key};
+    use std::process::{Child, Command, Output, Stdio};
+
+    use crate::cancel::{CancellationToken, CANCELLED};
+
+    use super::{
+        chat_streaming, curl_command, curl_config, curl_quote, extract_assistant_text,
+        parse_api_key, HttpClient,
+    };
 
     #[test]
     fn extracts_assistant_text() {
@@ -611,5 +640,40 @@ mod tests {
     #[test]
     fn curl_quote_escapes_config_string_controls() {
         assert_eq!(curl_quote("a\"b\\c\n\r\t"), "a\\\"b\\\\c\\n\\r\\t");
+    }
+
+    struct SlowStreamClient;
+
+    impl HttpClient for SlowStreamClient {
+        fn post(&self, _key: &str, _body: &str, _stream: bool) -> Result<Output, String> {
+            Err("unused test path".to_string())
+        }
+
+        fn post_stream(&self, _key: &str, _body: &str) -> Result<Child, String> {
+            Command::new("sh")
+                .arg("-c")
+                .arg(
+                    "printf 'data: {\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\\n\\n'; sleep 5",
+                )
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .map_err(|err| err.to_string())
+        }
+    }
+
+    #[test]
+    fn streaming_chat_returns_cancelled_when_token_is_cancelled() {
+        let cancel = CancellationToken::new();
+        let err = chat_streaming(
+            &SlowStreamClient,
+            "key",
+            "{}".to_string(),
+            false,
+            |_| cancel.cancel(),
+            Some(&cancel),
+        )
+        .unwrap_err();
+        assert_eq!(err, CANCELLED);
     }
 }
