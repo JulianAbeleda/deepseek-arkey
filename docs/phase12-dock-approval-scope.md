@@ -29,7 +29,9 @@ Type yes run to approve, n to deny.
 ```
 
 - `n` denies the tool and returns the denial as the tool result.
-- `yes run` approves the shell command once.
+- `Approve once` approves the shell command once.
+- `Approve shell for this root` approves future shell requests for the same
+  canonical workspace root during the current docked chat process.
 - The dock remains mounted.
 - No raw stdin prompt appears outside the dock.
 
@@ -41,7 +43,11 @@ Type yes apply to approve, n to deny.
 ```
 
 - `n` denies the edit.
-- `yes apply` approves the exact prepared edit once.
+- `Approve once` approves the exact prepared edit once.
+- `Approve writes for this root` approves future write requests for the same
+  canonical workspace root during the current docked chat process.
+- Write and shell approvals are separate scopes, and approval for one root does
+  not carry to another root.
 
 ## Out Of Scope
 

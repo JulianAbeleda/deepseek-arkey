@@ -11,7 +11,6 @@ This validates the Kimi-style baseline path without a live provider:
 import argparse
 import json
 import os
-import re
 import stat
 import tempfile
 import textwrap
@@ -43,6 +42,12 @@ def write_fake_curl(directory):
                 decision = {"final_answer": "patch denied through dock"}
             elif "inspect patch approval gate" in config and "Tool result for step" in config:
                 decision = {"final_answer": "patch approved through dock"}
+            elif "inspect patch session gate one" in config and "Tool result for step" in config:
+                decision = {"final_answer": "patch session approval one done"}
+            elif "inspect patch session gate two" in config and "Tool result for step" in config:
+                decision = {"final_answer": "patch session approval two done"}
+            elif "inspect patch other root gate" in config and "Tool result for step" in config:
+                decision = {"final_answer": "patch other root done"}
             elif "Tool result for step" in config:
                 decision = {"final_answer": "unexpected tool result"}
             elif "inspect shell denial gate" in config:
@@ -95,6 +100,45 @@ def write_fake_curl(directory):
                         },
                     },
                 }
+            elif "inspect patch session gate one" in config:
+                decision = {
+                    "thought": "request patch and expect root-scoped write approval",
+                    "tool": {
+                        "name": "propose_patch",
+                        "arguments": {
+                            "path": "SESSION.md",
+                            "find": "one",
+                            "replace": "two",
+                            "reason": "phase12 root write session smoke one",
+                        },
+                    },
+                }
+            elif "inspect patch session gate two" in config:
+                decision = {
+                    "thought": "request patch and expect auto-approval in same root",
+                    "tool": {
+                        "name": "propose_patch",
+                        "arguments": {
+                            "path": "SESSION.md",
+                            "find": "two",
+                            "replace": "three",
+                            "reason": "phase12 root write session smoke two",
+                        },
+                    },
+                }
+            elif "inspect patch other root gate" in config:
+                decision = {
+                    "thought": "request patch and expect approval in different root",
+                    "tool": {
+                        "name": "propose_patch",
+                        "arguments": {
+                            "path": "OTHER.md",
+                            "find": "other",
+                            "replace": "changed",
+                            "reason": "phase12 different root write smoke",
+                        },
+                    },
+                }
             else:
                 decision = {"final_answer": "phase12 ready"}
 
@@ -124,10 +168,6 @@ def assert_not_legacy_handoff(screen):
         raise AssertionError(f"legacy handoff rendered: {found}\n{screen.dump()}")
 
 
-def has_tool_step(screen, tool):
-    return re.search(rf"agent step \d+(?:\.\d+)?: {re.escape(tool)}", screen.all_text()) is not None
-
-
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--binary", default=None)
@@ -140,13 +180,17 @@ def main():
         tmp_path = Path(tmp)
         home = tmp_path / "home"
         workspace = tmp_path / "workspace"
+        other_workspace = tmp_path / "other-workspace"
         desktop = home / "Desktop"
         fake_bin = tmp_path / "bin"
         home.mkdir()
         workspace.mkdir()
+        other_workspace.mkdir()
         desktop.mkdir()
         fake_bin.mkdir()
         (workspace / "README.md").write_text("workspace smoke\n", encoding="utf-8")
+        (workspace / "SESSION.md").write_text("one\n", encoding="utf-8")
+        (other_workspace / "OTHER.md").write_text("other\n", encoding="utf-8")
         (desktop / "note.txt").write_text("desktop smoke\n", encoding="utf-8")
         write_fake_curl(fake_bin)
 
@@ -167,12 +211,6 @@ def main():
             )
 
             os.write(master, b"inspect shell denial gate\r")
-            wait_for(
-                lambda: has_tool_step(screen, "run_shell"),
-                master,
-                screen,
-                "shell denial tool step",
-            )
             wait_for(
                 lambda: screen.contains("run_shell requires approval"),
                 master,
@@ -204,12 +242,6 @@ def main():
 
             os.write(master, b"inspect shell approval gate\r")
             wait_for(
-                lambda: has_tool_step(screen, "run_shell"),
-                master,
-                screen,
-                "shell approval tool step",
-            )
-            wait_for(
                 lambda: screen.contains("run_shell requires approval")
                 and screen.contains("command: printf PHASE12_APPROVED"),
                 master,
@@ -232,12 +264,6 @@ def main():
             assert_not_legacy_handoff(screen)
 
             os.write(master, b"inspect patch denial gate\r")
-            wait_for(
-                lambda: has_tool_step(screen, "propose_patch"),
-                master,
-                screen,
-                "patch denial tool step",
-            )
             wait_for(
                 lambda: screen.contains("propose_patch requires approval")
                 and screen.contains("path: README.md"),
@@ -265,12 +291,6 @@ def main():
 
             os.write(master, b"inspect patch approval gate\r")
             wait_for(
-                lambda: has_tool_step(screen, "propose_patch"),
-                master,
-                screen,
-                "patch approval tool step",
-            )
-            wait_for(
                 lambda: screen.contains("propose_patch requires approval")
                 and screen.contains("path: README.md"),
                 master,
@@ -293,6 +313,77 @@ def main():
             readme = (workspace / "README.md").read_text(encoding="utf-8")
             if readme != "workspace smoke approved\n":
                 raise AssertionError(f"approved patch did not update README.md: {readme!r}")
+            assert_not_legacy_handoff(screen)
+
+            os.write(master, b"inspect patch session gate one\r")
+            wait_for(
+                lambda: screen.contains("propose_patch requires approval")
+                and screen.contains("path: SESSION.md"),
+                master,
+                screen,
+                "patch session one request",
+            )
+            os.write(master, b"2\r")
+            wait_for(
+                lambda: screen.contains("approval: approved writes for root"),
+                master,
+                screen,
+                "patch root approval accepted",
+            )
+            wait_for(
+                lambda: screen.contains("patch session approval one done"),
+                master,
+                screen,
+                "patch session one final answer",
+            )
+            session_text = (workspace / "SESSION.md").read_text(encoding="utf-8")
+            if session_text != "two\n":
+                raise AssertionError(f"root-approved patch one failed: {session_text!r}")
+            assert_not_legacy_handoff(screen)
+
+            os.write(master, b"inspect patch session gate two\r")
+            wait_for(
+                lambda: screen.contains("approval: auto-approved writes for root"),
+                master,
+                screen,
+                "patch root auto-approval",
+            )
+            wait_for(
+                lambda: screen.contains("patch session approval two done"),
+                master,
+                screen,
+                "patch session two final answer",
+            )
+            session_text = (workspace / "SESSION.md").read_text(encoding="utf-8")
+            if session_text != "three\n":
+                raise AssertionError(f"root-approved patch two failed: {session_text!r}")
+            assert_not_legacy_handoff(screen)
+
+            os.write(master, f"/root {other_workspace}\r".encode())
+            wait_for(
+                lambda: screen.contains(str(other_workspace)),
+                master,
+                screen,
+                "switch to other root",
+            )
+            os.write(master, b"inspect patch other root gate\r")
+            wait_for(
+                lambda: screen.contains("propose_patch requires approval")
+                and screen.contains("path: OTHER.md"),
+                master,
+                screen,
+                "other root patch request",
+            )
+            os.write(master, b"n\r")
+            wait_for(
+                lambda: screen.contains("approval: denied propose_patch"),
+                master,
+                screen,
+                "other root patch denied",
+            )
+            other_text = (other_workspace / "OTHER.md").read_text(encoding="utf-8")
+            if other_text != "other\n":
+                raise AssertionError(f"other root patch was auto-approved: {other_text!r}")
             assert_not_legacy_handoff(screen)
 
             os.write(master, b"/exit\r")

@@ -82,10 +82,27 @@ pub enum ApprovalDecision {
     Deny,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ApprovalScope {
+    Shell,
+    Write,
+}
+
+impl ApprovalScope {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Shell => "shell",
+            Self::Write => "writes",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ApprovalRequest {
     pub step: usize,
     pub tool: String,
+    pub root: PathBuf,
+    pub scope: ApprovalScope,
     pub summary: String,
 }
 

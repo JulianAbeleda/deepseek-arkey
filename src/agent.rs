@@ -18,5 +18,5 @@ pub use r#loop::{parse_decision, AgentDecision, ToolCall};
 pub use r#loop::{
     read_latest_transcript, read_latest_transcript_summary, run_agent, run_agent_final_only,
     run_agent_with_handlers, AgentConfig, AgentOutcome, AgentRunOptions, AgentStep,
-    ApprovalDecision, ApprovalMode, ApprovalRequest, DEFAULT_MAX_STEPS,
+    ApprovalDecision, ApprovalMode, ApprovalRequest, ApprovalScope, DEFAULT_MAX_STEPS,
 };

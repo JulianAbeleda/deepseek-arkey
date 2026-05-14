@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 
 use crate::agent;
 use crate::agent::commit_audit::is_commit_audit_prompt;
+use crate::agent::ApprovalScope;
 use crate::answer_format::{format_agent_answer, terminal_agent_answer};
 use crate::cancel::CancellationToken;
 use crate::features;
@@ -55,6 +56,12 @@ struct InFlightTurn {
 struct PendingDockApproval {
     request: agent::ApprovalRequest,
     reply: Sender<agent::ApprovalDecision>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct ApprovalGrant {
+    root: PathBuf,
+    scope: ApprovalScope,
 }
 
 pub(crate) fn run_interactive(
@@ -236,7 +243,7 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
     let mut memory = Vec::<Message>::new();
     let mut pending_agent_task: Option<PendingAgentTask> = None;
     let mut pending_approval: Option<PendingDockApproval> = None;
-    let mut session_approved_tools = HashSet::<String>::new();
+    let mut session_approved_scopes = HashSet::<ApprovalGrant>::new();
     let mut active_tool_steps = Vec::<agent::AgentStep>::new();
     let mut selected_root: Option<PathBuf> =
         persisted_selected_root.or_else(|| approved_agent_root.clone());
@@ -254,10 +261,10 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
                 )?;
                 if let Some(approval) = approval {
                     context_scan_started = None;
-                    if session_approved_tools.contains(&approval.request.tool) {
+                    if session_approved_scopes.contains(&approval_grant(&approval.request)) {
                         composer.status_above(&format!(
-                            "approval: auto-approved {} for session",
-                            approval.request.tool
+                            "approval: auto-approved {} for root",
+                            approval.request.scope.label()
                         ))?;
                         let _ = approval.reply.send(agent::ApprovalDecision::Approve);
                         context_scan_started =
@@ -323,7 +330,7 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
                     &mut composer,
                     approval,
                     choice,
-                    &mut session_approved_tools,
+                    &mut session_approved_scopes,
                 )?;
                 context_scan_started = Some(start_context_scan(&mut composer, &active_tool_steps)?);
                 continue;
@@ -409,6 +416,7 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
                         effective_workspace_root(selected_root.as_deref()).as_deref(),
                         selected_root.is_some(),
                         approved_agent_root.as_deref(),
+                        &session_approved_scopes,
                         memory.len() / 2,
                     )?)?;
                     continue;

@@ -12,8 +12,8 @@ use super::super::write_tools::{apply_prepared_patch, prepare_patch};
 use super::{
     append_no_action_retry_note, append_parser_repair_notes, parse_decision,
     parse_decision_with_metadata, system_prompt, unreachable_external_approval, write_transcript,
-    AgentChatRoute, AgentConfig, ApprovalDecision, ApprovalMode, ApprovalRequest, ToolCall,
-    TranscriptEntry, DEFAULT_MAX_STEPS,
+    AgentChatRoute, AgentConfig, ApprovalDecision, ApprovalMode, ApprovalRequest, ApprovalScope,
+    ToolCall, TranscriptEntry, DEFAULT_MAX_STEPS,
 };
 
 fn execute_tool(workspace: &Workspace, call: &ToolCall) -> String {
@@ -606,6 +606,8 @@ fn default_agent_approval_handler_panics_if_reached() {
         unreachable_external_approval(ApprovalRequest {
             step: 1,
             tool: "run_shell".to_string(),
+            root: std::env::current_dir().unwrap(),
+            scope: ApprovalScope::Shell,
             summary: "approval required".to_string(),
         });
     });
@@ -623,9 +625,12 @@ fn builds_shell_approval_request() {
             "reason": "check location"
         }),
     };
-    let request = super::approval_request(2, &call).unwrap();
+    let workspace = Workspace::new(std::env::current_dir().unwrap()).unwrap();
+    let request = super::approval_request(&workspace, 2, &call).unwrap();
     assert_eq!(request.step, 2);
     assert_eq!(request.tool, "run_shell");
+    assert_eq!(request.root, workspace.root);
+    assert_eq!(request.scope, ApprovalScope::Shell);
     assert!(request.summary.contains("command: pwd"));
 }
 
@@ -723,7 +728,9 @@ fn deny_approval_mode_blocks_shell_without_prompting() {
 
 #[test]
 fn builds_patch_approval_request() {
+    let workspace = Workspace::new(std::env::current_dir().unwrap()).unwrap();
     let request = super::approval_request(
+        &workspace,
         2,
         &ToolCall {
             name: "propose_patch".to_string(),
@@ -738,6 +745,8 @@ fn builds_patch_approval_request() {
     .unwrap();
     assert_eq!(request.step, 2);
     assert_eq!(request.tool, "propose_patch");
+    assert_eq!(request.root, workspace.root);
+    assert_eq!(request.scope, ApprovalScope::Write);
     assert!(request.summary.contains("approval required: propose_patch"));
     assert!(request.summary.contains("path: note.txt"));
     assert!(request.summary.contains("reason: test patch approval"));

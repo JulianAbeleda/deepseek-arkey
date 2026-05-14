@@ -1,6 +1,6 @@
 use super::commands::{is_end_command, is_exit_command, parse_agent_task_command};
 use super::{
-    agent_route_confirmation, approval_decision_for_choice, cap_interactive_memory,
+    agent_route_confirmation, approval_decision_for_choice, approval_grant, cap_interactive_memory,
     context_scan_status, is_agent_task_cancel_choice, is_agent_task_choice,
     is_workspace_agent_prompt, no_pending_agent_task_text, parse_shell_read_command,
     rendered_markdown_effective_stream_delay, rendered_markdown_stream_chunks, shell_pwd_text,
@@ -14,6 +14,20 @@ use crate::runtime;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
+
+fn approval_request(root: &Path, scope: agent::ApprovalScope) -> agent::ApprovalRequest {
+    let tool = match scope {
+        agent::ApprovalScope::Shell => "run_shell",
+        agent::ApprovalScope::Write => "propose_patch",
+    };
+    agent::ApprovalRequest {
+        step: 1,
+        tool: tool.to_string(),
+        root: root.to_path_buf(),
+        scope,
+        summary: "approval required".to_string(),
+    }
+}
 
 #[test]
 fn recognizes_exit_commands() {
@@ -34,29 +48,39 @@ fn recognizes_end_commands() {
 #[test]
 fn approval_for_session_records_tool_type() {
     let mut approved = HashSet::new();
-    let decision = approval_decision_for_choice(
-        "run_shell",
-        ApprovalChoice::ApproveForSession,
-        &mut approved,
-    );
+    let root = Path::new("/tmp/deepseek-root-a");
+    let request = approval_request(root, agent::ApprovalScope::Shell);
+    let decision =
+        approval_decision_for_choice(&request, ApprovalChoice::ApproveForSession, &mut approved);
 
     assert_eq!(decision, agent::ApprovalDecision::ApproveForSession);
-    assert!(approved.contains("run_shell"));
-    assert!(!approved.contains("propose_patch"));
+    assert!(approved.contains(&approval_grant(&request)));
+    assert!(!approved.contains(&approval_grant(&approval_request(
+        root,
+        agent::ApprovalScope::Write
+    ))));
+    assert!(!approved.contains(&approval_grant(&approval_request(
+        Path::new("/tmp/deepseek-root-b"),
+        agent::ApprovalScope::Shell
+    ))));
 }
 
 #[test]
 fn approval_once_and_reject_do_not_record_session_tool() {
     let mut approved = HashSet::new();
+    let request = approval_request(
+        Path::new("/tmp/deepseek-root-a"),
+        agent::ApprovalScope::Shell,
+    );
 
     assert_eq!(
-        approval_decision_for_choice("run_shell", ApprovalChoice::ApproveOnce, &mut approved),
+        approval_decision_for_choice(&request, ApprovalChoice::ApproveOnce, &mut approved),
         agent::ApprovalDecision::Approve
     );
     assert!(approved.is_empty());
 
     assert_eq!(
-        approval_decision_for_choice("run_shell", ApprovalChoice::Reject, &mut approved),
+        approval_decision_for_choice(&request, ApprovalChoice::Reject, &mut approved),
         agent::ApprovalDecision::Deny
     );
     assert!(approved.is_empty());

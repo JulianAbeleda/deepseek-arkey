@@ -33,6 +33,7 @@ pub(in crate::repl::chat) fn interactive_chat_status(
     root: Option<&Path>,
     explicit_root: bool,
     approved_agent_root: Option<&Path>,
+    session_approved_scopes: &HashSet<ApprovalGrant>,
     memory_turns: usize,
 ) -> Result<String, String> {
     let mut output = interactive_status(model)?;
@@ -48,5 +49,29 @@ pub(in crate::repl::chat) fn interactive_chat_status(
         )),
         None => output.push_str("agent-session: confirm-required\n"),
     }
+    if let Some(root) = root {
+        let write = approval_status(root, ApprovalScope::Write, session_approved_scopes);
+        let shell = approval_status(root, ApprovalScope::Shell, session_approved_scopes);
+        output.push_str(&format!(
+            "write-permission: {write}\nshell-permission: {shell}\n"
+        ));
+    } else {
+        output.push_str("write-permission: confirm-required\nshell-permission: confirm-required\n");
+    }
     Ok(output)
+}
+
+fn approval_status(
+    root: &Path,
+    scope: ApprovalScope,
+    session_approved_scopes: &HashSet<ApprovalGrant>,
+) -> &'static str {
+    let Ok(root) = root.canonicalize() else {
+        return "confirm-required";
+    };
+    if session_approved_scopes.contains(&ApprovalGrant { root, scope }) {
+        "approved for root"
+    } else {
+        "confirm-required"
+    }
 }

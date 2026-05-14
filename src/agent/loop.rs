@@ -4,7 +4,7 @@ pub use super::runner::{run_agent, run_agent_final_only, run_agent_with_handlers
 pub use super::summary::{read_latest_transcript, read_latest_transcript_summary};
 pub use super::types::{
     AgentConfig, AgentOutcome, AgentRunOptions, AgentStep, ApprovalDecision, ApprovalMode,
-    ApprovalRequest, DEFAULT_MAX_STEPS,
+    ApprovalRequest, ApprovalScope, DEFAULT_MAX_STEPS,
 };
 
 #[cfg(test)]

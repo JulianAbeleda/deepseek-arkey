@@ -226,7 +226,7 @@ pub(super) fn run_agent_with_chat_handler(
                 tool: tool.name.clone(),
             });
             let tool_approval_mode = if approval_mode == ApprovalMode::External {
-                match approval_request(step, tool) {
+                match approval_request(&workspace, step, tool) {
                     Some(request) => match on_approval(request) {
                         ApprovalDecision::Approve | ApprovalDecision::ApproveForSession => {
                             ApprovalMode::Approved

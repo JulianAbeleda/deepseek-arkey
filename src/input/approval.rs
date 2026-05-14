@@ -75,21 +75,17 @@ impl ApprovalModal {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct ApprovalOption {
-    label: &'static str,
     choice: ApprovalChoice,
 }
 
 const APPROVAL_OPTIONS: &[ApprovalOption] = &[
     ApprovalOption {
-        label: "Approve once",
         choice: ApprovalChoice::ApproveOnce,
     },
     ApprovalOption {
-        label: "Approve for this session",
         choice: ApprovalChoice::ApproveForSession,
     },
     ApprovalOption {
-        label: "Reject",
         choice: ApprovalChoice::Reject,
     },
 ];
@@ -118,7 +114,11 @@ pub(crate) fn approval_panel_rows(modal: &ApprovalModal, width: usize) -> Vec<St
             " "
         };
         rows.push(approval_panel_content_row(
-            &format!("{marker} [{}] {}", index + 1, option.label),
+            &format!(
+                "{marker} [{}] {}",
+                index + 1,
+                modal.option_label(option.choice)
+            ),
             width,
         ));
     }
@@ -126,6 +126,20 @@ pub(crate) fn approval_panel_rows(modal: &ApprovalModal, width: usize) -> Vec<St
     rows.push(muted_dock_help(&approval_bottom_border(width)));
     rows.truncate(DOCK_RESERVED_ROWS);
     rows
+}
+
+impl ApprovalModal {
+    fn option_label(&self, choice: ApprovalChoice) -> &'static str {
+        match choice {
+            ApprovalChoice::ApproveOnce => "Approve once",
+            ApprovalChoice::ApproveForSession => match self.tool.as_str() {
+                "run_shell" => "Approve shell for this root",
+                "propose_patch" => "Approve writes for this root",
+                _ => "Approve for this root",
+            },
+            ApprovalChoice::Reject => "Reject",
+        }
+    }
 }
 
 fn approval_preview_rows(summary: &str, width: usize) -> Vec<String> {

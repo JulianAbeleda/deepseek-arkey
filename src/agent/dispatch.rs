@@ -2,10 +2,14 @@ use super::approval_text;
 use super::read_tools;
 use super::workspace::Workspace;
 use super::write_tools;
-use super::{ApprovalMode, ApprovalRequest, ToolCall};
+use super::{ApprovalMode, ApprovalRequest, ApprovalScope, ToolCall};
 use crate::internet;
 
-pub(super) fn approval_request(step: usize, call: &ToolCall) -> Option<ApprovalRequest> {
+pub(super) fn approval_request(
+    workspace: &Workspace,
+    step: usize,
+    call: &ToolCall,
+) -> Option<ApprovalRequest> {
     match call.name.as_str() {
         "run_shell" => {
             let command = call
@@ -26,6 +30,8 @@ pub(super) fn approval_request(step: usize, call: &ToolCall) -> Option<ApprovalR
             Some(ApprovalRequest {
                 step,
                 tool: call.name.clone(),
+                root: workspace.root.clone(),
+                scope: ApprovalScope::Shell,
                 summary: approval_text::shell_summary(cwd, reason, command),
             })
         }
@@ -53,6 +59,8 @@ pub(super) fn approval_request(step: usize, call: &ToolCall) -> Option<ApprovalR
             Some(ApprovalRequest {
                 step,
                 tool: call.name.clone(),
+                root: workspace.root.clone(),
+                scope: ApprovalScope::Write,
                 summary: approval_text::patch_summary(path, reason, find, replace),
             })
         }

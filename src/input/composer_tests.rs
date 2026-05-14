@@ -320,7 +320,18 @@ fn approval_modal_renders_inside_dock_without_input_row() {
     assert!(plain.contains("run_shell requires approval"));
     assert!(plain.contains("command: cargo test --offline"));
     assert!(plain.contains("→ [1] Approve once"));
-    assert!(plain.contains("[2] Approve for this session"));
+    assert!(plain.contains("[2] Approve shell for this root"));
+}
+
+#[test]
+fn patch_approval_modal_uses_write_root_label() {
+    let modal = ApprovalModal::new(
+        "propose_patch".to_string(),
+        "approval required: propose_patch\npath: README.md\n".to_string(),
+    );
+    let plain = strip_ansi_for_test(&approval_panel_rows(&modal, 56).join("\n"));
+
+    assert!(plain.contains("[2] Approve writes for this root"));
 }
 
 #[test]

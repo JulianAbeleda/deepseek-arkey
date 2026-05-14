@@ -28,11 +28,10 @@ pub(in crate::repl::chat) fn handle_dock_approval_choice(
     composer: &mut DockedComposer,
     approval: PendingDockApproval,
     choice: ApprovalChoice,
-    session_approved_tools: &mut HashSet<String>,
+    session_approved_scopes: &mut HashSet<ApprovalGrant>,
 ) -> Result<(), String> {
     composer.clear_approval_modal()?;
-    let decision =
-        approval_decision_for_choice(&approval.request.tool, choice, session_approved_tools);
+    let decision = approval_decision_for_choice(&approval.request, choice, session_approved_scopes);
     match choice {
         ApprovalChoice::ApproveOnce => {
             let _ = approval.reply.send(decision);
@@ -41,8 +40,8 @@ pub(in crate::repl::chat) fn handle_dock_approval_choice(
         ApprovalChoice::ApproveForSession => {
             let _ = approval.reply.send(decision);
             composer.print_above(&format!(
-                "approval: approved {} for session\n",
-                approval.request.tool
+                "approval: approved {} for root\n",
+                approval.request.scope.label()
             ))?;
         }
         ApprovalChoice::Reject => {
@@ -54,17 +53,24 @@ pub(in crate::repl::chat) fn handle_dock_approval_choice(
 }
 
 pub(in crate::repl::chat) fn approval_decision_for_choice(
-    tool: &str,
+    request: &agent::ApprovalRequest,
     choice: ApprovalChoice,
-    session_approved_tools: &mut HashSet<String>,
+    session_approved_scopes: &mut HashSet<ApprovalGrant>,
 ) -> agent::ApprovalDecision {
     match choice {
         ApprovalChoice::ApproveOnce => agent::ApprovalDecision::Approve,
         ApprovalChoice::ApproveForSession => {
-            session_approved_tools.insert(tool.to_string());
+            session_approved_scopes.insert(approval_grant(request));
             agent::ApprovalDecision::ApproveForSession
         }
         ApprovalChoice::Reject => agent::ApprovalDecision::Deny,
+    }
+}
+
+pub(in crate::repl::chat) fn approval_grant(request: &agent::ApprovalRequest) -> ApprovalGrant {
+    ApprovalGrant {
+        root: request.root.clone(),
+        scope: request.scope,
     }
 }
 
