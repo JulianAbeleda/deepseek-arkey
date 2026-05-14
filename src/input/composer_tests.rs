@@ -308,6 +308,7 @@ fn completion_panel_rows_are_capped_to_dock_reservation() {
 fn approval_modal_renders_inside_dock_without_input_row() {
     let modal = ApprovalModal::new(
             "run_shell".to_string(),
+            crate::agent::ApprovalScope::Shell,
             "approval required: run_shell\ncwd: .\nreason: run tests\ncommand: cargo test --offline\nType yes run to approve, n to deny.\n".to_string(),
         );
     let panel = approval_panel_rows(&modal, 56);
@@ -324,10 +325,11 @@ fn approval_modal_renders_inside_dock_without_input_row() {
 }
 
 #[test]
-fn patch_approval_modal_uses_write_root_label() {
+fn write_approval_modal_uses_scope_root_label() {
     let modal = ApprovalModal::new(
-        "propose_patch".to_string(),
-        "approval required: propose_patch\npath: README.md\n".to_string(),
+        "create_file".to_string(),
+        crate::agent::ApprovalScope::Write,
+        "approval required: create_file\npath: README.md\n".to_string(),
     );
     let plain = strip_ansi_for_test(&approval_panel_rows(&modal, 56).join("\n"));
 
@@ -338,6 +340,7 @@ fn patch_approval_modal_uses_write_root_label() {
 fn approval_modal_selection_maps_to_session_choice() {
     let mut modal = ApprovalModal::new(
         "propose_patch".to_string(),
+        crate::agent::ApprovalScope::Write,
         "approval required: propose_patch\npath: src/input.rs\n".to_string(),
     );
     modal.move_selection(1);

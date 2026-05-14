@@ -6,6 +6,7 @@ use crossterm::event::{self, Event, KeyCode, KeyModifiers};
 use crossterm::execute;
 use crossterm::terminal::{Clear, ClearType};
 
+use crate::agent::ApprovalScope;
 use crate::terminal_width::char_display_width;
 
 use super::approval::ApprovalKeyAction;
@@ -107,12 +108,17 @@ impl DockedComposer {
         Ok(())
     }
 
-    pub fn show_approval_modal(&mut self, tool: String, summary: String) -> Result<(), String> {
+    pub fn show_approval_modal(
+        &mut self,
+        tool: String,
+        scope: ApprovalScope,
+        summary: String,
+    ) -> Result<(), String> {
         self.buffer.clear();
         self.cursor = 0;
         self.history_index = None;
         self.reset_slash_completion();
-        self.approval_modal = Some(ApprovalModal::new(tool, summary));
+        self.approval_modal = Some(ApprovalModal::new(tool, scope, summary));
         self.hide_cursor()?;
         self.render()
     }

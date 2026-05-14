@@ -272,6 +272,7 @@ fn run_interactive_chat_docked(model: &str, temperature: Option<f32>) -> Result<
                     } else {
                         composer.show_approval_modal(
                             approval.request.tool.clone(),
+                            approval.request.scope,
                             approval.request.summary.clone(),
                         )?;
                         pending_approval = Some(approval);

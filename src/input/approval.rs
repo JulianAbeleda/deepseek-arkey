@@ -1,3 +1,4 @@
+use crate::agent::ApprovalScope;
 use crate::terminal_width::pad_display_width;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -14,6 +15,7 @@ pub enum ApprovalChoice {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ApprovalModal {
     tool: String,
+    scope: ApprovalScope,
     summary: String,
     selected_index: usize,
 }
@@ -27,9 +29,10 @@ pub(crate) enum ApprovalKeyAction {
 }
 
 impl ApprovalModal {
-    pub(crate) fn new(tool: String, summary: String) -> Self {
+    pub(crate) fn new(tool: String, scope: ApprovalScope, summary: String) -> Self {
         Self {
             tool,
+            scope,
             summary,
             selected_index: 0,
         }
@@ -132,10 +135,9 @@ impl ApprovalModal {
     fn option_label(&self, choice: ApprovalChoice) -> &'static str {
         match choice {
             ApprovalChoice::ApproveOnce => "Approve once",
-            ApprovalChoice::ApproveForSession => match self.tool.as_str() {
-                "run_shell" => "Approve shell for this root",
-                "propose_patch" => "Approve writes for this root",
-                _ => "Approve for this root",
+            ApprovalChoice::ApproveForSession => match self.scope {
+                ApprovalScope::Shell => "Approve shell for this root",
+                ApprovalScope::Write => "Approve writes for this root",
             },
             ApprovalChoice::Reject => "Reject",
         }
@@ -208,7 +210,8 @@ mod tests {
 
     #[test]
     fn approval_modal_key_actions_map_shortcuts() {
-        let modal = ApprovalModal::new("run_shell".to_string(), String::new());
+        let modal =
+            ApprovalModal::new("run_shell".to_string(), ApprovalScope::Shell, String::new());
 
         assert_eq!(
             modal.key_action(key(KeyCode::Char('1'))),
@@ -246,7 +249,11 @@ mod tests {
 
     #[test]
     fn approval_modal_key_actions_move_and_choose_selection() {
-        let mut modal = ApprovalModal::new("propose_patch".to_string(), String::new());
+        let mut modal = ApprovalModal::new(
+            "propose_patch".to_string(),
+            ApprovalScope::Write,
+            String::new(),
+        );
 
         assert_eq!(
             modal.key_action(key(KeyCode::Down)),
@@ -266,7 +273,8 @@ mod tests {
 
     #[test]
     fn approval_modal_key_actions_ignore_or_pass_through() {
-        let modal = ApprovalModal::new("run_shell".to_string(), String::new());
+        let modal =
+            ApprovalModal::new("run_shell".to_string(), ApprovalScope::Shell, String::new());
 
         assert_eq!(
             modal.key_action(key(KeyCode::PageUp)),
