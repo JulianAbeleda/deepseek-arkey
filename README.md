@@ -8,7 +8,7 @@ Standalone Rust CLI for using DeepSeek from the terminal, packaged as
 DeepSeek is an AI model provider. This project is an independent terminal client
 for talking to DeepSeek models. 
 
-## Quick Start
+## Installation
 
 With Homebrew:
 
