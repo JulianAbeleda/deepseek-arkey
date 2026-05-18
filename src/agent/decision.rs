@@ -2,8 +2,12 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
+use crate::provider::{ChatTool, ChatToolFunction};
+
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct ToolCall {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
     pub name: String,
     #[serde(default)]
     pub arguments: serde_json::Value,
@@ -13,6 +17,8 @@ pub struct ToolCall {
 pub struct AgentDecision {
     #[serde(default)]
     pub thought: Option<String>,
+    #[serde(default)]
+    pub reasoning_content: Option<String>,
     #[serde(default)]
     pub tool: Option<ToolCall>,
     #[serde(default)]
@@ -71,6 +77,147 @@ Approval-gated tool:
 
 No raw writes, creates, deletes, or paths outside the workspace are available. Only web_search and fetch_url may access the network. Shell commands and exact text replacements require explicit user approval and may be denied."#,
         root.display()
+    )
+}
+
+pub(super) fn native_tool_definitions() -> Vec<ChatTool> {
+    vec![
+        tool(
+            "list_files",
+            "List files and directories under a relative workspace path.",
+            object_schema(
+                vec![string_property("path", "Relative workspace path to list.")],
+                vec!["path"],
+            ),
+        ),
+        tool(
+            "read_file",
+            "Read the contents of a relative workspace file.",
+            object_schema(
+                vec![string_property(
+                    "path",
+                    "Relative workspace file path to read.",
+                )],
+                vec!["path"],
+            ),
+        ),
+        tool(
+            "search_files",
+            "Search files under a relative workspace path for literal text.",
+            object_schema(
+                vec![
+                    string_property("path", "Relative workspace path to search."),
+                    string_property("query", "Literal text to search for."),
+                ],
+                vec!["path", "query"],
+            ),
+        ),
+        tool(
+            "inspect_tree",
+            "Inspect a bounded directory tree under a relative workspace path.",
+            object_schema(
+                vec![
+                    string_property("path", "Relative workspace path to inspect."),
+                    integer_property("depth", "Maximum tree depth to inspect."),
+                ],
+                vec!["path", "depth"],
+            ),
+        ),
+        tool(
+            "web_search",
+            "Search the web for current or external information.",
+            object_schema(
+                vec![
+                    string_property("query", "Search query."),
+                    integer_property("max_results", "Maximum number of search results."),
+                ],
+                vec!["query"],
+            ),
+        ),
+        tool(
+            "fetch_url",
+            "Fetch and summarize content from an HTTP or HTTPS URL.",
+            object_schema(
+                vec![
+                    string_property("url", "HTTP or HTTPS URL to fetch."),
+                    string_property("format", "Response format, such as markdown or text."),
+                    integer_property("max_bytes", "Maximum number of bytes to fetch."),
+                    integer_property("timeout_ms", "Request timeout in milliseconds."),
+                ],
+                vec!["url"],
+            ),
+        ),
+        tool(
+            "run_shell",
+            "Run a shell command inside the workspace after explicit approval.",
+            object_schema(
+                vec![
+                    string_property("command", "Shell command to run."),
+                    string_property("cwd", "Relative workspace directory for the command."),
+                    string_property("reason", "Reason this command is needed."),
+                ],
+                vec!["command", "cwd", "reason"],
+            ),
+        ),
+        tool(
+            "propose_patch",
+            "Propose an exact text replacement after explicit approval.",
+            object_schema(
+                vec![
+                    string_property("path", "Relative workspace file path to edit."),
+                    string_property("find", "Exact existing text to replace."),
+                    string_property("replace", "Replacement text."),
+                    string_property("reason", "Reason this edit is needed."),
+                ],
+                vec!["path", "find", "replace", "reason"],
+            ),
+        ),
+    ]
+}
+
+fn tool(name: &'static str, description: &'static str, parameters: serde_json::Value) -> ChatTool {
+    ChatTool {
+        kind: "function",
+        function: ChatToolFunction {
+            name,
+            description,
+            parameters,
+        },
+    }
+}
+
+fn object_schema(
+    properties: Vec<(&'static str, serde_json::Value)>,
+    required: Vec<&'static str>,
+) -> serde_json::Value {
+    let properties = properties
+        .into_iter()
+        .map(|(name, schema)| (name.to_string(), schema))
+        .collect::<serde_json::Map<_, _>>();
+    serde_json::json!({
+        "type": "object",
+        "properties": properties,
+        "required": required,
+    })
+}
+
+fn string_property(
+    description: &'static str,
+    text: &'static str,
+) -> (&'static str, serde_json::Value) {
+    (
+        description,
+        serde_json::json!({"type": "string", "description": text}),
+    )
+}
+
+fn integer_property(
+    description: &'static str,
+    text: &'static str,
+) -> (&'static str, serde_json::Value) {
+    (
+        description,
+        serde_json::json!({"type": "integer", "description": text}),
     )
 }
 
@@ -291,6 +438,8 @@ fn normalize_decision(
     if !tools.is_empty() {
         return Ok(AgentDecision {
             thought: None,
+            reasoning_content: first_string_field(&value, &["reasoning_content"])
+                .map(str::to_string),
             tool: tools.first().cloned(),
             tools,
             final_answer: None,
@@ -302,6 +451,7 @@ fn normalize_decision(
         if !content.is_empty() && content != PLACEHOLDER_FINAL_CONTENT {
             return Ok(AgentDecision {
                 thought: None,
+                reasoning_content: None,
                 tool: None,
                 tools: Vec::new(),
                 final_answer: Some(content.to_string()),
@@ -314,6 +464,7 @@ fn normalize_decision(
         if !answer.is_empty() && answer != PLACEHOLDER_FINAL_CONTENT {
             return Ok(AgentDecision {
                 thought: None,
+                reasoning_content: None,
                 tool: None,
                 tools: Vec::new(),
                 final_answer: Some(answer.to_string()),
@@ -356,6 +507,10 @@ fn openai_tool_calls(
             None => serde_json::json!({}),
         };
         parsed.push(ToolCall {
+            id: call
+                .get("id")
+                .and_then(|id| id.as_str())
+                .map(str::to_string),
             name: name.to_string(),
             arguments,
         });

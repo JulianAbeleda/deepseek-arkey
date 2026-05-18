@@ -14,6 +14,9 @@ pub(crate) fn effective_workspace_root(selected_root: Option<&Path>) -> Option<P
 }
 
 pub(crate) fn infer_natural_root(prompt: &str) -> Option<PathBuf> {
+    if let Ok(Some(root)) = parse_arrow_chain_root(prompt) {
+        return Some(root);
+    }
     let home = std::env::var_os("HOME").map(PathBuf::from)?;
     let lowered = prompt.to_lowercase();
     if lowered.contains("desktop") {
@@ -43,6 +46,9 @@ pub(crate) fn parse_navigation_request_from(
     prompt: &str,
     base_root: Option<&Path>,
 ) -> Result<Option<PathBuf>, String> {
+    if let Some(parsed) = parse_arrow_chain_root_with_task(prompt, base_root)? {
+        return Ok((!parsed.has_trailing_task).then_some(parsed.root));
+    }
     let prompt = prompt.trim();
     let lowered = prompt.to_lowercase();
     let Some((target, explicit_path)) = navigation_target(prompt, &lowered) else {
@@ -205,6 +211,88 @@ fn looks_like_path_target(target: &str) -> bool {
         || target.contains('/')
 }
 
+struct ArrowChainRoot {
+    root: PathBuf,
+    has_trailing_task: bool,
+}
+
+fn parse_arrow_chain_root(prompt: &str) -> Result<Option<PathBuf>, String> {
+    parse_arrow_chain_root_with_task(prompt, None).map(|parsed| parsed.map(|parsed| parsed.root))
+}
+
+fn parse_arrow_chain_root_with_task(
+    prompt: &str,
+    base_root: Option<&Path>,
+) -> Result<Option<ArrowChainRoot>, String> {
+    if !prompt.contains("->") {
+        return Ok(None);
+    }
+    let parts = prompt
+        .split("->")
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>();
+    let Some(first) = parts.first() else {
+        return Ok(None);
+    };
+    let lowered = first.to_lowercase();
+    let Some((target, _)) = navigation_target(first, &lowered) else {
+        return Ok(None);
+    };
+    let target = clean_navigation_target(target);
+    if target.is_empty() {
+        return Ok(None);
+    }
+
+    let mut root = if let Some(root) = navigation_alias_root(target) {
+        canonical_dir(root)?
+    } else {
+        canonical_dir(expand_path(target, base_root))?
+    };
+    let mut has_task = false;
+
+    for (index, part) in parts.iter().enumerate().skip(1) {
+        let part = trim_navigation_punctuation(part.trim());
+        if part.is_empty() {
+            continue;
+        }
+        let child = clean_navigation_target(part);
+        if child.is_empty() {
+            continue;
+        }
+        let child_path = root.join(child);
+        if child_path.is_dir() {
+            root = canonical_dir(child_path)?;
+            continue;
+        }
+        if index + 1 == parts.len() && is_trailing_instruction_segment(part) {
+            has_task = true;
+            break;
+        }
+        return Err(format!("{} is not a directory", child_path.display()));
+    }
+
+    Ok(Some(ArrowChainRoot {
+        root,
+        has_trailing_task: has_task,
+    }))
+}
+
+fn is_trailing_instruction_segment(part: &str) -> bool {
+    let part = part.trim();
+    if part.is_empty() || looks_like_path_target(part) {
+        return false;
+    }
+    let lowered = part.to_lowercase();
+    if [" folder", " directory", " repo", " repository"]
+        .iter()
+        .any(|suffix| lowered.ends_with(suffix))
+    {
+        return false;
+    }
+    part.ends_with('?') || part.split_whitespace().nth(1).is_some()
+}
+
 fn canonical_dir(path: PathBuf) -> Result<PathBuf, String> {
     let root = path
         .canonicalize()
@@ -247,8 +335,8 @@ pub(crate) fn path_boundary_clarify_text(root: &Path, path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        parse_navigation_request, parse_navigation_request_from, parse_root_command,
-        path_boundary_clarify_text, root_status, update_selected_root_from,
+        infer_natural_root, parse_navigation_request, parse_navigation_request_from,
+        parse_root_command, path_boundary_clarify_text, root_status, update_selected_root_from,
     };
     use crate::test_support::env_lock;
     use std::fs;
@@ -380,6 +468,64 @@ mod tests {
                 .as_deref(),
             Some(child.canonicalize().unwrap().as_path())
         );
+    }
+
+    #[test]
+    fn arrow_chain_navigation_can_leave_trailing_task_for_agent() {
+        let _guard = env_lock();
+        let root = tempfile::tempdir().unwrap();
+        let structure = root.path().join("tinygrad").join("structure");
+        let home_structure = root.path().join("env").join("tinygrad").join("structure");
+        fs::create_dir_all(&structure).unwrap();
+        fs::create_dir_all(&home_structure).unwrap();
+        let previous_home = std::env::var_os("HOME");
+        std::env::set_var("HOME", root.path());
+
+        assert_eq!(
+            parse_navigation_request_from("go to tinygrad -> structure", Some(root.path()))
+                .unwrap()
+                .as_deref(),
+            Some(structure.canonicalize().unwrap().as_path())
+        );
+
+        assert_eq!(
+            parse_navigation_request_from(
+                "go to tinygrad -> structure -> find your purpose",
+                Some(root.path())
+            )
+            .unwrap(),
+            None
+        );
+        assert_eq!(
+            parse_navigation_request_from(
+                "go to tinygrad -> structure -> what is your role?",
+                Some(root.path())
+            )
+            .unwrap(),
+            None
+        );
+
+        assert_eq!(
+            infer_natural_root("go to my env -> tinygrad -> structure -> find your purpose")
+                .unwrap()
+                .as_path(),
+            home_structure.canonicalize().unwrap().as_path()
+        );
+
+        assert!(
+            parse_navigation_request_from("go to tinygrad -> missing", Some(root.path())).is_err()
+        );
+        assert!(parse_navigation_request_from(
+            "go to tinygrad -> missing folder",
+            Some(root.path())
+        )
+        .is_err());
+
+        if let Some(previous_home) = previous_home {
+            std::env::set_var("HOME", previous_home);
+        } else {
+            std::env::remove_var("HOME");
+        }
     }
 
     #[test]

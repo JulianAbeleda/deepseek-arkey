@@ -3,7 +3,8 @@ use std::process::{Child, Command, Output, Stdio};
 use std::thread;
 use std::time::Duration;
 
-use serde::{Deserialize, Serialize};
+use serde::ser::SerializeStruct;
+use serde::{Deserialize, Serialize, Serializer};
 
 use crate::cancel::{CancellationToken, CANCELLED};
 use crate::safety::{cap_text, redact_text, DEFAULT_TEXT_CAP};
@@ -38,16 +39,97 @@ of writing secrets directly into ~/.zshrc.
 Then verify:
   deepseek-arkey login"#;
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct Message {
     pub role: String,
+    #[serde(default, deserialize_with = "deserialize_nullable_string")]
     pub content: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_content: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<Vec<NativeToolCall>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
+}
+
+fn deserialize_nullable_string<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value: Option<String> = Option::deserialize(deserializer)?;
+    Ok(value.unwrap_or_default())
+}
+
+impl Serialize for Message {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut fields = 2;
+        if self.reasoning_content.is_some() {
+            fields += 1;
+        }
+        if self.tool_calls.is_some() {
+            fields += 1;
+        }
+        if self.tool_call_id.is_some() {
+            fields += 1;
+        }
+        let mut state = serializer.serialize_struct("Message", fields)?;
+        state.serialize_field("role", &self.role)?;
+        if self.role == "assistant" && self.tool_calls.is_some() && self.content.is_empty() {
+            state.serialize_field("content", &Option::<String>::None)?;
+        } else {
+            state.serialize_field("content", &self.content)?;
+        }
+        if let Some(reasoning_content) = &self.reasoning_content {
+            state.serialize_field("reasoning_content", reasoning_content)?;
+        }
+        if let Some(tool_calls) = &self.tool_calls {
+            state.serialize_field("tool_calls", tool_calls)?;
+        }
+        if let Some(tool_call_id) = &self.tool_call_id {
+            state.serialize_field("tool_call_id", tool_call_id)?;
+        }
+        state.end()
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct NativeToolCall {
+    pub id: String,
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub function: NativeFunctionCall,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct NativeFunctionCall {
+    pub name: String,
+    pub arguments: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ChatTool {
+    #[serde(rename = "type")]
+    pub kind: &'static str,
+    pub function: ChatToolFunction,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ChatToolFunction {
+    pub name: &'static str,
+    pub description: &'static str,
+    pub parameters: serde_json::Value,
 }
 
 pub fn message(role: impl Into<String>, content: impl Into<String>) -> Message {
     Message {
         role: role.into(),
         content: content.into(),
+        reasoning_content: None,
+        tool_calls: None,
+        tool_call_id: None,
     }
 }
 
@@ -63,6 +145,34 @@ pub fn assistant_message(content: impl Into<String>) -> Message {
     message("assistant", content)
 }
 
+#[allow(dead_code)]
+pub fn assistant_tool_calls_message(tool_calls: Vec<NativeToolCall>) -> Message {
+    assistant_tool_calls_message_with_reasoning(tool_calls, None)
+}
+
+pub fn assistant_tool_calls_message_with_reasoning(
+    tool_calls: Vec<NativeToolCall>,
+    reasoning_content: Option<String>,
+) -> Message {
+    Message {
+        role: "assistant".to_string(),
+        content: String::new(),
+        reasoning_content,
+        tool_calls: Some(tool_calls),
+        tool_call_id: None,
+    }
+}
+
+pub fn tool_message(tool_call_id: impl Into<String>, content: impl Into<String>) -> Message {
+    Message {
+        role: "tool".to_string(),
+        content: content.into(),
+        reasoning_content: None,
+        tool_calls: None,
+        tool_call_id: Some(tool_call_id.into()),
+    }
+}
+
 #[derive(Debug, Serialize)]
 struct ChatRequest<'a> {
     model: &'a str,
@@ -72,6 +182,10 @@ struct ChatRequest<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     max_tokens: Option<u32>,
     stream: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tools: Option<&'a [ChatTool]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_choice: Option<&'a str>,
 }
 
 pub fn api_key() -> Result<String, String> {
@@ -110,6 +224,9 @@ pub fn chat(
             print!("{delta}");
             let _ = std::io::stdout().flush();
         },
+        false,
+        None,
+        None,
         None,
     )
 }
@@ -135,6 +252,9 @@ where
         true,
         false,
         on_delta,
+        false,
+        None,
+        None,
         None,
     )
 }
@@ -154,10 +274,14 @@ pub fn chat_quiet(
         false,
         false,
         |_| {},
+        false,
+        None,
+        None,
         None,
     )
 }
 
+#[allow(dead_code)]
 pub fn chat_cancelled(
     messages: &[Message],
     model: &str,
@@ -175,10 +299,14 @@ pub fn chat_cancelled(
         true,
         false,
         |_| {},
+        false,
         Some(cancel),
+        None,
+        None,
     )
 }
 
+#[allow(dead_code)]
 pub fn chat_quiet_cancelled(
     messages: &[Message],
     model: &str,
@@ -195,7 +323,104 @@ pub fn chat_quiet_cancelled(
         false,
         false,
         |_| {},
+        false,
         Some(cancel),
+        None,
+        None,
+    )
+}
+
+pub fn chat_tools(
+    messages: &[Message],
+    model: &str,
+    temperature: Option<f32>,
+    max_tokens: Option<u32>,
+    tools: &[ChatTool],
+) -> Result<String, String> {
+    chat_impl(
+        messages,
+        model,
+        temperature,
+        max_tokens,
+        false,
+        true,
+        false,
+        |_| {},
+        true,
+        None,
+        Some(tools),
+        Some("auto"),
+    )
+}
+
+pub fn chat_tools_quiet(
+    messages: &[Message],
+    model: &str,
+    temperature: Option<f32>,
+    max_tokens: Option<u32>,
+    tools: &[ChatTool],
+) -> Result<String, String> {
+    chat_impl(
+        messages,
+        model,
+        temperature,
+        max_tokens,
+        false,
+        false,
+        false,
+        |_| {},
+        true,
+        None,
+        Some(tools),
+        Some("auto"),
+    )
+}
+
+pub fn chat_tools_cancelled(
+    messages: &[Message],
+    model: &str,
+    temperature: Option<f32>,
+    max_tokens: Option<u32>,
+    cancel: &CancellationToken,
+    tools: &[ChatTool],
+) -> Result<String, String> {
+    chat_impl(
+        messages,
+        model,
+        temperature,
+        max_tokens,
+        false,
+        true,
+        false,
+        |_| {},
+        true,
+        Some(cancel),
+        Some(tools),
+        Some("auto"),
+    )
+}
+
+pub fn chat_tools_quiet_cancelled(
+    messages: &[Message],
+    model: &str,
+    temperature: Option<f32>,
+    max_tokens: Option<u32>,
+    cancel: &CancellationToken,
+    tools: &[ChatTool],
+) -> Result<String, String> {
+    chat_impl(
+        messages,
+        model,
+        temperature,
+        max_tokens,
+        false,
+        false,
+        false,
+        |_| {},
+        true,
+        Some(cancel),
+        Some(tools),
+        Some("auto"),
     )
 }
 
@@ -208,7 +433,10 @@ fn chat_impl<F>(
     print_cache: bool,
     print_stream_trailing_newline: bool,
     on_delta: F,
+    decision_response: bool,
     cancel: Option<&CancellationToken>,
+    tools: Option<&[ChatTool]>,
+    tool_choice: Option<&str>,
 ) -> Result<String, String>
 where
     F: FnMut(&str),
@@ -223,6 +451,8 @@ where
         temperature,
         max_tokens,
         stream,
+        tools,
+        tool_choice,
     })
     .map_err(|err| err.to_string())?;
     let client = CurlHttpClient;
@@ -253,7 +483,11 @@ where
     if print_cache {
         print_cache_stats(&raw);
     }
-    extract_assistant_text(&raw)
+    if decision_response {
+        extract_assistant_decision_text(&raw)
+    } else {
+        extract_assistant_text(&raw)
+    }
 }
 
 fn chat_streaming<F>(
@@ -449,6 +683,51 @@ fn curl_quote(value: &str) -> String {
 }
 
 pub fn extract_assistant_text(raw: &str) -> Result<String, String> {
+    let message = extract_assistant_message(raw)?;
+    if let Some(decision) = openai_tool_decision_text(&message) {
+        return Ok(decision);
+    }
+    message
+        .get("content")
+        .and_then(|content| content.as_str())
+        .map(|content| content.trim().to_string())
+        .map(|content| cap_text(&content, DEFAULT_TEXT_CAP))
+        .filter(|content| !content.is_empty())
+        .ok_or_else(|| {
+            format!(
+                "provider response did not include assistant text: {}",
+                cap_text(raw, 1000)
+            )
+        })
+}
+
+pub fn extract_assistant_decision_text(raw: &str) -> Result<String, String> {
+    let message = extract_assistant_message(raw)?;
+    if let Some(decision) = openai_tool_decision_text(&message) {
+        return Ok(decision);
+    }
+    let content = message
+        .get("content")
+        .and_then(|content| content.as_str())
+        .map(str::trim)
+        .filter(|content| !content.is_empty())
+        .ok_or_else(|| {
+            format!(
+                "provider response did not include assistant text: {}",
+                cap_text(raw, 1000)
+            )
+        })?;
+    if content.starts_with('{') {
+        return Ok(cap_text(content, DEFAULT_TEXT_CAP));
+    }
+    Ok(serde_json::json!({
+        "content": cap_text(content, DEFAULT_TEXT_CAP),
+        "tool_calls": null,
+    })
+    .to_string())
+}
+
+fn extract_assistant_message(raw: &str) -> Result<serde_json::Value, String> {
     let value: serde_json::Value = serde_json::from_str(raw).map_err(|err| {
         format!(
             "provider returned invalid JSON: {err}; body={}",
@@ -471,21 +750,7 @@ pub fn extract_assistant_text(raw: &str) -> Result<String, String> {
                 cap_text(raw, 1000)
             )
         })?;
-    if let Some(decision) = openai_tool_decision_text(message) {
-        return Ok(decision);
-    }
-    message
-        .get("content")
-        .and_then(|content| content.as_str())
-        .map(|content| content.trim().to_string())
-        .map(|content| cap_text(&content, DEFAULT_TEXT_CAP))
-        .filter(|content| !content.is_empty())
-        .ok_or_else(|| {
-            format!(
-                "provider response did not include assistant text: {}",
-                cap_text(raw, 1000)
-            )
-        })
+    Ok(message.clone())
 }
 
 fn openai_tool_decision_text(message: &serde_json::Value) -> Option<String> {
@@ -497,6 +762,9 @@ fn openai_tool_decision_text(message: &serde_json::Value) -> Option<String> {
         .filter(|content| !content.is_empty());
     let decision = serde_json::json!({
         "content": content,
+        "reasoning_content": message
+            .get("reasoning_content")
+            .and_then(|reasoning| reasoning.as_str()),
         "tool_calls": calls,
     });
     Some(decision.to_string())
@@ -535,8 +803,10 @@ mod tests {
     use crate::cancel::{CancellationToken, CANCELLED};
 
     use super::{
-        chat_streaming, curl_command, curl_config, curl_quote, extract_assistant_text,
-        parse_api_key, HttpClient,
+        assistant_tool_calls_message, chat_streaming, curl_command, curl_config, curl_quote,
+        extract_assistant_decision_text, extract_assistant_text, message, parse_api_key,
+        tool_message, ChatRequest, ChatTool, ChatToolFunction, HttpClient, Message,
+        NativeFunctionCall, NativeToolCall,
     };
 
     #[test]
@@ -546,11 +816,124 @@ mod tests {
     }
 
     #[test]
+    fn extracts_final_content_as_agent_decision_text() {
+        let raw = r#"{"choices":[{"message":{"content":"done"}}]}"#;
+        let text = extract_assistant_decision_text(raw).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(value["content"], "done");
+        assert!(value["tool_calls"].is_null());
+    }
+
+    #[test]
+    fn preserves_legacy_json_content_as_agent_decision_text() {
+        let raw = r#"{"choices":[{"message":{"content":"{\"tool\":{\"name\":\"list_files\",\"arguments\":{\"path\":\".\"}}}"}}]}"#;
+        let text = extract_assistant_decision_text(raw).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(value.pointer("/tool/name").unwrap(), "list_files");
+    }
+
+    #[test]
+    fn normal_chat_request_omits_native_tools() {
+        let messages = vec![message("user", "hello")];
+        let body = serde_json::to_value(ChatRequest {
+            model: "deepseek-v4-pro",
+            messages: &messages,
+            temperature: None,
+            max_tokens: None,
+            stream: false,
+            tools: None,
+            tool_choice: None,
+        })
+        .unwrap();
+        assert!(body.get("tools").is_none());
+        assert!(body.get("tool_choice").is_none());
+    }
+
+    #[test]
+    fn agent_chat_request_serializes_native_tools() {
+        let messages = vec![message("user", "list files")];
+        let tools = vec![ChatTool {
+            kind: "function",
+            function: ChatToolFunction {
+                name: "list_files",
+                description: "List files.",
+                parameters: serde_json::json!({
+                    "type": "object",
+                    "properties": {"path": {"type": "string"}},
+                    "required": ["path"],
+                }),
+            },
+        }];
+        let body = serde_json::to_value(ChatRequest {
+            model: "deepseek-v4-pro",
+            messages: &messages,
+            temperature: None,
+            max_tokens: None,
+            stream: false,
+            tools: Some(&tools),
+            tool_choice: Some("auto"),
+        })
+        .unwrap();
+        assert_eq!(body["tool_choice"], "auto");
+        assert_eq!(body["tools"][0]["type"], "function");
+        assert_eq!(body["tools"][0]["function"]["name"], "list_files");
+    }
+
+    #[test]
+    fn native_tool_messages_serialize_openai_shape() {
+        let assistant = assistant_tool_calls_message(vec![NativeToolCall {
+            id: "call_1".to_string(),
+            kind: "function".to_string(),
+            function: NativeFunctionCall {
+                name: "read_file".to_string(),
+                arguments: "{\"path\":\"README.md\"}".to_string(),
+            },
+        }]);
+        let tool = tool_message("call_1", "contents");
+        let assistant_json = serde_json::to_value(assistant).unwrap();
+        let tool_json = serde_json::to_value(tool).unwrap();
+        assert_eq!(assistant_json["role"], "assistant");
+        assert!(assistant_json["content"].is_null());
+        assert_eq!(assistant_json["tool_calls"][0]["id"], "call_1");
+        assert_eq!(tool_json["role"], "tool");
+        assert_eq!(tool_json["tool_call_id"], "call_1");
+    }
+
+    #[test]
+    fn native_tool_message_can_include_reasoning_content() {
+        let assistant = super::assistant_tool_calls_message_with_reasoning(
+            vec![NativeToolCall {
+                id: "call_1".to_string(),
+                kind: "function".to_string(),
+                function: NativeFunctionCall {
+                    name: "read_file".to_string(),
+                    arguments: "{\"path\":\"README.md\"}".to_string(),
+                },
+            }],
+            Some("need file".to_string()),
+        );
+        let value = serde_json::to_value(assistant).unwrap();
+        assert_eq!(value["reasoning_content"], "need file");
+    }
+
+    #[test]
+    fn message_round_trips_null_content() {
+        let json = r#"{"role":"assistant","content":null,"tool_calls":[{"id":"call_1","type":"function","function":{"name":"read_file","arguments":"{\"path\":\"README.md\"}"}}]}"#;
+        let message: Message = serde_json::from_str(json).unwrap();
+        assert_eq!(message.role, "assistant");
+        assert_eq!(message.content, "");
+        assert_eq!(message.tool_calls.as_ref().unwrap()[0].id, "call_1");
+        let roundtrip = serde_json::to_value(&message).unwrap();
+        assert!(roundtrip["content"].is_null());
+    }
+
+    #[test]
     fn extracts_native_tool_calls_as_agent_decision_json() {
-        let raw = r#"{"choices":[{"message":{"content":"","tool_calls":[{"id":"call_1","type":"function","function":{"name":"read_file","arguments":"{\"path\":\"src/main.rs\"}"}}]}}]}"#;
+        let raw = r#"{"choices":[{"message":{"content":"","reasoning_content":"need file","tool_calls":[{"id":"call_1","type":"function","function":{"name":"read_file","arguments":"{\"path\":\"src/main.rs\"}"}}]}}]}"#;
         let text = extract_assistant_text(raw).unwrap();
         let value: serde_json::Value = serde_json::from_str(&text).unwrap();
         assert!(value.get("content").unwrap().is_null());
+        assert_eq!(value.get("reasoning_content").unwrap(), "need file");
         assert_eq!(
             value.pointer("/tool_calls/0/function/name").unwrap(),
             "read_file"

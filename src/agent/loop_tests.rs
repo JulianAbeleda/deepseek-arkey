@@ -528,6 +528,104 @@ fn multi_tool_response_reports_substeps() {
 }
 
 #[test]
+fn native_tool_results_are_appended_as_tool_messages() {
+    let root = std::env::temp_dir().join(format!(
+        "deepseek-agent-native-tool-messages-test-{}",
+        std::process::id()
+    ));
+    fs::create_dir_all(&root).unwrap();
+    fs::write(root.join("README.md"), "fixture").unwrap();
+    let mut responses = VecDeque::from([
+        r#"{"content":null,"reasoning_content":"need README","tool_calls":[{"id":"call_readme","type":"function","function":{"name":"read_file","arguments":"{\"path\":\"README.md\"}"}}]}"#.to_string(),
+        r#"{"content":"done","tool_calls":null}"#.to_string(),
+    ]);
+    let mut seen_messages = Vec::new();
+    let outcome = super::run_agent_with_chat_handler(
+        "test",
+        "model",
+        None,
+        AgentConfig::new(root.clone(), 3),
+        ApprovalMode::Deny,
+        |_| {},
+        |_| ApprovalDecision::Deny,
+        None,
+        |messages, _, _| {
+            seen_messages.push(messages.to_vec());
+            Ok(responses.pop_front().unwrap())
+        },
+    )
+    .unwrap();
+    assert_eq!(outcome.answer, "done");
+    let second_call = seen_messages.get(1).unwrap();
+    let assistant = second_call
+        .iter()
+        .find(|message| message.role == "assistant" && message.tool_calls.is_some())
+        .unwrap();
+    assert_eq!(assistant.tool_calls.as_ref().unwrap()[0].id, "call_readme");
+    assert_eq!(assistant.reasoning_content.as_deref(), Some("need README"));
+    let tool = second_call
+        .iter()
+        .find(|message| {
+            message.role == "tool" && message.tool_call_id.as_deref() == Some("call_readme")
+        })
+        .unwrap();
+    assert!(tool.content.contains("fixture"));
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn multiple_native_tool_calls_append_multiple_tool_messages() {
+    let root = std::env::temp_dir().join(format!(
+        "deepseek-agent-multi-native-tool-test-{}",
+        std::process::id()
+    ));
+    fs::create_dir_all(&root).unwrap();
+    fs::write(root.join("README.md"), "fixture readme").unwrap();
+    fs::write(root.join("Cargo.toml"), "fixture cargo").unwrap();
+    let mut responses = VecDeque::from([
+        r#"{"content":null,"tool_calls":[{"id":"call_1","type":"function","function":{"name":"read_file","arguments":"{\"path\":\"README.md\"}"}},{"id":"call_2","type":"function","function":{"name":"read_file","arguments":"{\"path\":\"Cargo.toml\"}"}}]}"#.to_string(),
+        r#"{"content":"done","tool_calls":null}"#.to_string(),
+    ]);
+    let mut seen_messages = Vec::new();
+    let outcome = super::run_agent_with_chat_handler(
+        "test",
+        "model",
+        None,
+        AgentConfig::new(root.clone(), 3),
+        ApprovalMode::Deny,
+        |_| {},
+        |_| ApprovalDecision::Deny,
+        None,
+        |messages, _, _| {
+            seen_messages.push(messages.to_vec());
+            Ok(responses.pop_front().unwrap())
+        },
+    )
+    .unwrap();
+    assert_eq!(outcome.answer, "done");
+    let second_call = seen_messages.get(1).unwrap();
+    let assistant = second_call
+        .iter()
+        .find(|message| message.role == "assistant" && message.tool_calls.is_some())
+        .unwrap();
+    let tool_calls = assistant.tool_calls.as_ref().unwrap();
+    assert_eq!(tool_calls.len(), 2);
+    assert_eq!(tool_calls[0].id, "call_1");
+    assert_eq!(tool_calls[1].id, "call_2");
+    let tool_1 = second_call
+        .iter()
+        .find(|message| message.role == "tool" && message.tool_call_id.as_deref() == Some("call_1"))
+        .unwrap();
+    assert!(tool_1.content.contains("fixture readme"));
+    let tool_2 = second_call
+        .iter()
+        .find(|message| message.role == "tool" && message.tool_call_id.as_deref() == Some("call_2"))
+        .unwrap();
+    assert!(tool_2.content.contains("fixture cargo"));
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn cancelled_agent_stops_before_chat_call() {
     let root = std::env::temp_dir().join(format!(
         "deepseek-agent-cancel-before-chat-test-{}",
@@ -630,6 +728,7 @@ fn default_agent_approval_handler_panics_if_reached() {
 #[test]
 fn builds_shell_approval_request() {
     let call = ToolCall {
+        id: None,
         name: "run_shell".to_string(),
         arguments: json!({
             "command": "pwd",
@@ -655,6 +754,7 @@ fn external_approval_can_approve_shell_once() {
     let _ = fs::remove_dir_all(&root);
     fs::create_dir_all(&root).unwrap();
     let call = ToolCall {
+        id: None,
         name: "run_shell".to_string(),
         arguments: json!({
             "command": "printf APPROVED",
@@ -691,6 +791,7 @@ fn unknown_tool_returns_observation_error() {
     let result = execute_tool(
         &workspace,
         &ToolCall {
+            id: None,
             name: "unknown_tool".to_string(),
             arguments: json!({}),
         },
@@ -704,6 +805,7 @@ fn fetch_url_tool_dispatches_without_approval() {
     let result = execute_tool(
         &workspace,
         &ToolCall {
+            id: None,
             name: "fetch_url".to_string(),
             arguments: json!({"url":"file:///etc/passwd"}),
         },
@@ -717,6 +819,7 @@ fn run_shell_denies_without_interactive_approval() {
     let result = execute_tool(
         &workspace,
         &ToolCall {
+            id: None,
             name: "run_shell".to_string(),
             arguments: json!({"command":"pwd","cwd":".","reason":"test"}),
         },
@@ -730,6 +833,7 @@ fn deny_approval_mode_blocks_shell_without_prompting() {
     let result = super::execute_tool(
         &workspace,
         &ToolCall {
+            id: None,
             name: "run_shell".to_string(),
             arguments: json!({"command":"pwd","cwd":".","reason":"test"}),
         },
@@ -745,6 +849,7 @@ fn builds_patch_approval_request() {
         &workspace,
         2,
         &ToolCall {
+            id: None,
             name: "propose_patch".to_string(),
             arguments: json!({
                 "path":"note.txt",
@@ -778,6 +883,7 @@ fn approved_approval_mode_applies_patch_once() {
     let result = super::execute_tool(
         &workspace,
         &ToolCall {
+            id: None,
             name: "propose_patch".to_string(),
             arguments: json!({
                 "path":"note.txt",
@@ -799,6 +905,7 @@ fn missing_path_returns_observation_error() {
     let result = execute_tool(
         &workspace,
         &ToolCall {
+            id: None,
             name: "read_file".to_string(),
             arguments: json!({}),
         },
@@ -818,6 +925,7 @@ fn propose_patch_denies_without_interactive_approval() {
     let result = execute_tool(
         &workspace,
         &ToolCall {
+            id: None,
             name: "propose_patch".to_string(),
             arguments: json!({
                 "path":"note.txt",
@@ -838,6 +946,7 @@ fn propose_patch_requires_args() {
     let result = execute_tool(
         &workspace,
         &ToolCall {
+            id: None,
             name: "propose_patch".to_string(),
             arguments: json!({"path":"Cargo.toml","find":"[package]","replace":"[package]"}),
         },
@@ -856,6 +965,7 @@ fn propose_patch_rejects_path_escape_and_missing_file() {
     let escaped = execute_tool(
         &workspace,
         &ToolCall {
+            id: None,
             name: "propose_patch".to_string(),
             arguments: json!({
                 "path":"../outside.txt",
@@ -869,6 +979,7 @@ fn propose_patch_rejects_path_escape_and_missing_file() {
     let missing = execute_tool(
         &workspace,
         &ToolCall {
+            id: None,
             name: "propose_patch".to_string(),
             arguments: json!({
                 "path":"missing.txt",
@@ -894,6 +1005,7 @@ fn prepare_and_apply_patch_replaces_exact_unique_text() {
     let patch = prepare_patch(
         &workspace,
         &ToolCall {
+            id: None,
             name: "propose_patch".to_string(),
             arguments: json!({
                 "path":"note.txt",
@@ -925,6 +1037,7 @@ fn rejects_ambiguous_replacement() {
     let err = prepare_patch(
         &workspace,
         &ToolCall {
+            id: None,
             name: "propose_patch".to_string(),
             arguments: json!({
                 "path":"note.txt",
@@ -951,6 +1064,7 @@ fn apply_patch_rejects_changed_file() {
     let patch = prepare_patch(
         &workspace,
         &ToolCall {
+            id: None,
             name: "propose_patch".to_string(),
             arguments: json!({
                 "path":"note.txt",
@@ -977,6 +1091,7 @@ fn inspect_tree_skips_node_modules() {
     let result = execute_tool(
         &workspace,
         &ToolCall {
+            id: None,
             name: "inspect_tree".to_string(),
             arguments: json!({"path":".","depth":2}),
         },

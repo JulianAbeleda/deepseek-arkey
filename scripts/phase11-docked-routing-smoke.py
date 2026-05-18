@@ -37,10 +37,11 @@ def write_fake_curl(directory):
             import time
 
             config = sys.stdin.read()
-            if "inspect shell denial gate" in config and "Tool result for step" in config:
+            has_tool_result = "Tool result for step" in config or "tool_call_id" in config
+            if "inspect shell denial gate" in config and has_tool_result:
                 time.sleep(0.2)
                 decision = {"final_answer": "shell denied as expected"}
-            elif "Tool result for step" in config:
+            elif has_tool_result:
                 time.sleep(0.2)
                 decision = {"final_answer": "desktop scan complete"}
             elif "inspect shell denial gate" in config:

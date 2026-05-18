@@ -10,7 +10,9 @@ use crate::agent;
 use crate::input::ApprovalChoice;
 use crate::provider;
 use crate::runtime;
+use crate::test_support::env_lock;
 use std::collections::HashSet;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -126,6 +128,39 @@ fn selected_root_routes_workspace_prompts_to_agent() {
             Some(selected.to_path_buf()),
             "{prompt}"
         );
+    }
+}
+
+#[test]
+fn arrow_chain_trailing_task_routes_to_agent_root() {
+    let _guard = env_lock();
+    let root = tempfile::tempdir().unwrap();
+    let structure = root.path().join("env").join("tinygrad").join("structure");
+    fs::create_dir_all(&structure).unwrap();
+    let previous_home = std::env::var_os("HOME");
+    std::env::set_var("HOME", root.path());
+
+    assert_eq!(
+        workspace_agent_root_for_prompt(
+            "Go to my env -> tinygrad -> structure -> find your purpose.",
+            None
+        )
+        .as_deref(),
+        Some(structure.canonicalize().unwrap().as_path())
+    );
+    assert_eq!(
+        workspace_agent_root_for_prompt(
+            "Go to my env -> tinygrad -> structure -> what is your role?",
+            None
+        )
+        .as_deref(),
+        Some(structure.canonicalize().unwrap().as_path())
+    );
+
+    if let Some(previous_home) = previous_home {
+        std::env::set_var("HOME", previous_home);
+    } else {
+        std::env::remove_var("HOME");
     }
 }
 

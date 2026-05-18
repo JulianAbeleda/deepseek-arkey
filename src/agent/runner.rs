@@ -1,9 +1,12 @@
 use crate::cancel::CancellationToken;
-use crate::provider::{self, assistant_message, system_message, user_message, Message};
+use crate::provider::{
+    self, assistant_message, assistant_tool_calls_message_with_reasoning, system_message,
+    tool_message, user_message, Message, NativeFunctionCall, NativeToolCall,
+};
 use crate::safety::{cap_text, redact_text};
 
 use super::commit_audit;
-use super::decision::{parse_decision_with_metadata, system_prompt};
+use super::decision::{native_tool_definitions, parse_decision_with_metadata, system_prompt};
 use super::dispatch::{approval_request, execute_tool};
 use super::notes::{
     append_assistant_transcript_entry, append_no_action_retry_note,
@@ -69,6 +72,7 @@ pub fn run_agent_with_handlers(
     } = options;
     let chat_cancel = cancel.clone();
     let chat_route = AgentChatRoute::from_options(quiet_cache, chat_cancel.as_ref());
+    let native_tools = native_tool_definitions();
     run_agent_with_chat_handler(
         task,
         model,
@@ -79,15 +83,33 @@ pub fn run_agent_with_handlers(
         &mut on_approval,
         cancel,
         move |messages, model, temperature| match chat_route {
-            AgentChatRoute::Standard => provider::chat(messages, model, temperature, None, false),
-            AgentChatRoute::Quiet => provider::chat_quiet(messages, model, temperature, None),
+            AgentChatRoute::Standard => {
+                provider::chat_tools(messages, model, temperature, None, &native_tools)
+            }
+            AgentChatRoute::Quiet => {
+                provider::chat_tools_quiet(messages, model, temperature, None, &native_tools)
+            }
             AgentChatRoute::Cancelled => {
                 let cancel = chat_cancel.as_ref().expect("cancel route has token");
-                provider::chat_cancelled(messages, model, temperature, None, cancel)
+                provider::chat_tools_cancelled(
+                    messages,
+                    model,
+                    temperature,
+                    None,
+                    cancel,
+                    &native_tools,
+                )
             }
             AgentChatRoute::QuietCancelled => {
                 let cancel = chat_cancel.as_ref().expect("quiet cancel route has token");
-                provider::chat_quiet_cancelled(messages, model, temperature, None, cancel)
+                provider::chat_tools_quiet_cancelled(
+                    messages,
+                    model,
+                    temperature,
+                    None,
+                    cancel,
+                    &native_tools,
+                )
             }
         },
     )
@@ -205,6 +227,7 @@ pub(super) fn run_agent_with_chat_handler(
             });
         }
         let mut tools = decision.tools;
+        let reasoning_content = decision.reasoning_content;
         if tools.is_empty() {
             if let Some(tool) = decision.tool {
                 tools.push(tool);
@@ -216,8 +239,16 @@ pub(super) fn run_agent_with_chat_handler(
             }
             return Err(fail_no_action_with_transcript(&workspace.root, &transcript));
         }
-        let mut result_sections = Vec::new();
         let total_tools = tools.len();
+        let native_tool_calls = tools
+            .iter()
+            .enumerate()
+            .map(|(index, tool)| native_tool_call(step, index, tool))
+            .collect::<Vec<_>>();
+        messages.push(assistant_tool_calls_message_with_reasoning(
+            native_tool_calls,
+            reasoning_content,
+        ));
         for (index, tool) in tools.iter().enumerate() {
             on_step(AgentStep {
                 step,
@@ -249,17 +280,8 @@ pub(super) fn run_agent_with_chat_handler(
                 role: format!("tool:{}", tool.name),
                 content: result_text.clone(),
             });
-            result_sections.push(format!(
-                "Tool result for step {step}, item {} ({}):\n{result_text}",
-                index + 1,
-                tool.name
-            ));
+            messages.push(tool_message(tool_call_id(step, index, tool), result_text));
         }
-        let combined_results = cap_text(&result_sections.join("\n\n"), MAX_TOOL_CHARS);
-        messages.push(assistant_message(redacted_raw));
-        messages.push(user_message(format!(
-            "{combined_results}\nContinue with JSON only."
-        )));
     }
 
     let transcript_path = write_transcript(&workspace.root, &transcript)?;
@@ -268,4 +290,21 @@ pub(super) fn run_agent_with_chat_handler(
         steps: config.max_steps,
         transcript_path,
     })
+}
+
+fn native_tool_call(step: usize, index: usize, tool: &super::ToolCall) -> NativeToolCall {
+    NativeToolCall {
+        id: tool_call_id(step, index, tool),
+        kind: "function".to_string(),
+        function: NativeFunctionCall {
+            name: tool.name.clone(),
+            arguments: serde_json::to_string(&tool.arguments).unwrap_or_else(|_| "{}".to_string()),
+        },
+    }
+}
+
+fn tool_call_id(step: usize, index: usize, tool: &super::ToolCall) -> String {
+    tool.id
+        .clone()
+        .unwrap_or_else(|| format!("call_{step}_{}", index + 1))
 }
