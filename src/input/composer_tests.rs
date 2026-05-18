@@ -7,6 +7,7 @@ use super::{
     take_ansi_sequence, visible_len, visible_suffix, ApprovalChoice, ApprovalModal, DockedComposer,
     DOCK_RESERVED_ROWS,
 };
+use crate::input::InputAction;
 use crossterm::event::{KeyModifiers, KeyboardEnhancementFlags};
 
 #[test]
@@ -127,6 +128,28 @@ fn multiple_pasted_contexts_expand_in_order() {
         composer.expand_pasted_contexts(&composer.buffer),
         "alpha\n then beta\n"
     );
+}
+
+#[test]
+fn compacted_paste_history_recall_resubmits_original_text() {
+    let mut composer = DockedComposer::new("p> ".to_string());
+    let paste = "first line\nsecond line\n";
+
+    composer.insert_paste(paste).unwrap();
+    let InputAction::Submit(first_submit) = composer.submit_buffer().unwrap() else {
+        panic!("expected submit action");
+    };
+    assert_eq!(first_submit, paste);
+    assert!(composer.pasted_contexts.is_empty());
+
+    let entry = composer.previous_history().unwrap();
+    composer.buffer = entry.display_text;
+    composer.pasted_contexts = entry.pasted_contexts;
+
+    let InputAction::Submit(recalled_submit) = composer.submit_buffer().unwrap() else {
+        panic!("expected submit action");
+    };
+    assert_eq!(recalled_submit, paste);
 }
 
 #[test]

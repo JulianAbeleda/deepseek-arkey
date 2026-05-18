@@ -32,7 +32,7 @@ pub struct DockedComposer {
     buffer: String,
     pasted_contexts: Vec<PastedContext>,
     cursor: usize,
-    history: Vec<String>,
+    history: Vec<HistoryEntry>,
     history_index: Option<usize>,
     slash_completion_index: Option<usize>,
     slash_completion_prefix: Option<String>,
@@ -52,6 +52,12 @@ pub struct DockedComposer {
 struct PastedContext {
     marker: String,
     text: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct HistoryEntry {
+    display_text: String,
+    pasted_contexts: Vec<PastedContext>,
 }
 
 pub struct RawModeSession;
@@ -201,17 +207,7 @@ impl DockedComposer {
                         self.insert_text("\n")?;
                         return Ok(None);
                     }
-                    let display_submitted = std::mem::take(&mut self.buffer);
-                    let submitted = self.expand_pasted_contexts(&display_submitted);
-                    self.pasted_contexts.clear();
-                    self.cursor = 0;
-                    self.history_index = None;
-                    self.reset_slash_completion();
-                    if !display_submitted.trim().is_empty() {
-                        self.history.push(display_submitted.clone());
-                    }
-                    self.print_above(&submitted_prompt_echo(&display_submitted))?;
-                    Ok(Some(InputAction::Submit(submitted)))
+                    Ok(Some(self.submit_buffer()?))
                 }
                 KeyCode::Tab => {
                     self.complete_slash_command()?;
@@ -315,8 +311,9 @@ impl DockedComposer {
                     Ok(None)
                 }
                 KeyCode::Up => {
-                    if let Some(line) = self.previous_history() {
-                        self.buffer = line;
+                    if let Some(entry) = self.previous_history() {
+                        self.buffer = entry.display_text;
+                        self.pasted_contexts = entry.pasted_contexts;
                         self.cursor = char_len(&self.buffer);
                         self.reset_slash_completion();
                         self.render()?;
@@ -324,8 +321,9 @@ impl DockedComposer {
                     Ok(None)
                 }
                 KeyCode::Down => {
-                    if let Some(line) = self.next_history() {
-                        self.buffer = line;
+                    if let Some(entry) = self.next_history() {
+                        self.buffer = entry.display_text;
+                        self.pasted_contexts = entry.pasted_contexts;
                         self.cursor = char_len(&self.buffer);
                         self.reset_slash_completion();
                         self.render()?;
@@ -432,6 +430,23 @@ impl DockedComposer {
             text: text.to_string(),
         });
         self.insert_text(&marker)
+    }
+
+    fn submit_buffer(&mut self) -> Result<InputAction, String> {
+        let display_submitted = std::mem::take(&mut self.buffer);
+        let submitted = self.expand_pasted_contexts(&display_submitted);
+        self.cursor = 0;
+        self.history_index = None;
+        self.reset_slash_completion();
+        if !display_submitted.trim().is_empty() {
+            self.history.push(HistoryEntry {
+                display_text: display_submitted.clone(),
+                pasted_contexts: self.pasted_contexts.clone(),
+            });
+        }
+        self.pasted_contexts.clear();
+        self.print_above(&submitted_prompt_echo(&display_submitted))?;
+        Ok(InputAction::Submit(submitted))
     }
 
     fn expand_pasted_contexts(&self, text: &str) -> String {
@@ -635,7 +650,7 @@ impl DockedComposer {
         self.rendered_dock_rows.max(1).min(DOCK_RESERVED_ROWS)
     }
 
-    fn previous_history(&mut self) -> Option<String> {
+    fn previous_history(&mut self) -> Option<HistoryEntry> {
         if self.history.is_empty() {
             return None;
         }
@@ -647,11 +662,14 @@ impl DockedComposer {
         self.history.get(next).cloned()
     }
 
-    fn next_history(&mut self) -> Option<String> {
+    fn next_history(&mut self) -> Option<HistoryEntry> {
         let index = self.history_index?;
         if index + 1 >= self.history.len() {
             self.history_index = None;
-            return Some(String::new());
+            return Some(HistoryEntry {
+                display_text: String::new(),
+                pasted_contexts: Vec::new(),
+            });
         }
         let next = index + 1;
         self.history_index = Some(next);
