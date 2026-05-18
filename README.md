@@ -121,10 +121,12 @@ If you want a DeepSeek TUI where you stay in the loop and review what your AI is
 
 ## Changelog
 
-- `v1.3.0` adds direct agent routing, dock stability fixes, transcript hardening,
-  streaming cancellation, and the Homebrew tap release.
-- Read the full `v1.3.0` notes in the
-  [changelog](./CHANGELOG.md#v130---dock-stability-and-direct-agent-routing).
+- `v1.4.0` adds native provider tool calls, compact pasted composer context,
+  history-safe paste recall, and arrow-chain workspace navigation.
+- `v1.3.0` added direct agent routing, dock stability fixes, transcript
+  hardening, streaming cancellation, and the Homebrew tap release.
+- Read the full release notes in the
+  [changelog](./CHANGELOG.md#v140---native-tool-calls-and-composer-paste-context).
 
 ## License
 

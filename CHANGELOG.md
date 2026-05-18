@@ -3,6 +3,37 @@
 This changelog tracks public release notes. Older `Phase` entries are internal
 development milestones and may not represent every implementation phase.
 
+## v1.4.0 - Native Tool Calls and Composer Paste Context
+
+Summary:
+
+- Added native OpenAI-compatible tool calling for the DeepSeek agent path,
+  including assistant `tool_calls`, tool-result messages, multi-tool batches,
+  and legacy JSON decision fallback.
+- Preserved `reasoning_content` and nullable assistant tool-call content in
+  provider message handling.
+- Kept shell and write tools behind the existing approval gate while allowing
+  read-only native tool calls to flow through the agent loop.
+- Added compact paste handling in the docked composer: multiline or large
+  pasted content displays as `[pasted context - N chars]` while the full pasted
+  text is submitted to the model.
+- Preserved compact pasted context through history recall so resubmitted
+  history entries send the original pasted text, not the display marker.
+- Added arrow-chain workspace navigation for prompts that combine path movement
+  with a trailing task.
+
+Validation:
+
+```bash
+cargo fmt --check
+cargo check
+cargo test --offline
+cargo build --release --bins
+python3 scripts/docked-smoke.py --binary target/release/deepseek-arkey
+python3 scripts/composer-cursor-smoke.py --binary target/release/deepseek-arkey
+python3 scripts/phase11-docked-routing-smoke.py --binary target/release/deepseek-arkey
+```
+
 ## v1.3.0 - Dock Stability and Direct Agent Routing
 
 Summary:
