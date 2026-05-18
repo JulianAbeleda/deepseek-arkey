@@ -626,6 +626,51 @@ fn multiple_native_tool_calls_append_multiple_tool_messages() {
 }
 
 #[test]
+fn native_tool_call_without_id_uses_stable_fallback_id() {
+    let root = std::env::temp_dir().join(format!(
+        "deepseek-agent-fallback-tool-id-test-{}",
+        std::process::id()
+    ));
+    fs::create_dir_all(&root).unwrap();
+    fs::write(root.join("README.md"), "fixture fallback").unwrap();
+    let mut responses = VecDeque::from([
+        r#"{"content":null,"tool_calls":[{"type":"function","function":{"name":"read_file","arguments":"{\"path\":\"README.md\"}"}}]}"#.to_string(),
+        r#"{"content":"done","tool_calls":null}"#.to_string(),
+    ]);
+    let mut seen_messages = Vec::new();
+    let outcome = super::run_agent_with_chat_handler(
+        "test",
+        "model",
+        None,
+        AgentConfig::new(root.clone(), 3),
+        ApprovalMode::Deny,
+        |_| {},
+        |_| ApprovalDecision::Deny,
+        None,
+        |messages, _, _| {
+            seen_messages.push(messages.to_vec());
+            Ok(responses.pop_front().unwrap())
+        },
+    )
+    .unwrap();
+    assert_eq!(outcome.answer, "done");
+    let second_call = seen_messages.get(1).unwrap();
+    let assistant = second_call
+        .iter()
+        .find(|message| message.role == "assistant" && message.tool_calls.is_some())
+        .unwrap();
+    assert_eq!(assistant.tool_calls.as_ref().unwrap()[0].id, "call_1_1");
+    let tool = second_call
+        .iter()
+        .find(|message| {
+            message.role == "tool" && message.tool_call_id.as_deref() == Some("call_1_1")
+        })
+        .unwrap();
+    assert!(tool.content.contains("fixture fallback"));
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn cancelled_agent_stops_before_chat_call() {
     let root = std::env::temp_dir().join(format!(
         "deepseek-agent-cancel-before-chat-test-{}",

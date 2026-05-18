@@ -3,7 +3,6 @@ use std::process::{Child, Command, Output, Stdio};
 use std::thread;
 use std::time::Duration;
 
-use serde::ser::SerializeStruct;
 use serde::{Deserialize, Serialize, Serializer};
 
 use crate::cancel::{CancellationToken, CANCELLED};
@@ -65,34 +64,33 @@ impl Serialize for Message {
     where
         S: Serializer,
     {
-        let mut fields = 2;
-        if self.reasoning_content.is_some() {
-            fields += 1;
+        let content =
+            if self.role == "assistant" && self.tool_calls.is_some() && self.content.is_empty() {
+                None
+            } else {
+                Some(self.content.as_str())
+            };
+        MessageWire {
+            role: &self.role,
+            content,
+            reasoning_content: self.reasoning_content.as_deref(),
+            tool_calls: self.tool_calls.as_deref(),
+            tool_call_id: self.tool_call_id.as_deref(),
         }
-        if self.tool_calls.is_some() {
-            fields += 1;
-        }
-        if self.tool_call_id.is_some() {
-            fields += 1;
-        }
-        let mut state = serializer.serialize_struct("Message", fields)?;
-        state.serialize_field("role", &self.role)?;
-        if self.role == "assistant" && self.tool_calls.is_some() && self.content.is_empty() {
-            state.serialize_field("content", &Option::<String>::None)?;
-        } else {
-            state.serialize_field("content", &self.content)?;
-        }
-        if let Some(reasoning_content) = &self.reasoning_content {
-            state.serialize_field("reasoning_content", reasoning_content)?;
-        }
-        if let Some(tool_calls) = &self.tool_calls {
-            state.serialize_field("tool_calls", tool_calls)?;
-        }
-        if let Some(tool_call_id) = &self.tool_call_id {
-            state.serialize_field("tool_call_id", tool_call_id)?;
-        }
-        state.end()
+        .serialize(serializer)
     }
+}
+
+#[derive(Serialize)]
+struct MessageWire<'a> {
+    role: &'a str,
+    content: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reasoning_content: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_calls: Option<&'a [NativeToolCall]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_call_id: Option<&'a str>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -188,6 +186,33 @@ struct ChatRequest<'a> {
     tool_choice: Option<&'a str>,
 }
 
+#[derive(Clone, Copy)]
+struct ChatOptions<'a> {
+    max_tokens: Option<u32>,
+    stream: bool,
+    print_cache: bool,
+    print_stream_trailing_newline: bool,
+    decision_response: bool,
+    cancel: Option<&'a CancellationToken>,
+    tools: Option<&'a [ChatTool]>,
+    tool_choice: Option<&'a str>,
+}
+
+impl Default for ChatOptions<'_> {
+    fn default() -> Self {
+        Self {
+            max_tokens: None,
+            stream: false,
+            print_cache: false,
+            print_stream_trailing_newline: false,
+            decision_response: false,
+            cancel: None,
+            tools: None,
+            tool_choice: None,
+        }
+    }
+}
+
 pub fn api_key() -> Result<String, String> {
     parse_api_key(std::env::var(ENV_KEY).ok())
 }
@@ -216,18 +241,17 @@ pub fn chat(
         messages,
         model,
         temperature,
-        max_tokens,
-        stream,
-        true,
-        true,
+        ChatOptions {
+            max_tokens,
+            stream,
+            print_cache: true,
+            print_stream_trailing_newline: true,
+            ..ChatOptions::default()
+        },
         |delta| {
             print!("{delta}");
             let _ = std::io::stdout().flush();
         },
-        false,
-        None,
-        None,
-        None,
     )
 }
 
@@ -247,15 +271,13 @@ where
         messages,
         model,
         temperature,
-        max_tokens,
-        stream,
-        true,
-        false,
+        ChatOptions {
+            max_tokens,
+            stream,
+            print_cache: true,
+            ..ChatOptions::default()
+        },
         on_delta,
-        false,
-        None,
-        None,
-        None,
     )
 }
 
@@ -269,15 +291,11 @@ pub fn chat_quiet(
         messages,
         model,
         temperature,
-        max_tokens,
-        false,
-        false,
-        false,
+        ChatOptions {
+            max_tokens,
+            ..ChatOptions::default()
+        },
         |_| {},
-        false,
-        None,
-        None,
-        None,
     )
 }
 
@@ -294,15 +312,13 @@ pub fn chat_cancelled(
         messages,
         model,
         temperature,
-        max_tokens,
-        false,
-        true,
-        false,
+        ChatOptions {
+            max_tokens,
+            print_cache: true,
+            cancel: Some(cancel),
+            ..ChatOptions::default()
+        },
         |_| {},
-        false,
-        Some(cancel),
-        None,
-        None,
     )
 }
 
@@ -318,15 +334,12 @@ pub fn chat_quiet_cancelled(
         messages,
         model,
         temperature,
-        max_tokens,
-        false,
-        false,
-        false,
+        ChatOptions {
+            max_tokens,
+            cancel: Some(cancel),
+            ..ChatOptions::default()
+        },
         |_| {},
-        false,
-        Some(cancel),
-        None,
-        None,
     )
 }
 
@@ -341,15 +354,15 @@ pub fn chat_tools(
         messages,
         model,
         temperature,
-        max_tokens,
-        false,
-        true,
-        false,
+        ChatOptions {
+            max_tokens,
+            print_cache: true,
+            decision_response: true,
+            tools: Some(tools),
+            tool_choice: Some("auto"),
+            ..ChatOptions::default()
+        },
         |_| {},
-        true,
-        None,
-        Some(tools),
-        Some("auto"),
     )
 }
 
@@ -364,15 +377,14 @@ pub fn chat_tools_quiet(
         messages,
         model,
         temperature,
-        max_tokens,
-        false,
-        false,
-        false,
+        ChatOptions {
+            max_tokens,
+            decision_response: true,
+            tools: Some(tools),
+            tool_choice: Some("auto"),
+            ..ChatOptions::default()
+        },
         |_| {},
-        true,
-        None,
-        Some(tools),
-        Some("auto"),
     )
 }
 
@@ -388,15 +400,16 @@ pub fn chat_tools_cancelled(
         messages,
         model,
         temperature,
-        max_tokens,
-        false,
-        true,
-        false,
+        ChatOptions {
+            max_tokens,
+            print_cache: true,
+            decision_response: true,
+            cancel: Some(cancel),
+            tools: Some(tools),
+            tool_choice: Some("auto"),
+            ..ChatOptions::default()
+        },
         |_| {},
-        true,
-        Some(cancel),
-        Some(tools),
-        Some("auto"),
     )
 }
 
@@ -412,15 +425,15 @@ pub fn chat_tools_quiet_cancelled(
         messages,
         model,
         temperature,
-        max_tokens,
-        false,
-        false,
-        false,
+        ChatOptions {
+            max_tokens,
+            decision_response: true,
+            cancel: Some(cancel),
+            tools: Some(tools),
+            tool_choice: Some("auto"),
+            ..ChatOptions::default()
+        },
         |_| {},
-        true,
-        Some(cancel),
-        Some(tools),
-        Some("auto"),
     )
 }
 
@@ -428,19 +441,22 @@ fn chat_impl<F>(
     messages: &[Message],
     model: &str,
     temperature: Option<f32>,
-    max_tokens: Option<u32>,
-    stream: bool,
-    print_cache: bool,
-    print_stream_trailing_newline: bool,
+    options: ChatOptions<'_>,
     on_delta: F,
-    decision_response: bool,
-    cancel: Option<&CancellationToken>,
-    tools: Option<&[ChatTool]>,
-    tool_choice: Option<&str>,
 ) -> Result<String, String>
 where
     F: FnMut(&str),
 {
+    let ChatOptions {
+        max_tokens,
+        stream,
+        print_cache,
+        print_stream_trailing_newline,
+        decision_response,
+        cancel,
+        tools,
+        tool_choice,
+    } = options;
     if let Some(cancel) = cancel {
         cancel.check()?;
     }
