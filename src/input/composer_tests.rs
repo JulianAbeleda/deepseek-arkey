@@ -1,10 +1,11 @@
 use super::{
     approval_panel_rows, buffer_prefix, compose_dock_rows, compose_rendered_dock_rows, insert_at,
     keyboard_enhancement_flags, next_slash_completion, next_word_cursor, output_row,
-    parse_forced_terminal_size, previous_word_cursor, progress_panel_rows, prompt_echo_block_lines,
-    remove_at, remove_before, remove_previous_word, shifted_char, slash_command_matches,
-    slash_completion_panel_rows, submitted_prompt_echo_with_options, take_ansi_sequence,
-    visible_len, visible_suffix, ApprovalChoice, ApprovalModal, DockedComposer, DOCK_RESERVED_ROWS,
+    parse_forced_terminal_size, paste_context_marker, previous_word_cursor, progress_panel_rows,
+    prompt_echo_block_lines, remove_at, remove_before, remove_previous_word, shifted_char,
+    slash_command_matches, slash_completion_panel_rows, submitted_prompt_echo_with_options,
+    take_ansi_sequence, visible_len, visible_suffix, ApprovalChoice, ApprovalModal, DockedComposer,
+    DOCK_RESERVED_ROWS,
 };
 use crossterm::event::{KeyModifiers, KeyboardEnhancementFlags};
 
@@ -85,6 +86,47 @@ fn dock_display_keeps_ansi_sequences_intact_at_narrow_widths() {
 
     assert_eq!(suffix, "\x1b[38;2;122;162;247mh]\x1b[0m › draft");
     assert_eq!(visible_len(&suffix), 10);
+}
+
+#[test]
+fn multiline_paste_compacts_and_expands_on_submit() {
+    let mut composer = DockedComposer::new("p> ".to_string());
+    let paste = "first line\nsecond line\n";
+
+    composer.insert_paste(paste).unwrap();
+
+    let marker = paste_context_marker(paste);
+    assert_eq!(composer.buffer, marker);
+    assert_eq!(composer.expand_pasted_contexts(&composer.buffer), paste);
+}
+
+#[test]
+fn short_single_line_paste_stays_inline() {
+    let mut composer = DockedComposer::new("p> ".to_string());
+
+    composer.insert_paste("README.md").unwrap();
+
+    assert_eq!(composer.buffer, "README.md");
+    assert_eq!(
+        composer.expand_pasted_contexts(&composer.buffer),
+        "README.md"
+    );
+}
+
+#[test]
+fn multiple_pasted_contexts_expand_in_order() {
+    let mut composer = DockedComposer::new("p> ".to_string());
+    let first = "alpha\n";
+    let second = "beta\n";
+
+    composer.insert_paste(first).unwrap();
+    composer.insert_text(" then ").unwrap();
+    composer.insert_paste(second).unwrap();
+
+    assert_eq!(
+        composer.expand_pasted_contexts(&composer.buffer),
+        "alpha\n then beta\n"
+    );
 }
 
 #[test]

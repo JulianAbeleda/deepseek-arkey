@@ -25,9 +25,12 @@ pub(crate) use super::types::{
     SLASH_COMMANDS,
 };
 
+const PASTE_CONTEXT_THRESHOLD_CHARS: usize = 120;
+
 pub struct DockedComposer {
     prompt: String,
     buffer: String,
+    pasted_contexts: Vec<PastedContext>,
     cursor: usize,
     history: Vec<String>,
     history_index: Option<usize>,
@@ -45,6 +48,12 @@ pub struct DockedComposer {
     cursor_hidden: bool,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PastedContext {
+    marker: String,
+    text: String,
+}
+
 pub struct RawModeSession;
 
 impl DockedComposer {
@@ -52,6 +61,7 @@ impl DockedComposer {
         Self {
             prompt,
             buffer: String::new(),
+            pasted_contexts: Vec::new(),
             cursor: 0,
             history: Vec::new(),
             history_index: None,
@@ -179,7 +189,7 @@ impl DockedComposer {
         }
         match event {
             Event::Paste(text) => {
-                self.insert_text(&text)?;
+                self.insert_paste(&text)?;
                 Ok(None)
             }
             Event::Key(key) if is_key_press_or_repeat(key) => match key.code {
@@ -191,14 +201,16 @@ impl DockedComposer {
                         self.insert_text("\n")?;
                         return Ok(None);
                     }
-                    let submitted = std::mem::take(&mut self.buffer);
+                    let display_submitted = std::mem::take(&mut self.buffer);
+                    let submitted = self.expand_pasted_contexts(&display_submitted);
+                    self.pasted_contexts.clear();
                     self.cursor = 0;
                     self.history_index = None;
                     self.reset_slash_completion();
-                    if !submitted.trim().is_empty() {
-                        self.history.push(submitted.clone());
+                    if !display_submitted.trim().is_empty() {
+                        self.history.push(display_submitted.clone());
                     }
-                    self.print_above(&submitted_prompt_echo(&submitted))?;
+                    self.print_above(&submitted_prompt_echo(&display_submitted))?;
                     Ok(Some(InputAction::Submit(submitted)))
                 }
                 KeyCode::Tab => {
@@ -227,6 +239,7 @@ impl DockedComposer {
                 }
                 KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                     self.buffer.clear();
+                    self.pasted_contexts.clear();
                     self.cursor = 0;
                     self.history_index = None;
                     self.reset_slash_completion();
@@ -407,6 +420,29 @@ impl DockedComposer {
         self.history_index = None;
         self.reset_slash_completion();
         self.render()
+    }
+
+    fn insert_paste(&mut self, text: &str) -> Result<(), String> {
+        if !should_compact_paste(text) {
+            return self.insert_text(text);
+        }
+        let marker = paste_context_marker(text);
+        self.pasted_contexts.push(PastedContext {
+            marker: marker.clone(),
+            text: text.to_string(),
+        });
+        self.insert_text(&marker)
+    }
+
+    fn expand_pasted_contexts(&self, text: &str) -> String {
+        let mut expanded = text.to_string();
+        for context in &self.pasted_contexts {
+            let Some(index) = expanded.find(&context.marker) else {
+                continue;
+            };
+            expanded.replace_range(index..index + context.marker.len(), &context.text);
+        }
+        expanded
     }
 
     fn complete_slash_command(&mut self) -> Result<(), String> {
@@ -652,6 +688,16 @@ pub(crate) fn shifted_char(ch: char, modifiers: KeyModifiers) -> char {
         '/' => '?',
         _ => ch,
     }
+}
+
+fn should_compact_paste(text: &str) -> bool {
+    text.contains('\n') || char_len(text) >= PASTE_CONTEXT_THRESHOLD_CHARS
+}
+
+fn paste_context_marker(text: &str) -> String {
+    let count = char_len(text);
+    let unit = if count == 1 { "char" } else { "chars" };
+    format!("[pasted context - {count} {unit}]")
 }
 
 #[cfg(test)]

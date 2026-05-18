@@ -56,11 +56,12 @@ def main():
             wait_for(lambda: not screen.contains("ab界"), master, screen, "clear wide input")
 
             os.write(master, b"\x1b[200~line one\nline two\x1b[201~")
-            wait_for(lambda: screen.contains("line one") and screen.contains("line two"), master, screen, "multiline paste")
-            assert_cursor_after(screen, "line two")
+            paste_marker = "[pasted context - 17 chars]"
+            wait_for(lambda: screen.contains(paste_marker), master, screen, "multiline paste marker")
+            assert_cursor_after(screen, paste_marker)
 
             os.write(master, b"\x03")
-            wait_for(lambda: not screen.contains("line two"), master, screen, "clear multiline input")
+            wait_for(lambda: not screen.contains(paste_marker), master, screen, "clear multiline input")
 
             long_text = "wrap-" * 18
             os.write(master, long_text.encode())

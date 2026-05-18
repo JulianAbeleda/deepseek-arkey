@@ -78,10 +78,10 @@ def main():
             wait_for(lambda: dock_idle_prompt(screen, args.name), master, screen, "clear word movement draft")
             os.write(master, b"\x1b[200~line one\nline two\x1b[201~")
             wait_for(
-                lambda: dock_contains(screen, "line one") and dock_contains(screen, "line two"),
+                lambda: dock_contains(screen, "[pasted context - 17 chars]"),
                 master,
                 screen,
-                "bracketed paste multiline insert",
+                "bracketed paste compact marker",
             )
             os.write(master, b"\r")
             wait_for(
